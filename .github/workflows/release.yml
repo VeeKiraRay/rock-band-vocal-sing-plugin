@@ -1,0 +1,69 @@
+# .github/workflows/release.yml
+name: Build Release VST3
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Same approach as the helper-scripts repo: changelog from the commits between
+      # the previous tag and this one, with noise (docs/refactor/chore) filtered out.
+      - name: Generate filtered release notes
+        id: notes
+        shell: bash
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            RANGE=""            # first release — include the whole history
+          else
+            RANGE="$PREV_TAG..HEAD"
+          fi
+          NOTES=$(git log $RANGE --pretty=format:"- %s" \
+            | grep -v -i "^- documentation:" \
+            | grep -v -i "^- doc:" \
+            | grep -v -i "^- refactor:" \
+            | grep -v -i "^- chore:" || true)
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Configure CMake (Release)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 (Release)
+        run: cmake --build build --config Release --parallel
+
+      # The VST3 is a bundle (folder). PRODUCT_NAME drives its name, so locate it by
+      # extension instead of hard-coding, then zip the whole bundle at the zip root.
+      - name: Package VST3 bundle
+        id: package
+        shell: pwsh
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vst3 = Get-ChildItem -Path build -Recurse -Directory -Filter '*.vst3' |
+                  Select-Object -First 1
+          if (-not $vst3) { throw 'No .vst3 bundle was produced by the build.' }
+          Write-Host "Found VST3 bundle: $($vst3.FullName)"
+          $zip = "RB-Vocal-Sing-$env:TAG-VST3-Windows.zip"
+          Compress-Archive -Path $vst3.FullName -DestinationPath $zip -Force
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+
+      - name: Upload VST3 to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.zip }}
+          body: ${{ steps.notes.outputs.notes }}

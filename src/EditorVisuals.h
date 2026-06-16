@@ -1,0 +1,66 @@
+#pragma once
+#include <JuceHeader.h>
+#include "PluginProcessor.h"   // VocalPart
+
+// Shared colours and small text helpers used across the editor's paint translation
+// units (PluginEditor.cpp, PluginEditorHighway.cpp, PluginEditorLyrics.cpp). Declared
+// inline so every TU that includes this header gets one definition without duplicate
+// symbols.
+
+static const char* const kNoteNames[] = {
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+};
+
+inline const juce::Colour kHighwayBg   { 0xff080818 };
+inline const juce::Colour kNoteColour  { 0xff00d4ff };  // Main / HARM1 — cyan
+inline const juce::Colour kHarm2Colour { 0xffd99000 };  // HARM2 — dark amber
+inline const juce::Colour kHarm3Colour { 0xffc46a3a };  // HARM3 — burnt brown
+inline const juce::Colour kPlayheadCol { 0xff444455 };
+inline const juce::Colour kLyricBg     { 0xff0d0d22 };
+inline const juce::Colour kStatsBg     { 0xff0d0d1a };
+inline const juce::Colour kControlsBg       { 0xff1a1a1a };
+inline const juce::Colour kOverdriveTextColour { 0xffffd000 };  // golden yellow for overdrive lyrics
+inline const juce::Colour kPhraseSepColour     { 0x55aaaacc };  // muted blue-grey phrase separator
+
+inline juce::Colour colourForPart (VocalPart part)
+{
+    switch (part)
+    {
+        case VocalPart::Harm2: return kHarm2Colour;
+        case VocalPart::Harm3: return kHarm3Colour;
+        default:               return kNoteColour;
+    }
+}
+
+// ─── Syllable suffix stripping ────────────────────────────────────────────────
+// Removes connector chars from a raw MIDI lyric syllable and returns the glue
+// that should follow it: "" (hyphen removed), "-" (equals converted), " " (word
+// boundary).  Trailing #/^/$ notational suffixes are stripped first.
+
+// Strips only the trailing notational suffixes (#, ^, $) — leaves connector chars intact.
+inline juce::String stripNotationSuffixes (const juce::String& s)
+{
+    juce::String r = s;
+    while (!r.isEmpty())
+    {
+        const juce::juce_wchar c = r[r.length() - 1];
+        if (c == '#' || c == '^' || c == '$') r = r.dropLastCharacters (1);
+        else break;
+    }
+    return r;
+}
+
+inline juce::String stripLyricSuffix (const juce::String& raw, juce::String& outGlue)
+{
+    juce::String s = stripNotationSuffixes (raw);
+
+    if (!s.isEmpty())
+    {
+        const juce::juce_wchar last = s[s.length() - 1];
+        if (last == '-') { outGlue = "";  return s.dropLastCharacters (1); }
+        if (last == '=') { outGlue = "-"; return s.dropLastCharacters (1); }
+    }
+
+    outGlue = " ";
+    return s;
+}

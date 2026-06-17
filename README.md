@@ -2,6 +2,8 @@
 
 **A VST3 plugin for visualizing, testing, and editing Rock Band vocal charts inside REAPER.** It draws a scrolling note highway synced to the REAPER transport — so you can see how the chart will look in the game, sing into your mic to test that the notes and lyrics line up, and edit note pitches by dragging them right on the highway (or by editing in REAPER, with the highway following along live).
 
+This is a **charting tool**, not a competition-grade scorer. The goal is to help you place notes and lyrics correctly — not to replicate the polished scoring engine inside Rock Band itself.
+
 Built for Rock Band-style vocal authoring: it reads `PART VOCALS` (Solo) or `HARM1`/`HARM2`/`HARM3` (Harmonies) straight from your live REAPER project and follows your edits as you make them.
 
 <!-- TODO: replace with a 10–15 s GIF showing the highway scrolling while singing -->
@@ -130,6 +132,8 @@ The stats panel compares your live pitch to the **closest active chart note of a
 | 🟡 Yellow | Within ± 1–2 semitones — close.          |
 | 🔴 Red    | More than 2 semitones off.               |
 | ⚪ Grey   | No chart note active, or no pitch sung.  |
+
+> **About pitch detection.** The plugin uses the MPM (McLeod Pitch Method) algorithm — a solid general-purpose pitch tracker, but not infallible. Breath sounds, hard consonants, background noise, and the attack/release of notes can all produce brief false readings. If background noise triggers spurious pitches, raise the **Mic Gate** in Settings. The traffic light is a charting aid: consistent green across a phrase is a good sign that the notes and lyrics are placed correctly; don't treat individual flickers as a definitive grade.
 
 ### Lyric strips
 

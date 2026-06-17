@@ -22,26 +22,18 @@ SOFTWARE.
 
 -------------------------------------------------------------------------------
 
-Third-party components
+Third‑party components
 
-The MIT license above covers the original source code of this project (the
-files under src/ and the project's build configuration).
+This project uses JUCE 7 (https://juce.com) under the JUCE Personal license.
+JUCE is © Raw Material Software / JUCE.
+This project does not relicense JUCE.
+The JUCE splash screen is displayed in compliance with the Personal license terms.
 
-This plugin is built with third-party frameworks that carry their own licenses.
-The MIT grant above does NOT relicense them, and any binary you build or
-distribute (the compiled .vst3) is a combined work that links them and is
-therefore subject to their terms:
+The Steinberg VST3 SDK is included via JUCE and is licensed under the
+Steinberg VST3 License (dual‑licensed GPLv3 / Steinberg proprietary).
+See https://www.steinberg.net/developers/ for full terms.
+“VST” is a trademark of Steinberg Media Technologies GmbH.
 
-  - JUCE 7 — dual-licensed under the GNU GPLv3 or a commercial JUCE license.
-    Fetched at build time via CPM (see CMakeLists.txt).
-    https://juce.com/juce-7-licence/
-
-  - Steinberg VST3 SDK — bundled within JUCE; dual-licensed under the GNU GPLv3
-    or Steinberg's proprietary VST3 license.
-    https://www.steinberg.net/developers/
-
-Under the free/open-source path, JUCE and the VST3 SDK are used under the GPLv3,
-which means distributed binaries of this plugin are effectively governed by the
-GPLv3. If you redistribute a compiled build, comply with the GPLv3 (or hold the
-appropriate commercial JUCE / Steinberg licenses). VST is a trademark of
-Steinberg Media Technologies GmbH.
+The MIT license above applies only to the original source code of this project
+(files under src/ and the build configuration).
+It does not cover JUCE or the VST3 SDK.

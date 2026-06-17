@@ -55,8 +55,9 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
         g.saveState();
         g.reduceClipRegion (area);
 
-        for (const auto& n : notes)
+        for (size_t i = 0; i < notes.size(); ++i)
         {
+            const auto& n = notes[i];
             const float x = phX + (float) (n.startTime - t) * pixPerSec;
             if (x > area.getRight() + 120.0f)         break;
             if (!includePart (n.part))                continue;
@@ -64,8 +65,17 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             if (n.isHidden)                           continue;
             if (x < area.getX() - 120.0f)            continue;
 
-            const bool isActive = (n.startTime <= t && t < n.endTime);
-            const bool isPast   = (t >= n.endTime);
+            double effectiveEnd = n.endTime;
+            for (size_t j = i + 1; j < notes.size(); ++j)
+            {
+                const auto& nx = notes[j];
+                if (nx.part != n.part) continue;
+                if (nx.lyric != "+")   break;
+                effectiveEnd = nx.endTime;
+            }
+
+            const bool isActive = (n.startTime <= t && t < effectiveEnd);
+            const bool isPast   = (t >= effectiveEnd);
 
             const juce::String displayLyric = stripNotationSuffixes (n.lyric);
             if (displayLyric.isEmpty()) continue;
@@ -135,16 +145,27 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
     auto collectParts = [&] (const PhraseInfo& phrase) -> std::vector<Part>
     {
         std::vector<Part> parts;
-        for (const auto& n : notes)
+        for (size_t i = 0; i < notes.size(); ++i)
         {
+            const auto& n = notes[i];
             if (n.startTime < phrase.startTime - 0.01) continue;
             if (n.startTime >= phrase.endTime)          break;
             if (!includePart (n.part))                  continue;
             if (n.lyric.isEmpty() || n.lyric == "+")    continue;
             if (n.isHidden)                              continue;
+
+            double effectiveEnd = n.endTime;
+            for (size_t j = i + 1; j < notes.size(); ++j)
+            {
+                const auto& nx = notes[j];
+                if (nx.part != n.part) continue;
+                if (nx.lyric != "+")   break;
+                effectiveEnd = nx.endTime;
+            }
+
             juce::String glue;
             parts.push_back ({ stripLyricSuffix (n.lyric, glue), glue,
-                               n.startTime, n.endTime, n.part });
+                               n.startTime, effectiveEnd, n.part });
         }
         if (!parts.empty()) parts.back().glue = "";
         return parts;

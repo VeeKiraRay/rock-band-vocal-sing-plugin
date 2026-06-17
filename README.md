@@ -14,8 +14,6 @@ Built for Rock Band-style vocal authoring: it reads `PART VOCALS` (Solo) or `HAR
 
 - [REAPER](https://www.reaper.fm/) **5.x or later** (the primary, fully-featured host; tested on REAPER 7)
 - A VST3-capable DAW if you want to run it elsewhere (degraded — see [Using inside REAPER vs other DAWs](#using-inside-reaper-vs-other-daws))
-- A microphone (or a recorded vocal take to play back)
-
 The plugin is VST3 only.
 
 ---

@@ -47,12 +47,26 @@ The plugin pitch-detects **whatever audio REAPER feeds into its input** — inde
 
 ### The primary use case: live mic monitoring
 
-1. Create a **new, empty audio track** wired to your microphone input. The plugin pitch-detects everything on its track, so for pure mic input the track should have **no audio or MIDI items** on it — anything there would be mixed into what the plugin hears. A fresh empty track is the easiest way to guarantee a clean mic signal.
-2. **Record-arm is not enough** — also enable **input monitoring** (the speaker icon). Record-arm alone does not route mic audio into the plugin; monitoring does. Whether you are actually recording (⏺) makes no difference to pitch detection.
-3. Add **RB Vocal Sing** to that track's FX chain.
-4. Press play and sing.
+#### Step 1 — Tell REAPER which hardware mic to use
 
-> **Tip — never record yourself by accident.** In the track's record-mode dropdown (next to the record-arm button) choose **Record: disable (input monitoring only)**. The track still feeds your mic to the plugin for pitch detection, but a global record will never capture your singing onto it. This protects the "clean, empty track" setup so you can revisit sections without stray takes piling up.
+Open **Options → Preferences → Device** and set **Input device** to your microphone. This is a global setting — REAPER uses this device for all track inputs.
+
+![Reaper preferences](assets/reaper_preferences.jpg)
+
+#### Step 2 — Route that mic to the track
+
+1. Create a **new, empty audio track**. The plugin pitch-detects everything on its track, so for pure mic input the track should have **no audio or MIDI items** on it.
+2. Click the **input selector** in the track header (the small dropdown below the record-arm button) and choose **Input: Mono → Input 1**. This selects the first channel of the input device you set above — for a single USB mic that is the mic itself.
+
+![Reaper preferences](assets/reaper_track.jpg)
+
+#### Step 3 — Enable monitoring and add the plugin
+
+3. Enable **input monitoring** on the track (the speaker icon). **Record-arm alone is not enough** — monitoring is what routes the mic audio into the plugin. Whether you are actually recording (⏺) makes no difference to pitch detection.
+4. Add **RB Vocal Sing** to that track's FX chain.
+5. Press play and sing.
+
+> **Tip — never record yourself by accident.** In the track's record-mode dropdown (next to the record-arm button) choose **Record: disable (input monitoring only)**. The track still feeds your mic to the plugin for pitch detection, but a global record will never capture your singing onto it.
 
 ### Other placements
 
@@ -200,7 +214,10 @@ Only pitch can be changed this way (timing and lyrics are unchanged), and drags 
 Check that your project has a track named `PART VOCALS` (Solo) or `HARM1`/`HARM2`/`HARM3` (Harmonies) — matching is by track name. The diagnostic message lists the tracks the plugin found, which usually points to a naming mismatch. In a non-REAPER host, open **Settings** and click **Load MIDI File** to pick the chart.
 
 **No pitch is detected when I sing.**
-The track needs **input monitoring** enabled (the speaker icon), not just record-arm. Confirm the track actually receives your mic (you should see its meters move). If detection is jumpy, lower the **Mic Gate**.
+Work through the setup in order: (1) check **Options → Preferences → Device** — your microphone must be selected as the **Input device** there; (2) check the track's input selector (the dropdown below the record-arm button) — it must be set to **Input: Mono → Input 1** (or whichever channel your mic is on), not "No input" or a MIDI input; (3) check that **input monitoring** (the speaker icon) is on — record-arm alone does not route audio into the plugin. You should see the track's level meters move when you speak before the plugin will detect anything. If detection is jumpy once it is working, raise the **Mic Gate**.
+
+**REAPER is not picking up a microphone I connected after launching it.**
+REAPER scans audio devices on startup and does not automatically detect hardware plugged in during a session. If you connected your mic after REAPER was already open, restart REAPER to pick it up.
 
 **The traffic light never goes green even when I am on pitch.**
 You are likely fighting output latency — your voice reaches the highway slightly after the notes. Adjust **Calibration** (positive values shift notes later) until green lines up with being on the note.

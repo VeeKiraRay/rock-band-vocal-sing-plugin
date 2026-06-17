@@ -6,15 +6,13 @@ This is a **charting tool**, not a competition-grade scorer. The goal is to help
 
 Built for Rock Band-style vocal authoring: it reads `PART VOCALS` (Solo) or `HARM1`/`HARM2`/`HARM3` (Harmonies) straight from your live REAPER project and follows your edits as you make them.
 
-<!-- TODO: replace with a 10–15 s GIF showing the highway scrolling while singing -->
-
 ![Demo](assets/demo.gif)
 
 ---
 
 ## Requirements
 
-- [REAPER](https://www.reaper.fm/) **6.x or later** (the primary, fully-featured host)
+- [REAPER](https://www.reaper.fm/) **5.x or later** (the primary, fully-featured host; tested on REAPER 7)
 - A VST3-capable DAW if you want to run it elsewhere (degraded — see [Using inside REAPER vs other DAWs](#using-inside-reaper-vs-other-daws))
 - A microphone (or a recorded vocal take to play back)
 

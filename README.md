@@ -239,7 +239,7 @@ The plugin hears everything on its track. For a pure mic signal, put it on a **n
 ## Building from source
 
 ```
-cd rock-band-vst/vocal-rb-sing
+cd rock-band-vocal-sing-plugin
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug
 ```

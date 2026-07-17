@@ -42,6 +42,20 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                                                     juce::Rectangle<int> area,
                                                     double t)
 {
+#if RB_PAINT_PROFILE
+    // Sub-section lap timer (profile builds only): hwLap(acc) adds the time since the
+    // previous lap to acc. Folded into the profHw* EMAs at the end of the function.
+    juce::int64  hwSecStart = juce::Time::getHighResolutionTicks();
+    const double msPerTick  = 1000.0 / (double) juce::Time::getHighResolutionTicksPerSecond();
+    double msBg = 0.0, msBars = 0.0, msText = 0.0, msOv = 0.0;
+    auto hwLap = [&] (double& accum)
+    {
+        const juce::int64 now = juce::Time::getHighResolutionTicks();
+        accum += (now - hwSecStart) * msPerTick;
+        hwSecStart = now;
+    };
+#endif
+
     g.setColour (kHighwayBg);
     g.fillRect  (area);
 
@@ -148,6 +162,10 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     g.setColour (kPlayheadCol);
     g.drawVerticalLine ((int) phX, (float) area.getY(), (float) area.getBottom());
 
+#if RB_PAINT_PROFILE
+    hwLap (msBg);
+#endif
+
     // Note bars, bend connectors, and lyric labels — clipped to highway area.
     // Rendered one part at a time so bend-connector tracking stays per-part and
     // the z-order (Harm3 → Harm2 → Main) keeps the lead on top.
@@ -248,6 +266,9 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                 && !bend && n.lyric.isNotEmpty()
                 && x1 >= (float) area.getX() && (x2 - x1) > 4.0f)
             {
+#if RB_PAINT_PROFILE
+                const juce::int64 lblStart = juce::Time::getHighResolutionTicks();
+#endif
                 const juce::String& displayLyric = n.displayLyric;
                 if (displayLyric.isNotEmpty())
                 {
@@ -261,6 +282,9 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                                  12,
                                  juce::Justification::centredLeft, false);
                 }
+#if RB_PAINT_PROFILE
+                msText += (juce::Time::getHighResolutionTicks() - lblStart) * msPerTick;
+#endif
             }
         }
     };
@@ -273,6 +297,10 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     drawNotesForPart (VocalPart::Main);
 
     g.restoreState();
+
+#if RB_PAINT_PROFILE
+    hwLap (msBars);   // includes label text time — subtracted at the EMA fold below
+#endif
 
     // Range Shift boundary markers — always visible so section detection can be verified
     {
@@ -359,6 +387,13 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         }
     }
 
+#if RB_PAINT_PROFILE
+    hwLap (msOv);
+    profHwBgMs   = 0.5 * profHwBgMs   + 0.5 * msBg;
+    profHwBarsMs = 0.5 * profHwBarsMs + 0.5 * (msBars - msText);
+    profHwTextMs = 0.5 * profHwTextMs + 0.5 * msText;
+    profHwOvMs   = 0.5 * profHwOvMs   + 0.5 * msOv;
+#endif
 }
 
 // ─── Stats panel ──────────────────────────────────────────────────────────────
@@ -551,10 +586,14 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
                               + "   |   rate: " + rateStr;
 
 #if RB_PAINT_PROFILE
-    // Per-section paint EMAs (see paint()) + window size, so each grid reading
-    // self-documents its geometry ('S' cycles presets). May clip at small widths —
-    // diagnostics only.
+    // Per-section paint EMAs (see paint()), the drawHighway sub-split (bg/bar/txt/ov,
+    // see drawHighway), and the window size, so each grid reading self-documents its
+    // geometry ('S' cycles presets). May clip at small widths — diagnostics only.
     status << "   |   hw:"  << juce::String (profHighwayMs, 2)
+           << " [bg:"       << juce::String (profHwBgMs, 2)
+           << " bar:"       << juce::String (profHwBarsMs, 2)
+           << " txt:"       << juce::String (profHwTextMs, 2)
+           << " ov:"        << juce::String (profHwOvMs, 2) << "]"
            << " ly:"        << juce::String (profLyricsMs, 2)
            << " st:"        << juce::String (profStatsMs, 2)
            << " bar:"       << juce::String (profBarsMs, 2)

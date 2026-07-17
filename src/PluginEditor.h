@@ -123,6 +123,14 @@ private:
     double profLyricsMs  { 0.0 };
     double profStatsMs   { 0.0 };
     double profBarsMs    { 0.0 };
+    // drawHighway sub-section EMAs (ms): bg = background fill + section math + lane
+    // grid + range labels + playhead; bars = note bars + bend connectors; text =
+    // inline lyric labels (timed separately inside the note loop — the fills-vs-text
+    // split is what decides §d1); ov = range-shift markers + separators + arrowhead.
+    double profHwBgMs   { 0.0 };
+    double profHwBarsMs { 0.0 };
+    double profHwTextMs { 0.0 };
+    double profHwOvMs   { 0.0 };
     // Which fixed window-size preset the profile-build 'S' key applied last (cycles
     // default → 2×-width → big, keyPressed()) so grid measurements are reproducible.
     int    profSizePreset { 0 };

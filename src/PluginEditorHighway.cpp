@@ -528,12 +528,25 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
     if (! audioProcessor.reaperApi.CSurf_OnPlayRateChange)
         rateStr += " [N/A]";
 
-    g.drawText (juce::String (fps) + " fps   |   REAPER priority: "
-                    + (reaperPriority ? "on" : "off")
-                    + "   |   renderer: " + (glContext.isAttached() ? "GPU" : "CPU")
-                    + "   |   calib: " + calibStr
-                    + "   |   rate: " + rateStr,
-                text, juce::Justification::centredLeft, false);
+    juce::String status = juce::String (fps) + " fps   |   REAPER priority: "
+                              + (reaperPriority ? "on" : "off")
+                              + "   |   renderer: " + (glContext.isAttached() ? "GPU" : "CPU")
+                              + "   |   calib: " + calibStr
+                              + "   |   rate: " + rateStr;
+
+#if RB_PAINT_PROFILE
+    // Per-section paint EMAs (see paint()) + window size, so each grid reading
+    // self-documents its geometry ('S' cycles presets). May clip at small widths —
+    // diagnostics only.
+    status << "   |   hw:"  << juce::String (profHighwayMs, 2)
+           << " ly:"        << juce::String (profLyricsMs, 2)
+           << " st:"        << juce::String (profStatsMs, 2)
+           << " bar:"       << juce::String (profBarsMs, 2)
+           << " tot:"       << juce::String (lastPaintSeconds * 1000.0, 2) << " ms"
+           << "   |   "     << getWidth() << "x" << getHeight();
+#endif
+
+    g.drawText (status, text, juce::Justification::centredLeft, false);
 }
 
 // ─── Message bar ──────────────────────────────────────────────────────────────

@@ -11,6 +11,12 @@ CPMAddPackage(
 
 option(RBVS_BUILD_TESTS "Build unit tests" ON)
 
+# Diagnostics build: appends per-section paint timings (hw/ly/st/bar ms EMAs) to the
+# status bar. Toggle with -DRB_PAINT_PROFILE=ON at configure time; default OFF so
+# release builds are unaffected. The macro is always defined (0/1) so `#if` never
+# hits an undefined identifier and both targets stay in sync.
+option(RB_PAINT_PROFILE "Show per-section paint timings in the status bar" OFF)
+
 if (RBVS_BUILD_TESTS)
     CPMAddPackage(
         NAME Catch2
@@ -50,6 +56,7 @@ target_compile_definitions(RBVocalSing
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
+        RB_PAINT_PROFILE=$<BOOL:${RB_PAINT_PROFILE}>
 )
 
 target_link_libraries(RBVocalSing
@@ -87,6 +94,7 @@ if (RBVS_BUILD_TESTS)
             JUCE_WEB_BROWSER=0
             JUCE_USE_CURL=0
             JUCE_VST3_CAN_REPLACE_VST2=0
+            RB_PAINT_PROFILE=$<BOOL:${RB_PAINT_PROFILE}>
     )
 
     target_include_directories(RBVocalSingTests

@@ -758,6 +758,21 @@ void RBVocalSingAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
 
 bool RBVocalSingAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 {
+#if RB_PAINT_PROFILE
+    // Profile builds: 'S' cycles fixed window-size presets so measurement-grid rows use
+    // identical geometry across sessions (manual resizing isn't reproducible). Sits
+    // before the REAPER-API guard — resizing needs no API.
+    if (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S')
+    {
+        const int defaultH = harmoniesMode() ? kWindowHHarm : kWindowH;
+        profSizePreset = (profSizePreset + 1) % 3;
+        if      (profSizePreset == 0) setSize (kWindowW,     defaultH);
+        else if (profSizePreset == 1) setSize (kWindowW * 2, defaultH);
+        else                          setSize (3200,         1800);
+        return true;
+    }
+#endif
+
     if (! audioProcessor.reaperApi.isLoaded()) return false;
 
     if (key == juce::KeyPress::leftKey)
@@ -993,18 +1008,41 @@ void RBVocalSingAudioProcessorEditor::paint (juce::Graphics& g)
 
     const double t = cachedPlayTime - (latencyOffsetMs / 1000.0);
 
+    // Per-section timing (RB_PAINT_PROFILE builds only): accumulate raw ms per section
+    // this frame, folded into the prof* EMAs after the draws. The whole-paint EMA at
+    // the bottom (lastPaintSeconds — the duty-cycle cap's input) stays untouched.
+#if RB_PAINT_PROFILE
+    auto timed = [] (double& accumMs, auto&& drawFn)
+    {
+        const juce::int64 s = juce::Time::getHighResolutionTicks();
+        drawFn();
+        accumMs += (juce::Time::getHighResolutionTicks() - s) * 1000.0
+                       / (double) juce::Time::getHighResolutionTicksPerSecond();
+    };
+#else
+    auto timed = [] (double&, auto&& drawFn) { drawFn(); };
+#endif
+    double msHw = 0.0, msLy = 0.0, msSt = 0.0, msBar = 0.0;
+
     if (! topArea.isEmpty())
-        drawLyricStrip (g, topArea, t, true);
+        timed (msLy, [&] { drawLyricStrip (g, topArea, t, true); });
 
-    drawHighway (g, highwayArea, t);
+    timed (msHw,  [&] { drawHighway (g, highwayArea, t); });
 
-    drawLyricStrip (g, lyricArea, t, false);
+    timed (msLy,  [&] { drawLyricStrip (g, lyricArea, t, false); });
 
-    drawStats (g, statsArea, t);
+    timed (msSt,  [&] { drawStats (g, statsArea, t); });
 
-    drawStatusBar (g, statusArea);
+    timed (msBar, [&] { drawStatusBar (g, statusArea); });
 
-    drawMessageBar (g, messageArea);
+    timed (msBar, [&] { drawMessageBar (g, messageArea); });
+
+#if RB_PAINT_PROFILE
+    profHighwayMs = 0.5 * profHighwayMs + 0.5 * msHw;
+    profLyricsMs  = 0.5 * profLyricsMs  + 0.5 * msLy;
+    profStatsMs   = 0.5 * profStatsMs   + 0.5 * msSt;
+    profBarsMs    = 0.5 * profBarsMs    + 0.5 * msBar;
+#endif
 
     const double paintSec = (juce::Time::getHighResolutionTicks() - paintStart)
                                 / (double) juce::Time::getHighResolutionTicksPerSecond();

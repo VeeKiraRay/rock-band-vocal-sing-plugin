@@ -19,6 +19,7 @@ work, `_old/` holds completed phases kept for their design rationale.
 | [_old/CODE_REVIEW.md](_old/CODE_REVIEW.md) | 2026-07 full review — §1–§3 all fixed (2026-07-17 patch series); §4 recorded as non-action, §5 informational |
 | [_upcoming/PERFORMANCE_IMPROVEMENT.md](_upcoming/PERFORMANCE_IMPROVEMENT.md) | Paint-cost improvement plan: instrumentation first, then concrete wins, then GPU options |
 | [_upcoming/PITCH_DETECTION_IMPROVEMENT.md](_upcoming/PITCH_DETECTION_IMPROVEMENT.md) | Pitch-engine assessment + karaoke-style assist features (cents scoring, snap, hit highlighting) |
+| [_upcoming/FONT_SCALING.md](_upcoming/FONT_SCALING.md) | Lyric-strip font-size setting (50–200%, scales text + strip heights); stretch: global UI text scale |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 
 Suggested order: PERFORMANCE → PITCH_DETECTION (TEST_PLAN and CODE_REVIEW are done).

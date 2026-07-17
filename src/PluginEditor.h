@@ -116,6 +116,16 @@ private:
     // Measured duration of the last paint() (seconds), used by onFrame() to cap paint's
     // duty cycle so a heavy (large-window) paint can't starve REAPER's UI thread.
     double lastPaintSeconds { 0.0 };
+    // Per-section paint EMAs (ms), written and shown only in RB_PAINT_PROFILE builds
+    // (status-bar hw/ly/st/bar diagnostics). Members exist unconditionally so the
+    // class layout is identical under both flag values.
+    double profHighwayMs { 0.0 };
+    double profLyricsMs  { 0.0 };
+    double profStatsMs   { 0.0 };
+    double profBarsMs    { 0.0 };
+    // Which fixed window-size preset the profile-build 'S' key applied last (cycles
+    // default → 2×-width → big, keyPressed()) so grid measurements are reproducible.
+    int    profSizePreset { 0 };
     static constexpr double kBusyFactor = 3.0;  // paint ≤ ~1/3 of wall time under load
 
     // When true, the paint-budget cap is applied (REAPER stays responsive, plugin may skip

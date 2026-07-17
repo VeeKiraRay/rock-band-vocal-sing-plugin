@@ -142,6 +142,14 @@ private:
     // Whether out-of-range singing pitch is wrapped by octave onto the chart range.
     bool  octaveWrap      { true };
 
+    // Scrolling-strip lyric pixel widths (getStringWidthFloat is a per-glyph walk),
+    // index-aligned with chartNotes and shared by both strips; -1 = not yet measured
+    // (lazily filled in drawLyricStrip). Invalidated via getChartVersion(). Keyed by
+    // chart version only because the strip font is fixed — a font-size setting
+    // (FONT_SCALING.md) must add font height to the key.
+    std::vector<float> lyricWidthCache;
+    int                lyricWidthCacheVersion { -1 };
+
     // Perf signals computed in onFrame(), shown by drawStatusBar().
     bool   framesDropping { false };
     double displayFps     { 0.0 };

@@ -52,6 +52,16 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
 
         const juce::Font lyricFont (15.0f, juce::Font::bold);
         g.setFont (lyricFont);
+
+        // Reset the width cache when the chart changed (or on first use); entries are
+        // then measured lazily as notes scroll into view.
+        if (lyricWidthCacheVersion != audioProcessor.getChartVersion()
+            || lyricWidthCache.size() != notes.size())
+        {
+            lyricWidthCache.assign (notes.size(), -1.0f);
+            lyricWidthCacheVersion = audioProcessor.getChartVersion();
+        }
+
         g.saveState();
         g.reduceClipRegion (area);
 
@@ -74,7 +84,9 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             if (displayLyric.isEmpty()) continue;
 
             // Background pill
-            const float tw  = lyricFont.getStringWidthFloat (displayLyric);
+            float tw = lyricWidthCache[i];
+            if (tw < 0.0f)
+                tw = lyricWidthCache[i] = lyricFont.getStringWidthFloat (displayLyric);
             const float bgX = std::floor (x) - 3.0f;
             const float bgY = (float) area.getY() + 2.0f;
             const float bgH = (float) area.getHeight() - 4.0f;

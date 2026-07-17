@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "PluginProcessor.h"
+#include "LyricText.h"   // stripNotationSuffixes (shared with the editor)
 #include <cmath>
 #include <algorithm>
 
@@ -154,18 +155,6 @@ static void applyHarmonyOverlapThickness (std::vector<NoteInfo>& notes)
     }
 }
 
-static juce::String strippedLyricText (const juce::String& s)
-{
-    juce::String r = s;
-    while (!r.isEmpty())
-    {
-        const juce::juce_wchar c = r[r.length() - 1];
-        if (c == '#' || c == '^' || c == '$') r = r.dropLastCharacters (1);
-        else break;
-    }
-    return r;
-}
-
 // Hide a HARM3 lyric in the strip when HARM2 already shows the same word at the
 // same time (saves a redundant draw). Differing text/timing keeps both so the
 // author can spot a mismatch to fix. The HARM3 note bar still draws.
@@ -174,14 +163,14 @@ static void dedupHarmonyLyrics (std::vector<NoteInfo>& notes)
     for (auto& n : notes)
     {
         if (n.part != VocalPart::Harm3 || n.lyric.isEmpty()) continue;
-        const juce::String txt = strippedLyricText (n.lyric);
+        const juce::String txt = stripNotationSuffixes (n.lyric);
         if (txt.isEmpty()) continue;
 
         for (const auto& m : notes)
         {
             if (m.part != VocalPart::Harm2 || m.lyric.isEmpty()) continue;
             if (std::abs (m.startTime - n.startTime) < 0.03
-                && strippedLyricText (m.lyric) == txt)
+                && stripNotationSuffixes (m.lyric) == txt)
             {
                 n.isHidden = true;
                 break;

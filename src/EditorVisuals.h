@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"   // VocalPart
+#include "LyricText.h"         // stripNotationSuffixes
 
 // Shared colours and small text helpers used across the editor's paint translation
 // units (PluginEditor.cpp, PluginEditorHighway.cpp, PluginEditorLyrics.cpp). Declared
@@ -35,20 +36,8 @@ inline juce::Colour colourForPart (VocalPart part)
 // ─── Syllable suffix stripping ────────────────────────────────────────────────
 // Removes connector chars from a raw MIDI lyric syllable and returns the glue
 // that should follow it: "" (hyphen removed), "-" (equals converted), " " (word
-// boundary).  Trailing #/^/$ notational suffixes are stripped first.
-
-// Strips only the trailing notational suffixes (#, ^, $) — leaves connector chars intact.
-inline juce::String stripNotationSuffixes (const juce::String& s)
-{
-    juce::String r = s;
-    while (!r.isEmpty())
-    {
-        const juce::juce_wchar c = r[r.length() - 1];
-        if (c == '#' || c == '^' || c == '$') r = r.dropLastCharacters (1);
-        else break;
-    }
-    return r;
-}
+// boundary).  Trailing #/^/$ notational suffixes are stripped first
+// (stripNotationSuffixes — shared with the chart loader via LyricText.h).
 
 inline juce::String stripLyricSuffix (const juce::String& raw, juce::String& outGlue)
 {

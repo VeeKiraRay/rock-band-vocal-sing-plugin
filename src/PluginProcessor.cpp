@@ -34,6 +34,8 @@ void RBVocalSingAudioProcessor::prepareToPlay (double sampleRate, int)
 void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                                juce::MidiBuffer&)
 {
+    juce::ScopedNoDenormals noDenormals;
+
     if (buffer.getNumChannels() == 0 || buffer.getNumSamples() == 0)
         return;
 

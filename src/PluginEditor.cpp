@@ -57,6 +57,25 @@ struct TooltipLAF : public juce::LookAndFeel_V4
 // Launched as a CalloutBox when the user clicks "⚙ Settings". Owns all the
 // "configure-once" controls that were formerly in the always-visible panel.
 
+// Layout constants shared by SettingsPanel::resized() and its height calculation,
+// so the panel height can't drift from the row layout (CODE_REVIEW.md 2.4). File
+// scope (not class members) because MSVC won't evaluate an in-class-defined
+// constexpr function inside a static data member initializer.
+namespace settingsLayout
+{
+    constexpr int kPad    = 14;
+    constexpr int kRowH   = 28;
+    constexpr int kRowGap = 6;
+    constexpr int kSecGap = 14;
+    constexpr int kHdrH   = 18;
+    constexpr int kHdrGap = 6;
+    constexpr int kLblGap = 8;
+
+    // Height of one section: header + gap + N control rows (each row includes its
+    // trailing row gap, as laid out by layoutRow).
+    constexpr int sectionH (int rows) { return kHdrH + kHdrGap + rows * (kRowH + kRowGap); }
+}
+
 class SettingsPanel : public juce::Component
 {
 public:
@@ -200,19 +219,15 @@ public:
             addAndMakeVisible (loadMidiBtn);
         }
 
-        static constexpr int kExtraH = 18 + 6 + 28 + 14;  // hdrH + hdrGap + rowH + secGap
+        // The NON-REAPER section: a gap, a header, and one gapless button row.
+        static constexpr int kExtraH = settingsLayout::kSecGap + settingsLayout::kHdrH
+                                     + settingsLayout::kHdrGap + settingsLayout::kRowH;
         setSize (kW, kH + (this->cbs.showLoadMidi ? kExtraH : 0));
     }
 
     void resized() override
     {
-        static constexpr int kPad    = 14;
-        static constexpr int kRowH   = 28;
-        static constexpr int kRowGap = 6;
-        static constexpr int kSecGap = 14;
-        static constexpr int kHdrH   = 18;
-        static constexpr int kHdrGap = 6;
-        static constexpr int kLblGap = 8;
+        using namespace settingsLayout;
 
         auto area     = getLocalBounds().reduced (kPad);
         const int w   = area.getWidth();
@@ -266,7 +281,12 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    static constexpr int kH = 366;
+    // PERFORMANCE (3 rows) + HIGHWAY (2) + SINGING (2), two inter-section gaps,
+    // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
+    static constexpr int kH = 2 * settingsLayout::kPad
+                            + settingsLayout::sectionH (3)
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (2)
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (2);
 
 private:
     void setupHeader (juce::Label& lbl, const juce::String& text)

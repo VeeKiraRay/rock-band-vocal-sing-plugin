@@ -183,6 +183,20 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
             startIt = prev;
         }
 
+        // Include one extra earlier note of this part: a "+" bend note needs its
+        // predecessor as the connector's left anchor even after that predecessor has
+        // fully scrolled past the visible edge — the anchor's geometry is tracked
+        // without being drawn, so the diagonal still renders. (CODE_REVIEW.md 1.7)
+        for (auto extra = startIt; extra != notes.begin(); )
+        {
+            --extra;
+            if (extra->part == part)
+            {
+                startIt = extra;
+                break;
+            }
+        }
+
         for (auto it = startIt; it != notes.end(); ++it)
         {
             const auto& n = *it;

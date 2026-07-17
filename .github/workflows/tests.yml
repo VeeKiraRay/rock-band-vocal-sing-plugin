@@ -1,0 +1,24 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -B build
+
+      - name: Build RBVocalSingTests (Debug)
+        run: cmake --build build --config Debug --target RBVocalSingTests
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          & "build/RBVocalSingTests_artefacts/Debug/RBVocalSingTests.exe"
+          exit $LASTEXITCODE

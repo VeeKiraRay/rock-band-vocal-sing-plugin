@@ -9,6 +9,16 @@ CPMAddPackage(
     GIT_TAG 7.0.12
 )
 
+option(RBVS_BUILD_TESTS "Build unit tests" ON)
+
+if (RBVS_BUILD_TESTS)
+    CPMAddPackage(
+        NAME Catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG v3.5.4
+    )
+endif()
+
 juce_add_plugin(RBVocalSing
     PLUGIN_MANUFACTURER_CODE Vkry
     COMPANY_NAME "VKR"
@@ -53,3 +63,47 @@ target_link_libraries(RBVocalSing
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+if (RBVS_BUILD_TESTS)
+    juce_add_console_app(RBVocalSingTests PRODUCT_NAME "RBVocalSingTests")
+    juce_generate_juce_header(RBVocalSingTests)
+
+    target_sources(RBVocalSingTests
+        PRIVATE
+            src/PluginProcessor.cpp
+            src/PitchDetection.cpp
+            src/ChartLoader.cpp
+            src/PluginEditor.cpp
+            src/PluginEditorHighway.cpp
+            src/PluginEditorLyrics.cpp
+            tests/TestMain.cpp
+            tests/PitchDetectionTests.cpp
+            tests/ChartLoaderTests.cpp
+            tests/StateTests.cpp
+    )
+
+    target_compile_definitions(RBVocalSingTests
+        PUBLIC
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_VST3_CAN_REPLACE_VST2=0
+    )
+
+    target_include_directories(RBVocalSingTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(RBVocalSingTests
+        PRIVATE
+            juce::juce_audio_processors
+            juce::juce_audio_formats
+            juce::juce_audio_utils
+            juce::juce_opengl
+            Catch2::Catch2
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+            juce::juce_recommended_warning_flags
+    )
+endif()

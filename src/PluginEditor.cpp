@@ -965,7 +965,9 @@ void RBVocalSingAudioProcessorEditor::resized()
 
     // ── "Allow edits" toggle: top row of the stats band, above the time label ──
     {
-        const int statsTop = getHeight() - kControlsH - kMessageH - kStatusH - kStatsH;
+        // Chain off getHighwayArea() (highway → lyric strip → stats band) instead of
+        // re-deriving the bottom-band sum (CODE_REVIEW.md 2.6).
+        const int statsTop = getHighwayArea().getBottom() + kLyricH;
         editToggle.setBounds (8, statsTop + 2, 130, kEditRowH - 2);
     }
 }
@@ -979,12 +981,11 @@ void RBVocalSingAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (kControlsBg);
     g.fillRect  (juce::Rectangle<int> (0, getHeight() - kControlsH, getWidth(), kControlsH));
 
-    const bool harmonies = harmoniesMode();
-
-    const int  topStripH = harmonies ? kLyricH : 0;
-
-    const auto topArea     = juce::Rectangle<int> (0, 0, getWidth(), topStripH);
+    // Every band chains off getHighwayArea() so paint() can't drift from the layout
+    // used by resized() and mouse hit-testing (CODE_REVIEW.md 2.6). The top strip is
+    // whatever sits above the highway — empty in Solo mode.
     const auto highwayArea = getHighwayArea();
+    const auto topArea     = getLocalBounds().withBottom (highwayArea.getY());
     const auto lyricArea   = juce::Rectangle<int> (0, highwayArea.getBottom(), getWidth(), kLyricH);
     const auto statsArea   = juce::Rectangle<int> (0, lyricArea.getBottom(),   getWidth(), kStatsH);
     const auto statusArea  = juce::Rectangle<int> (0, statsArea.getBottom(),   getWidth(), kStatusH);
@@ -992,7 +993,7 @@ void RBVocalSingAudioProcessorEditor::paint (juce::Graphics& g)
 
     const double t = cachedPlayTime - (latencyOffsetMs / 1000.0);
 
-    if (harmonies)
+    if (! topArea.isEmpty())
         drawLyricStrip (g, topArea, t, true);
 
     drawHighway (g, highwayArea, t);

@@ -143,7 +143,6 @@ private:
     static constexpr int   kStatusH   = 22;   // fps / priority / renderer info bar
     static constexpr int   kMessageH  = 22;   // chart status + frame-skip warning bar
     static constexpr int   kLyricH    = 46;   // 28 current row + 18 preview row
-    static constexpr float kPixPerSec = 200.0f;  // default seed for pixPerSec member
     // How far back from the left edge to start scanning notes each frame.
     static constexpr double kNoteLookback = 5.0;  // seconds
     // Solo base height; Harmonies adds a second (top) lyric strip. The +kEditRowH keeps

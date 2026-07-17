@@ -22,10 +22,10 @@ struct NoteInfo {
     double       endTime;
     int          pitch;      // MIDI 0-127
     juce::String lyric;      // may be empty
-    bool         isTalkie { false };  // lyric ends with # or ^ — no pitch match required
-    bool         isHidden { false };  // lyric ends with $ — skip in lyric strip (HARM duplicate)
+    bool         isTalkie { false };  // # or ^ in the lyric's suffix run — no pitch match required
+    bool         isHidden { false };  // $ in the lyric's suffix run — skip in lyric strip (HARM duplicate)
     VocalPart    part      { VocalPart::Main };
-    float        thickScale { 1.0f };  // 1.0 / 1.1 / 1.2 — precomputed overlap thickness
+    float        thickScale { 1.0f };  // 1.0 / 1.3 (Harm2 unison) / 1.6 (Harm3 unison) — overlap thickness
 
     // ── Source back-reference (REAPER only) — lets the editor write a pitch edit
     //    back to the exact MIDI note. All null/-1 for the file-based fallback, which

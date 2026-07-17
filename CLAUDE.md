@@ -9,16 +9,19 @@ persisted settings, transport navigation, write-back note-pitch editing). Builds
 inside REAPER. User-facing documentation lives in **README.md** (installation, setup,
 usage) — keep it in sync when behaviour changes.
 
-## Reference documents (planned work — read before starting related tasks)
+## Reference documents (read before starting related tasks)
+
+Local-only working docs (both directories are gitignored): `_upcoming/` holds planned
+work, `_old/` holds completed phases kept for their design rationale.
 
 | Document | Contents |
 | --- | --- |
-| [CODE_REVIEW.md](CODE_REVIEW.md) | Known bugs + code-quality findings with file:line refs (2026-07 full review) |
-| [PERFORMANCE_IMPROVEMENT.md](PERFORMANCE_IMPROVEMENT.md) | Paint-cost improvement plan: instrumentation first, then concrete wins, then GPU options |
-| [PITCH_DETECTION_IMPROVEMENT.md](PITCH_DETECTION_IMPROVEMENT.md) | Pitch-engine assessment + karaoke-style assist features (cents scoring, snap, hit highlighting) |
-| [TEST_PLAN.md](TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
+| [_old/CODE_REVIEW.md](_old/CODE_REVIEW.md) | 2026-07 full review — §1–§3 all fixed (2026-07-17 patch series); §4 recorded as non-action, §5 informational |
+| [_upcoming/PERFORMANCE_IMPROVEMENT.md](_upcoming/PERFORMANCE_IMPROVEMENT.md) | Paint-cost improvement plan: instrumentation first, then concrete wins, then GPU options |
+| [_upcoming/PITCH_DETECTION_IMPROVEMENT.md](_upcoming/PITCH_DETECTION_IMPROVEMENT.md) | Pitch-engine assessment + karaoke-style assist features (cents scoring, snap, hit highlighting) |
+| [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 
-Suggested order: TEST_PLAN → CODE_REVIEW fixes → PERFORMANCE → PITCH_DETECTION.
+Suggested order: PERFORMANCE → PITCH_DETECTION (TEST_PLAN and CODE_REVIEW are done).
 
 ---
 
@@ -50,8 +53,8 @@ rock-band-vocal-sing-plugin/          (repo root)
   CMakeLists.txt                  — JUCE 7.0.12 via CPM, VST3 only
   cmake/CPM.cmake                 — package manager
   README.md + assets/             — user-facing docs (screenshots, demo gif)
-  CLAUDE.md + *_IMPROVEMENT.md,
-  CODE_REVIEW.md, TEST_PLAN.md    — developer reference (this file + planned work)
+  CLAUDE.md                       — developer reference (this file)
+  _upcoming/ + _old/              — planned / completed working docs (gitignored, local only)
   src/
     PluginProcessor.h             — RBVocalSingAudioProcessor decl + chart data types
     PluginProcessor.cpp           — lifecycle, processBlock, REAPER API handover,
@@ -131,11 +134,19 @@ pointers loaded from `IReaperHostApplication::getReaperApi()`; the inner
 (`sourceTake`/`sourceNoteIndex`/`sourceTrack`/`sourceItem`, REAPER path only) used by the
 note-pitch editor's `MIDI_SetNote` write-back.
 
-- Lyrics: type-5 MIDI text events matched to the nearest note-on within 50 ms.
-- Marker pitches: 0 = Range Shift section boundary, 105 = phrase, 116 = overdrive,
-  ≥ 96 = reserved (all excluded from `chartNotes`).
+- Lyrics: type-5 MIDI text events matched to the nearest note-on within 50 ms. The
+  talkie/hidden flags classify the lyric's whole trailing suffix run (`LyricText.h`),
+  so `"word#$"` is both.
+- Marker pitches (named constants in `PluginProcessor.h`): `kRangeShiftPitch` 0 =
+  Range Shift section boundary, `kPhraseMarkerPitch` 105 = phrase, `kOverdrivePitch`
+  116 = overdrive, ≥ `kFirstReservedPitch` 96 = reserved (all excluded from `chartNotes`).
 - Pitch range (`chartMinPitch`/`chartMaxPitch`) = loaded note min/max ± 2 semitones.
-- `songEndTime` from an `[end]` text event on an EVENTS track, else last note.
+- `songEndTime` from an `[end]` text event on an EVENTS track, else the latest note end.
+- Muted MIDI notes are **deliberately not treated specially** — they draw and score like
+  any other note (CODE_REVIEW 1.8 decision, 2026-07-17: not a common Rock Band authoring
+  case; revisit if a user asks — options were skip, or render dimmed). Documented in README.
+- Both loaders share `clearChart()` + `finalizeChart()` (`ChartLoader.cpp`) for
+  everything after "find source + parse" — the REAPER/file paths stay in sync structurally.
 
 ### Vocal mode (Solo / Harmonies)
 
@@ -236,9 +247,11 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 
 ## Backlog
 
-- **Tests done** — see the Testing section above; CODE_REVIEW fixes next.
-- **Bug fixes** — see CODE_REVIEW.md §1–2 (seek-vs-calibration mismatch, high-sample-rate
-  pitch detection, editToggle enablement, songEndTime fallback, etc.).
+- **Tests done** — see the Testing section above.
+- **CODE_REVIEW fixes done** (2026-07-17, 17-patch series) — §1–§3 all fixed
+  (`_old/CODE_REVIEW.md`; §4 recorded as non-action, §5 informational). The one
+  behaviour decision: muted MIDI notes stay charted (1.8, documented in README;
+  revisit on user feedback). PERFORMANCE → PITCH_DETECTION next.
 - **Cents-level accuracy + assist features** — fractional pitch, cents traffic light,
   visual snap, note-hit highlighting; see PITCH_DETECTION_IMPROVEMENT.md.
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
@@ -280,7 +293,7 @@ full design rationale.
 ```
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug --target RBVocalSingTests
-& "build/RBVocalSingTests_artefacts/Debug/RBVocalSingTests.exe"   # all pass (mayfail excepted)
+& "build/RBVocalSingTests_artefacts/Debug/RBVocalSingTests.exe"   # all pass
 
 cmake --build build --config Debug                                 # plugin still builds
 scripts/run_pluginval.ps1                                          # exits 0
@@ -295,17 +308,12 @@ tagged releases).
 Any deliberate chart-loader behaviour change must update the fixtures in
 `tests/ChartLoaderTests.cpp` in the same commit.
 
-Three cases are tagged `[!mayfail]` — they assert the fixed/correct behaviour for a
-known bug and are allowed to fail until that bug is fixed elsewhere, at which point they
-start passing with no test-file changes needed (removing the tag afterwards is optional
-cleanup):
-
-- `tests/PitchDetectionTests.cpp` — 192 kHz pitch detection; un-flags when CODE_REVIEW.md
-  §1.2 (high-sample-rate bug) is fixed.
-- `tests/ChartLoaderTests.cpp` — mixed suffix flags (`"word#$"`); un-flags when
-  CODE_REVIEW.md §2.1 (talkie/hidden classification) is fixed.
-- `tests/ChartLoaderTests.cpp` — `songEndTime` fallback; un-flags when CODE_REVIEW.md
-  §1.4 (last-starting vs. last-ending note) is fixed.
+No `[!mayfail]` cases remain. The convention, should it be needed again: tag a test
+`[!mayfail]` to assert the fixed/correct behaviour for a known bug — it's allowed to
+fail until the bug is fixed elsewhere, then starts passing with no test-file changes;
+remove the tag in the same commit as the fix to lock it into CI. (The three historical
+cases — CODE_REVIEW 1.2 high-sample-rate pitch, 2.1 mixed suffix flags, 1.4 songEndTime
+fallback — were fixed and un-flagged in the 2026-07-17 patch series.)
 
 ---
 

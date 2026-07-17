@@ -17,3 +17,5 @@
 # OS cruft
 .DS_Store
 Thumbs.db
+/_old
+/_upcoming

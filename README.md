@@ -116,6 +116,7 @@ From top to bottom:
 - In Harmonies mode, parts are colour-coded: **Main cyan**, **Harm2 amber**, **Harm3 brown**. Where a lower part sits on the same sustained pitch as a higher one, its bar is drawn thicker so the overlap stays visible.
 - Lane grid lines mark every 2 semitones. The vertical range auto-fits the loaded notes (± 2 semitones of padding).
 - Inline lyric labels on the bars are **Main-only**; HARM2/HARM3 lyrics live in the top strip.
+- **Muted MIDI notes are not treated specially** — a note muted in the REAPER MIDI editor still draws and scores like any other. If you don't want a note charted, delete it or move it to another track. (Let us know if muting matters to your workflow — this can be revisited.)
 - If no chart is loaded, the highway shows a diagnostic message (including the list of tracks it found, if the lead track is missing).
 
 ### Traffic light

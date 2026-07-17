@@ -780,6 +780,21 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         {
             lastPollTicks = now;
 
+            // The REAPER handover can complete after the editor is constructed, so the
+            // constructor's one-time "Allow edits" enablement may have seen a not-yet-
+            // loaded API. Re-evaluate here (two pointer checks) so the toggle wakes up
+            // without a close/reopen. (CODE_REVIEW.md 1.3)
+            const bool canEditNow = audioProcessor.reaperApi.canEdit();
+            if (canEditNow != editToggle.isEnabled())
+            {
+                editToggle.setEnabled (canEditNow);
+                if (! canEditNow)
+                {
+                    editToggle.setToggleState (false, juce::dontSendNotification);
+                    editMode = false;
+                }
+            }
+
             // Suppress chart reload while a pitch drag is in flight — a rebuild would
             // invalidate the dragged note's index mid-drag. mouseUp forces a clean
             // re-sync afterwards by setting lastStateCount = -1.

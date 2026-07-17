@@ -88,8 +88,14 @@ void RBVocalSingAudioProcessor::Vst3Ext::setIHostApplication (Steinberg::FUnknow
     if (ptr->queryInterface (reaper::IReaperHostApplication::iid, &obj) == Steinberg::kResultOk
         && obj != nullptr)
     {
-        proc.reaperApi.load (static_cast<reaper::IReaperHostApplication*> (obj));
+        auto* host = static_cast<reaper::IReaperHostApplication*> (obj);
+        proc.reaperApi.load (host);
         proc.chartStatus = "Reaper connected — reading PART VOCALS...";
+
+        // queryInterface add-refs the returned interface. The loaded entries are plain C
+        // function pointers owned by REAPER itself, not by this COM object, so the
+        // reference can be dropped immediately.
+        host->release();
     }
 }
 

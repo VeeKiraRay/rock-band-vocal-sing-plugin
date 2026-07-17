@@ -131,14 +131,17 @@ public:
     // ── Vocal mode (Solo / Harmonies) — set by editor, drives chart re-read ────
     std::atomic<int> vocalMode { (int) VocalMode::Solo };
 
-    // ── Persisted UI settings (UI thread only; serialised by get/setStateInformation) ──
-    double savedFrameInterval   { 1.0 / 60.0 };
-    bool   savedReaperPriority  { false };
-    bool   savedOctaveWrap      { true };
-    int    savedLatencyOffsetMs { 0 };
-    float  savedPixPerSec       { 200.0f };
-    int    savedLyricMode       { 0 };   // 0=Scrolling, 1=Static
-    int    savedRenderer        { 0 };   // 0=CPU, 2=OpenGL+persist
+    // ── Persisted UI settings ─────────────────────────────────────────────────
+    // Written by the editor on the message thread, but read/written by
+    // get/setStateInformation from whatever thread the host calls them on (the VST3
+    // spec doesn't promise the message thread) — hence atomics, like vocalMode above.
+    std::atomic<double> savedFrameInterval   { 1.0 / 60.0 };
+    std::atomic<bool>   savedReaperPriority  { false };
+    std::atomic<bool>   savedOctaveWrap      { true };
+    std::atomic<int>    savedLatencyOffsetMs { 0 };
+    std::atomic<float>  savedPixPerSec       { 200.0f };
+    std::atomic<int>    savedLyricMode       { 0 };   // 0=Scrolling, 1=Static
+    std::atomic<int>    savedRenderer        { 0 };   // 0=CPU, 2=OpenGL+persist
 
 private:
     // VST3ClientExtensions — Reaper calls setIHostApplication to hand over its API

@@ -120,13 +120,13 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     juce::ValueTree state ("RBVocalSingState");
     state.setProperty ("vocalMode",      vocalMode.load (std::memory_order_relaxed),           nullptr);
     state.setProperty ("gateThreshold",  (double) gateThreshold.load (std::memory_order_relaxed), nullptr);
-    state.setProperty ("frameInterval",  savedFrameInterval,    nullptr);
-    state.setProperty ("reaperPriority", savedReaperPriority,   nullptr);
-    state.setProperty ("octaveWrap",     savedOctaveWrap,       nullptr);
-    state.setProperty ("latencyMs",      savedLatencyOffsetMs,  nullptr);
-    state.setProperty ("pixPerSec",      (double) savedPixPerSec, nullptr);
-    state.setProperty ("lyricMode",      savedLyricMode,        nullptr);
-    state.setProperty ("renderer",       savedRenderer,         nullptr);
+    state.setProperty ("frameInterval",  savedFrameInterval.load(),    nullptr);
+    state.setProperty ("reaperPriority", savedReaperPriority.load(),   nullptr);
+    state.setProperty ("octaveWrap",     savedOctaveWrap.load(),       nullptr);
+    state.setProperty ("latencyMs",      savedLatencyOffsetMs.load(),  nullptr);
+    state.setProperty ("pixPerSec",      (double) savedPixPerSec.load(), nullptr);
+    state.setProperty ("lyricMode",      savedLyricMode.load(),        nullptr);
+    state.setProperty ("renderer",       savedRenderer.load(),         nullptr);
     auto xml = state.createXml();
     copyXmlToBinary (*xml, destData);
 }

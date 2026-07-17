@@ -150,6 +150,30 @@ private:
     std::vector<float> lyricWidthCache;
     int                lyricWidthCacheVersion { -1 };
 
+    // Static-lyric-mode phrase layout cache (PERFORMANCE_IMPROVEMENT.md c5): the
+    // collected syllable list + measured widths for one (strip, role) slot, rebuilt
+    // only when the chart, phrase index, or font changes — while inside a phrase,
+    // drawing does no collecting or measuring. Colour stays per-frame (depends on t).
+    struct PhrasePartLayout
+    {
+        juce::String text, glue;
+        double       start, end;
+        VocalPart    part;
+        float        textW, glueW;
+    };
+    struct PhraseLayoutCache
+    {
+        int   chartVersion { -1 };
+        int   phraseIdx    { -1 };
+        float fontHeight   { -1.0f };
+        std::vector<PhrasePartLayout> parts;
+        float totalW { 0.0f };
+    };
+    PhraseLayoutCache phraseLayouts[4];   // {bottom, top} strip × {current, preview}
+    const PhraseLayoutCache& getPhraseLayout (bool harmonyStrip, bool preview,
+                                              int phraseIdx, const PhraseInfo& phrase,
+                                              const juce::Font& font);
+
     // Perf signals computed in onFrame(), shown by drawStatusBar().
     bool   framesDropping { false };
     double displayFps     { 0.0 };

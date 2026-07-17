@@ -153,50 +153,24 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
     g.drawHorizontalLine (currentArea.getBottom(),
                           (float) area.getX(), (float) area.getRight());
 
-    // ── Shared helpers ───────────────────────────────────────────────────────
-
-    struct Part { juce::String text; juce::String glue; double start; double end; VocalPart part; };
-
-    // Build syllable part list for a phrase (filtered to this strip's parts)
-    auto collectParts = [&] (const PhraseInfo& phrase) -> std::vector<Part>
-    {
-        std::vector<Part> parts;
-        for (size_t i = 0; i < notes.size(); ++i)
-        {
-            const auto& n = notes[i];
-            if (n.startTime < phrase.startTime - 0.01) continue;
-            if (n.startTime >= phrase.endTime)          break;
-            if (!includePart (n.part))                  continue;
-            if (n.lyric.isEmpty() || n.lyric == "+")    continue;
-            if (n.isHidden)                              continue;
-
-            // syllable/glue/effectiveEnd precomputed at chart load (finalizeChart).
-            parts.push_back ({ n.syllable, n.glue, n.startTime, n.effectiveEnd, n.part });
-        }
-        if (!parts.empty()) parts.back().glue = "";
-        return parts;
-    };
-
-    // Render a part list into rect, optionally with active/past highlighting
-    auto drawParts = [&] (const std::vector<Part>& parts,
+    // Render a cached phrase layout into rect, optionally with active/past
+    // highlighting. All collecting/measuring happened in getPhraseLayout — this only
+    // computes per-frame colour and draws.
+    auto drawParts = [&] (const PhraseLayoutCache& layout,
                           juce::Rectangle<int>     rect,
                           const juce::Font&        font,
                           bool                     highlight)
     {
-        if (parts.empty()) return;
+        if (layout.parts.empty()) return;
         g.setFont (font);
 
-        float totalW = 0.0f;
-        for (const auto& p : parts)
-            totalW += font.getStringWidthFloat (p.text) + font.getStringWidthFloat (p.glue);
-
         float x = std::max ((float) rect.getX() + 4.0f,
-                            rect.getCentreX() - totalW * 0.5f);
+                            rect.getCentreX() - layout.totalW * 0.5f);
 
         g.saveState();
         g.reduceClipRegion (rect);
 
-        for (const auto& p : parts)
+        for (const auto& p : layout.parts)
         {
             juce::Colour col;
             if (highlight)
@@ -211,19 +185,17 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             }
             g.setColour (col);
 
-            const float tw = font.getStringWidthFloat (p.text);
             g.drawText (p.text, (int) x, rect.getY(),
-                        juce::jmax (1, (int) tw + 1), rect.getHeight(),
+                        juce::jmax (1, (int) p.textW + 1), rect.getHeight(),
                         juce::Justification::centredLeft, false);
-            x += tw;
+            x += p.textW;
 
             if (!p.glue.isEmpty())
             {
-                const float gw = font.getStringWidthFloat (p.glue);
                 g.drawText (p.glue, (int) x, rect.getY(),
-                            juce::jmax (1, (int) gw + 1), rect.getHeight(),
+                            juce::jmax (1, (int) p.glueW + 1), rect.getHeight(),
                             juce::Justification::centredLeft, false);
-                x += gw;
+                x += p.glueW;
             }
         }
 
@@ -231,15 +203,69 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
     };
 
     // Current phrase — full highlighting
-    drawParts (collectParts (phrases[currentIdx]),
-               currentArea,
-               juce::Font (15.0f, juce::Font::bold),
-               true);
+    {
+        const juce::Font curFont (15.0f, juce::Font::bold);
+        drawParts (getPhraseLayout (harmonyStrip, false, currentIdx,
+                                    phrases[currentIdx], curFont),
+                   currentArea, curFont, true);
+    }
 
     // Next phrase — dim preview (area is the remaining lower strip)
     if (currentIdx + 1 < (int) phrases.size())
-        drawParts (collectParts (phrases[currentIdx + 1]),
-                   area,
-                   juce::Font (11.0f, juce::Font::bold),
-                   false);
+    {
+        const juce::Font prevFont (11.0f, juce::Font::bold);
+        drawParts (getPhraseLayout (harmonyStrip, true, currentIdx + 1,
+                                    phrases[currentIdx + 1], prevFont),
+                   area, prevFont, false);
+    }
+}
+
+// Rebuilds (on chart/phrase/font change) or returns the cached syllable layout for one
+// (strip, role) slot. The collect logic is the old per-frame collectParts lambda, now
+// run only on rebuild; widths are measured here once so drawing is measurement-free.
+const RBVocalSingAudioProcessorEditor::PhraseLayoutCache&
+RBVocalSingAudioProcessorEditor::getPhraseLayout (bool harmonyStrip, bool preview,
+                                                  int phraseIdx, const PhraseInfo& phrase,
+                                                  const juce::Font& font)
+{
+    auto& slot = phraseLayouts[(harmonyStrip ? 2 : 0) + (preview ? 1 : 0)];
+
+    const int version = audioProcessor.getChartVersion();
+    if (slot.chartVersion == version && slot.phraseIdx == phraseIdx
+        && slot.fontHeight == font.getHeight())
+        return slot;
+
+    slot.chartVersion = version;
+    slot.phraseIdx    = phraseIdx;
+    slot.fontHeight   = font.getHeight();
+    slot.parts.clear();
+    slot.totalW = 0.0f;
+
+    const auto& notes = audioProcessor.getChartNotes();
+    auto it = std::lower_bound (notes.begin(), notes.end(), phrase.startTime - 0.01,
+        [] (const NoteInfo& n, double v) { return n.startTime < v; });
+    for (; it != notes.end(); ++it)
+    {
+        const auto& n = *it;
+        if (n.startTime >= phrase.endTime)       break;
+        // Bottom strip shows Main (HARM1/Solo); top strip shows HARM2+HARM3.
+        if (harmonyStrip ? (n.part == VocalPart::Main)
+                         : (n.part != VocalPart::Main)) continue;
+        if (n.lyric.isEmpty() || n.lyric == "+") continue;
+        if (n.isHidden)                          continue;
+
+        // syllable/glue/effectiveEnd precomputed at chart load (finalizeChart).
+        slot.parts.push_back ({ n.syllable, n.glue, n.startTime, n.effectiveEnd,
+                                n.part, 0.0f, 0.0f });
+    }
+    if (! slot.parts.empty()) slot.parts.back().glue = "";  // no trailing glue on a phrase
+
+    for (auto& p : slot.parts)
+    {
+        p.textW = font.getStringWidthFloat (p.text);
+        p.glueW = p.glue.isEmpty() ? 0.0f : font.getStringWidthFloat (p.glue);
+        slot.totalW += p.textW + p.glueW;
+    }
+
+    return slot;
 }

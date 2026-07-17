@@ -174,6 +174,12 @@ private:
                                               int phraseIdx, const PhraseInfo& phrase,
                                               const juce::Font& font);
 
+    // Lyric-strip fonts, constructed once — juce::Font construction does typeface-
+    // cache lookups, so building them per frame in paint was wasted work
+    // (PERFORMANCE_IMPROVEMENT.md c6).
+    const juce::Font lyricFont15 { 15.0f, juce::Font::bold };  // pills + static current row
+    const juce::Font lyricFont11 { 11.0f, juce::Font::bold };  // static preview row
+
     // Perf signals computed in onFrame(), shown by drawStatusBar().
     bool   framesDropping { false };
     double displayFps     { 0.0 };

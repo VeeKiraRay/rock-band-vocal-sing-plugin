@@ -51,7 +51,7 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
         g.setColour (juce::Colour (0xff2a2a44));
         g.drawVerticalLine ((int) phX, (float) area.getY(), (float) area.getBottom());
 
-        const juce::Font lyricFont (15.0f, juce::Font::bold);
+        const juce::Font& lyricFont = lyricFont15;
         g.setFont (lyricFont);
 
         // Reset the width cache when the chart changed (or on first use); entries are
@@ -203,21 +203,15 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
     };
 
     // Current phrase — full highlighting
-    {
-        const juce::Font curFont (15.0f, juce::Font::bold);
-        drawParts (getPhraseLayout (harmonyStrip, false, currentIdx,
-                                    phrases[currentIdx], curFont),
-                   currentArea, curFont, true);
-    }
+    drawParts (getPhraseLayout (harmonyStrip, false, currentIdx,
+                                phrases[currentIdx], lyricFont15),
+               currentArea, lyricFont15, true);
 
     // Next phrase — dim preview (area is the remaining lower strip)
     if (currentIdx + 1 < (int) phrases.size())
-    {
-        const juce::Font prevFont (11.0f, juce::Font::bold);
         drawParts (getPhraseLayout (harmonyStrip, true, currentIdx + 1,
-                                    phrases[currentIdx + 1], prevFont),
-                   area, prevFont, false);
-    }
+                                    phrases[currentIdx + 1], lyricFont11),
+                   area, lyricFont11, false);
 }
 
 // Rebuilds (on chart/phrase/font change) or returns the cached syllable layout for one

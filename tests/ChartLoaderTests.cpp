@@ -505,6 +505,40 @@ TEST_CASE ("render cache: syllable/glue split hyphen, equals and word boundary",
     REQUIRE (notes[3].syllable == "syl");   REQUIRE (notes[3].glue == "");
 }
 
+TEST_CASE ("render cache: pitch-class candidate lists are sorted, deduped, per class",
+           "[chartloader][rendercache]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote (vocals, 1.0, 1.5, 60);   // pc 0
+    addNote (vocals, 2.0, 2.5, 72);   // pc 0 (out of start order vs 48 below)
+    addNote (vocals, 3.0, 3.5, 48);   // pc 0
+    addNote (vocals, 4.0, 4.5, 60);   // pc 0 duplicate -> collapses
+    addNote (vocals, 5.0, 5.5, 62);   // pc 2
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    const auto& cands = proc.getPitchClassCandidates();
+    REQUIRE (cands[0] == std::vector<int> { 48, 60, 72 });
+    REQUIRE (cands[2] == std::vector<int> { 62 });
+    for (const size_t pc : { (size_t) 1, (size_t) 3, (size_t) 7, (size_t) 11 })
+        REQUIRE (cands[pc].empty());
+
+    // A reload replaces the lists rather than accumulating into them.
+    juce::MidiMessageSequence vocals2;
+    addNote (vocals2, 1.0, 1.5, 50);  // pc 2 only
+    juce::TemporaryFile tempFile2 (".mid");
+    auto file2 = writeMidiFixture (tempFile2, { { "PART VOCALS", vocals2 }, { "EVENTS", {} } });
+    proc.loadMidiFile (file2);
+
+    REQUIRE (cands[0].empty());
+    REQUIRE (cands[2] == std::vector<int> { 50 });
+}
+
 TEST_CASE ("render cache: chartVersion strictly increases across loads",
            "[chartloader][rendercache]")
 {

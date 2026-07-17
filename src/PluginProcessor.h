@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <array>
 #include <atomic>
 #include <vector>
 #include "reaper_api.h"
@@ -122,6 +123,10 @@ public:
     // Bumped on every chart clear/load — editor-side derived caches (e.g. lyric pixel
     // widths, which need fonts and so can't live here) key off it for invalidation.
     int getChartVersion() const { return chartVersion; }
+    // Sorted, unique chart pitches grouped by pitch class — the octave-wrap candidate
+    // pool, built by finalizeChart so the editor's per-frame wrap is a binary-searched
+    // slice instead of a full note scan + sort per call.
+    const std::array<std::vector<int>, 12>& getPitchClassCandidates() const { return pitchClassCandidates; }
     const std::vector<PhraseInfo>&  getChartPhrases()      const { return chartPhrases; }
     const std::vector<PhraseInfo>&  getChartHarm2Phrases() const { return chartHarm2Phrases; }
     const std::vector<PhraseInfo>&  getChartOverdrives()        const { return chartOverdrives; }
@@ -195,6 +200,7 @@ private:
     std::vector<double>      chartPhraseSeparators;    // precomputed separator line times (seconds)
     std::vector<PitchSection> chartPitchSections;
     int                      chartVersion { 0 };       // see getChartVersion()
+    std::array<std::vector<int>, 12> pitchClassCandidates;  // see getPitchClassCandidates()
 
     juce::File lastMidiFile;  // remembered for reloadChart() outside Reaper
 

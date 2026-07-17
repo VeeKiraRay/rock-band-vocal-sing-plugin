@@ -9,25 +9,25 @@
 // Cycles through in-range chart notes that share the same pitch class (by octave index),
 // so C4 maps to C2 and C5 maps to C3 when both C2 and C3 are in the chart — matching
 // the "same note name in the next octave" intuition. Falls back to a raw modular-semitone
-// wrap if no same-pitch-class note exists in the visible range.
+// wrap if no same-pitch-class note exists in the visible range. The candidate pool is
+// precomputed at chart load (getPitchClassCandidates); the [minP, maxP] clip must stay
+// per-call because the two callers pass different ranges (the arrowhead uses the
+// animated section range, the traffic light the whole chart range).
 static int wrapPitchIntoRange (int P, int minP, int maxP,
-                                const std::vector<NoteInfo>& notes)
+                                const std::array<std::vector<int>, 12>& candsByPc)
 {
     const int pc = ((P % 12) + 12) % 12;
 
-    std::vector<int> cands;
-    for (const auto& n : notes)
-        if (n.pitch >= minP && n.pitch <= maxP && n.pitch % 12 == pc)
-            cands.push_back (n.pitch);
-    std::sort  (cands.begin(), cands.end());
-    cands.erase (std::unique (cands.begin(), cands.end()), cands.end());
+    const auto& all = candsByPc[(size_t) pc];
+    const auto  lo  = std::lower_bound (all.begin(), all.end(), minP);
+    const auto  hi  = std::upper_bound (lo, all.end(), maxP);
 
-    if (! cands.empty())
+    if (lo != hi)
     {
-        const int N    = (int) cands.size();
-        const int base = cands[0];
+        const int N    = (int) (hi - lo);
+        const int base = *lo;
         const int idx  = (((P - base) / 12) % N + N) % N;
-        return cands[idx];
+        return *(lo + idx);
     }
 
     // Fallback: modular semitone wrap
@@ -327,7 +327,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         const bool doWrap   = octaveWrap && !inRange;
         const int  drawNote = doWrap
                                   ? wrapPitchIntoRange (userNote, (int) fMinP, (int) fMaxP,
-                                                        audioProcessor.getChartNotes())
+                                                        audioProcessor.getPitchClassCandidates())
                                   : userNote;
 
         if (inRange || doWrap)
@@ -411,7 +411,7 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     const int scoringNote = (note >= 0 && octaveWrap
                              && (note < minP || note > maxP))
                                 ? wrapPitchIntoRange (note, minP, maxP,
-                                                      audioProcessor.getChartNotes())
+                                                      audioProcessor.getPitchClassCandidates())
                                 : note;
 
     // Scan all active notes unconditionally (even when no audio is detected) so that

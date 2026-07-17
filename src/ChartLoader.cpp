@@ -191,6 +191,7 @@ void RBVocalSingAudioProcessor::clearChart()
     chartOverdrives.clear();
     chartPhraseSeparators.clear();
     chartPitchSections.clear();
+    for (auto& v : pitchClassCandidates) v.clear();
     chartMinPitch = 48;
     chartMaxPitch = 84;
     songEndTime   = -1.0;
@@ -235,6 +236,17 @@ void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&          
             if (nx.lyric != "+")   break;
             n.effectiveEnd = nx.endTime;
         }
+    }
+
+    // Octave-wrap candidate pool (PERFORMANCE_IMPROVEMENT.md c4): chart pitches grouped
+    // by pitch class, sorted + deduped once — replaces wrapPitchIntoRange's per-call
+    // full-note scan. Chart pitches are 1..95, so plain % 12 is safe.
+    for (const auto& n : chartNotes)
+        pitchClassCandidates[(size_t) (n.pitch % 12)].push_back (n.pitch);
+    for (auto& v : pitchClassCandidates)
+    {
+        std::sort (v.begin(), v.end());
+        v.erase (std::unique (v.begin(), v.end()), v.end());
     }
 
     ++chartVersion;

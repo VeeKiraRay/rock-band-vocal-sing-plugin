@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "EditorVisuals.h"
+#include <algorithm>
 
 // The scrolling / static lyric strips (bottom = Main/HARM1, top = HARM2+HARM3 in
 // Harmonies mode). Shared colours and the lyric-suffix helpers live in
@@ -65,9 +66,19 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
         g.saveState();
         g.reduceClipRegion (area);
 
-        for (size_t i = 0; i < notes.size(); ++i)
+        // Start at the first note that can reach the left cull margin — everything
+        // earlier was an O(elapsed-song) `continue` sweep before
+        // (PERFORMANCE_IMPROVEMENT.md c1). Pills anchor at startTime, so unlike
+        // drawNotesForPart no still-sounding backward extension is needed; the
+        // left-margin `continue` below stays as a boundary guard.
+        const double leftTime = t + ((double) area.getX() - 120.0 - (double) phX) / pixPerSec;
+        const auto   startIt  = std::lower_bound (notes.begin(), notes.end(), leftTime,
+            [] (const NoteInfo& n, double v) { return n.startTime < v; });
+
+        for (auto it = startIt; it != notes.end(); ++it)
         {
-            const auto& n = notes[i];
+            const size_t i = (size_t) (it - notes.begin());  // width-cache index
+            const auto&  n = *it;
             const float x = phX + (float) (n.startTime - t) * pixPerSec;
             if (x > area.getRight() + 120.0f)         break;
             if (!includePart (n.part))                continue;

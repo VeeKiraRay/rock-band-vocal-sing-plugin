@@ -114,6 +114,24 @@ TEST_CASE ("pitch: hold-decay keeps the note through kPitchHoldCycles then reset
     REQUIRE (proc.currentMidiNote.load() == -1);
 }
 
+TEST_CASE ("pitch: prepareToPlay clears a stale partial accumulation (CODE_REVIEW.md 1.6)", "[pitch]")
+{
+    RBVocalSingAudioProcessor proc;
+
+    // Leave 1536 samples of a 110 Hz sine sitting in the accumulator — under the
+    // 2048-sample window, so no detection fires and a stale fill would survive.
+    feedSine (proc, 48000.0, 110.0f, 0.5f, 512, 3);
+    REQUIRE (proc.currentMidiNote.load() == -1);
+
+    // Restart (feedSine re-runs prepareToPlay) and feed exactly one window's worth of
+    // 440 Hz. Without the reset the only detection window would be three-quarters
+    // stale 110 Hz samples and misreport the pitch.
+    feedSine (proc, 48000.0, 440.0f, 0.5f, 512, 4);
+
+    REQUIRE (proc.currentMidiNote.load() == 69);
+    REQUIRE (proc.currentFrequency.load() == Catch::Approx (440.0f).epsilon (0.01));
+}
+
 TEST_CASE ("pitch: 192 kHz, 110 Hz sine (high-sample-rate bug, CODE_REVIEW.md 1.2)", "[pitch][!mayfail]")
 {
     RBVocalSingAudioProcessor proc;

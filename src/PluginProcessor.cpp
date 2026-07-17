@@ -22,6 +22,11 @@ JUCE_END_IGNORE_WARNINGS_MSVC
 void RBVocalSingAudioProcessor::prepareToPlay (double sampleRate, int)
 {
     storedSampleRate = sampleRate;
+
+    // Drop any partial accumulation from before a stop/start or sample-rate change so
+    // stale samples never bleed into the first detection window.
+    pitchAccumFill  = 0;
+    pitchHoldFrames = 0;
 }
 
 // ─── processBlock ─────────────────────────────────────────────────────────────

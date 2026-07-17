@@ -420,8 +420,23 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     bool activeRegular = false;
     int  bestDiff      = -1;
 
-    for (const auto& n : audioProcessor.getChartNotes())
+    // Window the scan like drawNotesForPart instead of walking from the first note of
+    // the song every frame (PERFORMANCE_IMPROVEMENT.md c3): jump to the earliest note
+    // within kNoteLookback, then extend backwards while the previous note is still
+    // sounding — same non-overlap assumption drawNotesForPart documents.
+    const auto& chartNotes = audioProcessor.getChartNotes();
+    auto scanIt = std::lower_bound (chartNotes.begin(), chartNotes.end(), t - kNoteLookback,
+        [] (const NoteInfo& n, double v) { return n.startTime < v; });
+    while (scanIt != chartNotes.begin())
     {
+        const auto prev = std::prev (scanIt);
+        if (prev->endTime <= t) break;
+        scanIt = prev;
+    }
+
+    for (auto it = scanIt; it != chartNotes.end(); ++it)
+    {
+        const auto& n = *it;
         if (n.startTime > t + 0.1) break;
         if (n.startTime <= t && t < n.endTime)
         {

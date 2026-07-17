@@ -643,8 +643,11 @@ void RBVocalSingAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     // Otherwise: seek the playhead (unchanged).
     if (! audioProcessor.reaperApi.SetEditCurPos) return;
 
+    // Map through the same calibrated time the highway is drawn with (and hitTestNote
+    // uses), so a click lands on the note the user sees, not latencyOffsetMs away.
     const float  phX      = (float) highway.getX() + (float) highway.getWidth() * 0.3f;
-    const double seekTime = cachedPlayTime + (e.x - phX) / (double) pixPerSec;
+    const double seekTime = (cachedPlayTime - latencyOffsetMs / 1000.0)
+                          + (e.x - phX) / (double) pixPerSec;
 
     audioProcessor.reaperApi.SetEditCurPos (std::max (0.0, seekTime), true, true);
 }

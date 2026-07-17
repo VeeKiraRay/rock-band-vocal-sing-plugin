@@ -33,3 +33,21 @@ inline void classifyNotationSuffixes (const juce::String& s, bool& isTalkie, boo
         else break;
     }
 }
+
+// Removes connector chars from a raw MIDI lyric syllable and returns the glue that
+// should follow it: "" (hyphen removed), "-" (equals converted), " " (word boundary).
+// Trailing #/^/$ notational suffixes are stripped first.
+inline juce::String stripLyricSuffix (const juce::String& raw, juce::String& outGlue)
+{
+    juce::String s = stripNotationSuffixes (raw);
+
+    if (!s.isEmpty())
+    {
+        const juce::juce_wchar last = s[s.length() - 1];
+        if (last == '-') { outGlue = "";  return s.dropLastCharacters (1); }
+        if (last == '=') { outGlue = "-"; return s.dropLastCharacters (1); }
+    }
+
+    outGlue = " ";
+    return s;
+}

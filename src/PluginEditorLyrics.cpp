@@ -65,19 +65,12 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             if (n.isHidden)                           continue;
             if (x < area.getX() - 120.0f)            continue;
 
-            double effectiveEnd = n.endTime;
-            for (size_t j = i + 1; j < notes.size(); ++j)
-            {
-                const auto& nx = notes[j];
-                if (nx.part != n.part) continue;
-                if (nx.lyric != "+")   break;
-                effectiveEnd = nx.endTime;
-            }
+            // effectiveEnd ("+"-chain) and displayLyric are precomputed at chart load
+            // (finalizeChart render cache) — no per-frame scan or string allocation.
+            const bool isActive = (n.startTime <= t && t < n.effectiveEnd);
+            const bool isPast   = (t >= n.effectiveEnd);
 
-            const bool isActive = (n.startTime <= t && t < effectiveEnd);
-            const bool isPast   = (t >= effectiveEnd);
-
-            const juce::String displayLyric = stripNotationSuffixes (n.lyric);
+            const juce::String& displayLyric = n.displayLyric;
             if (displayLyric.isEmpty()) continue;
 
             // Background pill
@@ -154,18 +147,8 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             if (n.lyric.isEmpty() || n.lyric == "+")    continue;
             if (n.isHidden)                              continue;
 
-            double effectiveEnd = n.endTime;
-            for (size_t j = i + 1; j < notes.size(); ++j)
-            {
-                const auto& nx = notes[j];
-                if (nx.part != n.part) continue;
-                if (nx.lyric != "+")   break;
-                effectiveEnd = nx.endTime;
-            }
-
-            juce::String glue;
-            parts.push_back ({ stripLyricSuffix (n.lyric, glue), glue,
-                               n.startTime, effectiveEnd, n.part });
+            // syllable/glue/effectiveEnd precomputed at chart load (finalizeChart).
+            parts.push_back ({ n.syllable, n.glue, n.startTime, n.effectiveEnd, n.part });
         }
         if (!parts.empty()) parts.back().glue = "";
         return parts;

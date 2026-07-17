@@ -195,6 +195,7 @@ void RBVocalSingAudioProcessor::clearChart()
     chartMaxPitch = 84;
     songEndTime   = -1.0;
     chartStatus   = {};
+    ++chartVersion;  // even a failed load (clear with no finalize) must invalidate editor caches
 }
 
 // The identical tail of both loaders — everything between parsing and the status
@@ -215,6 +216,28 @@ void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&          
         applyHarmonyOverlapThickness (chartNotes);
         dedupHarmonyLyrics (chartNotes);
     }
+
+    // Content-derived render cache (PERFORMANCE_IMPROVEMENT.md c1/c2): precompute what
+    // paint() used to re-derive per frame per visible note. Runs after the harmony
+    // passes (they never mutate lyric text). effectiveEnd replicates the editor's old
+    // per-frame scan exactly: same-part raw-"+" notes chain the end time forward, any
+    // other same-part lyric — including a hidden "+$" — breaks the chain.
+    for (size_t i = 0; i < chartNotes.size(); ++i)
+    {
+        auto& n = chartNotes[i];
+        n.displayLyric = stripNotationSuffixes (n.lyric);
+        n.syllable     = stripLyricSuffix (n.lyric, n.glue);
+        n.effectiveEnd = n.endTime;
+        for (size_t j = i + 1; j < chartNotes.size(); ++j)
+        {
+            const auto& nx = chartNotes[j];
+            if (nx.part != n.part) continue;
+            if (nx.lyric != "+")   break;
+            n.effectiveEnd = nx.endTime;
+        }
+    }
+
+    ++chartVersion;
 
     if (minP <= maxP)
     {

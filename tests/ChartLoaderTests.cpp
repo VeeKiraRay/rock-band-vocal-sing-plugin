@@ -407,3 +407,122 @@ TEST_CASE ("chartloader harmonies: each part keeps its own phrase grid", "[chart
     REQUIRE (proc.getChartHarm2Phrases().size() == 1);
     REQUIRE (proc.getChartHarm2Phrases()[0].startTime == Catch::Approx (60.0).margin (0.001));
 }
+
+// ─── Render cache (finalizeChart post-pass, PERFORMANCE_IMPROVEMENT.md c1/c2) ───
+
+TEST_CASE ("render cache: effectiveEnd extends through a '+' chain, breaks on other lyrics",
+           "[chartloader][rendercache]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote  (vocals, 1.0, 1.5, 60); addLyric (vocals, 1.0, "bend");  // word with a 2-note "+" chain
+    addNote  (vocals, 1.6, 2.0, 62); addLyric (vocals, 1.6, "+");
+    addNote  (vocals, 2.1, 2.5, 64); addLyric (vocals, 2.1, "+");
+    addNote  (vocals, 3.0, 3.5, 65); addLyric (vocals, 3.0, "plain"); // no chain
+    addNote  (vocals, 5.0, 5.5, 60); addLyric (vocals, 5.0, "sing");  // chain broken by hidden "+$"
+    addNote  (vocals, 5.6, 6.0, 62); addLyric (vocals, 5.6, "+$");
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    const auto& notes = proc.getChartNotes();
+    REQUIRE (notes.size() == 6);
+    REQUIRE (notes[0].effectiveEnd == Catch::Approx (2.5).margin (0.001));  // through both "+"
+    REQUIRE (notes[3].effectiveEnd == Catch::Approx (3.5).margin (0.001));  // == endTime
+    // Raw-"+" semantics, matching the editor's original per-frame scan: a hidden "+$"
+    // breaks the chain (it only bends on the highway, via displayLyric == "+").
+    REQUIRE (notes[4].effectiveEnd == Catch::Approx (5.5).margin (0.001));
+}
+
+TEST_CASE ("render cache: effectiveEnd chain skips interleaved other-part notes",
+           "[chartloader][rendercache][harmonies]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Harmonies, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence harm1, harm2;
+    addNote  (harm1, 10.0, 10.5, 60); addLyric (harm1, 10.0, "hey");
+    addNote  (harm2, 10.6, 10.8, 64); addLyric (harm2, 10.6, "yo");  // interleaves in the sorted list
+    addNote  (harm1, 11.0, 11.5, 62); addLyric (harm1, 11.0, "+");
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "HARM1", harm1 }, { "HARM2", harm2 } });
+    proc.loadMidiFile (file);
+
+    const auto& notes = proc.getChartNotes();
+    const auto  it = std::find_if (notes.begin(), notes.end(),
+                                    [] (const NoteInfo& n) { return n.lyric == "hey"; });
+    REQUIRE (it != notes.end());
+    REQUIRE (it->effectiveEnd == Catch::Approx (11.5).margin (0.001));  // chained across HARM2's note
+}
+
+TEST_CASE ("render cache: displayLyric strips notational suffixes only",
+           "[chartloader][rendercache]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote  (vocals, 1.0, 1.5, 60); addLyric (vocals, 1.0, "word#$");
+    addNote  (vocals, 2.0, 2.5, 61); addLyric (vocals, 2.0, "+$");
+    addNote  (vocals, 3.0, 3.5, 62); addLyric (vocals, 3.0, "syl-");  // connector chars stay
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    const auto& notes = proc.getChartNotes();
+    REQUIRE (notes.size() == 3);
+    REQUIRE (notes[0].displayLyric == "word");
+    REQUIRE (notes[1].displayLyric == "+");
+    REQUIRE (notes[2].displayLyric == "syl-");
+}
+
+TEST_CASE ("render cache: syllable/glue split hyphen, equals and word boundary",
+           "[chartloader][rendercache]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote  (vocals, 1.0, 1.5, 60); addLyric (vocals, 1.0, "syl-");   // hyphen: joined, no glue
+    addNote  (vocals, 2.0, 2.5, 61); addLyric (vocals, 2.0, "syl=");   // equals: rendered hyphen
+    addNote  (vocals, 3.0, 3.5, 62); addLyric (vocals, 3.0, "word");   // word boundary: space
+    addNote  (vocals, 4.0, 4.5, 63); addLyric (vocals, 4.0, "syl-#");  // suffix stripped first
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    const auto& notes = proc.getChartNotes();
+    REQUIRE (notes.size() == 4);
+    REQUIRE (notes[0].syllable == "syl");   REQUIRE (notes[0].glue == "");
+    REQUIRE (notes[1].syllable == "syl");   REQUIRE (notes[1].glue == "-");
+    REQUIRE (notes[2].syllable == "word");  REQUIRE (notes[2].glue == " ");
+    REQUIRE (notes[3].syllable == "syl");   REQUIRE (notes[3].glue == "");
+}
+
+TEST_CASE ("render cache: chartVersion strictly increases across loads",
+           "[chartloader][rendercache]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote (vocals, 1.0, 1.5, 60);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+
+    const int v0 = proc.getChartVersion();
+    proc.loadMidiFile (file);
+    const int v1 = proc.getChartVersion();
+    proc.loadMidiFile (file);
+    const int v2 = proc.getChartVersion();
+
+    REQUIRE (v1 > v0);
+    REQUIRE (v2 > v1);
+}

@@ -36,6 +36,17 @@ struct NoteInfo {
     void*        sourceItem  { nullptr };  // MediaItem*
     void*        sourceTrack { nullptr };  // MediaTrack*
     int          sourceNoteIndex { -1 };
+
+    // ── Render cache — content-derived, filled by finalizeChart(); the parsers leave
+    //    these defaulted. Precomputed so paint() never allocates strings or rescans
+    //    the note list per frame (PERFORMANCE_IMPROVEMENT.md c1/c2). Appended at the
+    //    end of the struct so the parsers' aggregate push_back({...}) stays valid.
+    juce::String displayLyric;            // lyric minus #/^/$ suffixes — pills + highway labels
+    juce::String syllable;                // stripLyricSuffix text — static-mode word part
+    juce::String glue;                    // stripLyricSuffix glue: "" / "-" / " "
+    double       effectiveEnd { 0.0 };    // endTime extended through the following same-part
+                                          // raw-"+" chain (a hidden "+$" breaks the chain,
+                                          // matching the editor's original per-frame scan)
 };
 
 // Solo reads PART VOCALS; Harmonies combines HARM1/HARM2/HARM3 on one highway.
@@ -108,6 +119,9 @@ public:
     {
         return (idx >= 0 && idx < (int) chartNotes.size()) ? &chartNotes[(size_t) idx] : nullptr;
     }
+    // Bumped on every chart clear/load — editor-side derived caches (e.g. lyric pixel
+    // widths, which need fonts and so can't live here) key off it for invalidation.
+    int getChartVersion() const { return chartVersion; }
     const std::vector<PhraseInfo>&  getChartPhrases()      const { return chartPhrases; }
     const std::vector<PhraseInfo>&  getChartHarm2Phrases() const { return chartHarm2Phrases; }
     const std::vector<PhraseInfo>&  getChartOverdrives()        const { return chartOverdrives; }
@@ -180,6 +194,7 @@ private:
     std::vector<PhraseInfo>  chartOverdrives;          // overdrive (Star Power) ranges from HARM1 / Solo
     std::vector<double>      chartPhraseSeparators;    // precomputed separator line times (seconds)
     std::vector<PitchSection> chartPitchSections;
+    int                      chartVersion { 0 };       // see getChartVersion()
 
     juce::File lastMidiFile;  // remembered for reloadChart() outside Reaper
 

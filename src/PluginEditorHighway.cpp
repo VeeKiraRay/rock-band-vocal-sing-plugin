@@ -207,8 +207,9 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
             const float x2   = phX + (float) (n.endTime   - t) * pixPerSec;
             const float cy   = pitchY (n.pitch);
             const float barH = (noteH - 1.0f) * n.thickScale;
-            // "+" is a pitch-bend connector; "+$" (hidden) must bend identically.
-            const bool  bend = (stripNotationSuffixes (n.lyric) == "+");
+            // "+" is a pitch-bend connector; "+$" (hidden) must bend identically —
+            // displayLyric has the suffixes pre-stripped (finalizeChart render cache).
+            const bool  bend = (n.displayLyric == "+");
 
             // Diagonal connector bridging the previous note to this bend note
             if (bend && prevValid)
@@ -247,7 +248,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                 && !bend && n.lyric.isNotEmpty()
                 && x1 >= (float) area.getX() && (x2 - x1) > 4.0f)
             {
-                const juce::String displayLyric = stripNotationSuffixes (n.lyric);
+                const juce::String& displayLyric = n.displayLyric;
                 if (displayLyric.isNotEmpty())
                 {
                     const float labelY = n.isTalkie ? (float) area.getY() + 2.0f

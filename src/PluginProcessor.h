@@ -191,5 +191,15 @@ private:
                           std::vector<std::pair<double,double>>&      outShiftMarkers,
                           int& minP, int& maxP);
 
+    // Shared bookends of both chart loaders (CODE_REVIEW.md 3.2). clearChart() resets
+    // all chart state; finalizeChart() is everything after "find source + parse":
+    // sort → harmony post-passes → pitch padding → sections/separators → songEndTime
+    // fallback. Each loader is then just: clearChart → find + parse → apply any [end]
+    // event to songEndTime → finalizeChart → status string.
+    void clearChart();
+    void finalizeChart (std::vector<NoteInfo>&&                 notes,
+                        std::vector<std::pair<double,double>>&& shiftMarkers,
+                        int minP, int maxP);
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RBVocalSingAudioProcessor)
 };

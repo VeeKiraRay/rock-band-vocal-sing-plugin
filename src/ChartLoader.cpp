@@ -179,6 +179,57 @@ static void dedupHarmonyLyrics (std::vector<NoteInfo>& notes)
     }
 }
 
+// ─── Shared loader bookends (CODE_REVIEW.md 3.2) ──────────────────────────────
+
+// Resets all chart state to defaults. Both loaders call this first so a failed load
+// never leaves the previous chart half-visible.
+void RBVocalSingAudioProcessor::clearChart()
+{
+    chartNotes.clear();
+    chartPhrases.clear();
+    chartHarm2Phrases.clear();
+    chartOverdrives.clear();
+    chartPhraseSeparators.clear();
+    chartPitchSections.clear();
+    chartMinPitch = 48;
+    chartMaxPitch = 84;
+    songEndTime   = -1.0;
+    chartStatus   = {};
+}
+
+// The identical tail of both loaders — everything between parsing and the status
+// string. Assumes clearChart() ran first and the caller has already written any
+// explicit [end]-event time into songEndTime (the fallback here only fires when it
+// is still unset).
+void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&                 notes,
+                                               std::vector<std::pair<double,double>>&& shiftMarkers,
+                                               int minP, int maxP)
+{
+    std::sort (notes.begin(), notes.end(),
+               [] (const NoteInfo& a, const NoteInfo& b) { return a.startTime < b.startTime; });
+
+    chartNotes = std::move (notes);
+
+    if (vocalMode.load (std::memory_order_relaxed) == (int) VocalMode::Harmonies)
+    {
+        applyHarmonyOverlapThickness (chartNotes);
+        dedupHarmonyLyrics (chartNotes);
+    }
+
+    if (minP <= maxP)
+    {
+        chartMinPitch = std::max (0,   minP - 2);
+        chartMaxPitch = std::min (127, maxP + 2);
+    }
+
+    buildPitchSections    (chartNotes, std::move (shiftMarkers), chartPitchSections);
+    buildPhraseSeparators (chartPhrases, chartPhraseSeparators);
+
+    // Fallback: last note's end time
+    if (songEndTime <= 0.0 && !chartNotes.empty())
+        songEndTime = chartNotes.back().endTime;
+}
+
 // ─── readChartFromReaper (UI thread only) ─────────────────────────────────────
 
 void RBVocalSingAudioProcessor::reloadChart()
@@ -191,15 +242,7 @@ void RBVocalSingAudioProcessor::reloadChart()
 
 void RBVocalSingAudioProcessor::readChartFromReaper()
 {
-    chartNotes.clear();
-    chartPhrases.clear();
-    chartHarm2Phrases.clear();
-    chartOverdrives.clear();
-    chartPhraseSeparators.clear();
-    chartPitchSections.clear();
-    chartMinPitch = 48;
-    chartMaxPitch = 84;
-    songEndTime   = -1.0;
+    clearChart();
 
     if (!reaperApi.isLoaded())
     {
@@ -281,26 +324,6 @@ void RBVocalSingAudioProcessor::readChartFromReaper()
         parseTrack (harm3Track, VocalPart::Harm3, false, nullptr, nullptr);
     }
 
-    std::sort (notes.begin(), notes.end(),
-               [] (const NoteInfo& a, const NoteInfo& b) { return a.startTime < b.startTime; });
-
-    chartNotes = std::move (notes);
-
-    if (harmonies)
-    {
-        applyHarmonyOverlapThickness (chartNotes);
-        dedupHarmonyLyrics (chartNotes);
-    }
-
-    if (minP <= maxP)
-    {
-        chartMinPitch = std::max (0,   minP - 2);
-        chartMaxPitch = std::min (127, maxP + 2);
-    }
-
-    buildPitchSections    (chartNotes, std::move (shiftMarkers), chartPitchSections);
-    buildPhraseSeparators (chartPhrases, chartPhraseSeparators);
-
     // Read [end] event from EVENTS track for total song duration
     if (eventsTrack != nullptr)
     {
@@ -336,9 +359,7 @@ void RBVocalSingAudioProcessor::readChartFromReaper()
             }
         }
     }
-    // Fallback: last note's end time
-    if (songEndTime <= 0.0 && !chartNotes.empty())
-        songEndTime = chartNotes.back().endTime;
+    finalizeChart (std::move (notes), std::move (shiftMarkers), minP, maxP);
 
     if (harmonies)
     {
@@ -449,16 +470,7 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
 
 void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
 {
-    chartNotes.clear();
-    chartPhrases.clear();
-    chartHarm2Phrases.clear();
-    chartOverdrives.clear();
-    chartPhraseSeparators.clear();
-    chartPitchSections.clear();
-    chartMinPitch = 48;
-    chartMaxPitch = 84;
-    chartStatus = "";
-    songEndTime = -1.0;
+    clearChart();
 
     lastMidiFile = file;  // remembered so reloadChart() can re-parse on a mode switch
 
@@ -600,26 +612,6 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
         parseSeq (harm3Idx, VocalPart::Harm3, false, nullptr, nullptr);
     }
 
-    std::sort (notes.begin(), notes.end(),
-               [] (const NoteInfo& a, const NoteInfo& b) { return a.startTime < b.startTime; });
-
-    chartNotes = std::move (notes);
-
-    if (harmonies)
-    {
-        applyHarmonyOverlapThickness (chartNotes);
-        dedupHarmonyLyrics (chartNotes);
-    }
-
-    if (minP <= maxP)
-    {
-        chartMinPitch = std::max (0,   minP - 2);
-        chartMaxPitch = std::min (127, maxP + 2);
-    }
-
-    buildPitchSections    (chartNotes, std::move (shiftMarkers), chartPitchSections);
-    buildPhraseSeparators (chartPhrases, chartPhraseSeparators);
-
     // Read [end] event from EVENTS track for total song duration
     if (eventsIdx >= 0)
     {
@@ -634,9 +626,7 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
             }
         }
     }
-    // Fallback: last note's end time
-    if (songEndTime <= 0.0 && !chartNotes.empty())
-        songEndTime = chartNotes.back().endTime;
+    finalizeChart (std::move (notes), std::move (shiftMarkers), minP, maxP);
 
     chartStatus = "Loaded " + juce::String ((int) chartNotes.size())
                 + " notes from " + file.getFileName();

@@ -660,10 +660,10 @@ void RBVocalSingAudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
     const int delta = (int) std::lround ((double) (dragAnchorY - e.y) / (double) lastNoteH);
 
     // Clamp to the visible lanes intersected with a safe singable band so a drag can never
-    // land on REAPER's reserved marker pitches (0 = range-shift, 105/116 = phrase/overdrive,
-    // >= 96 reserved) and silently vanish on the next reload.
-    const int lo = std::max ((int) std::ceil  (lastFMinP), 1);
-    const int hi = std::min ((int) std::floor (lastFMaxP), 95);
+    // land on a reserved marker pitch (kRangeShiftPitch, kPhraseMarkerPitch/kOverdrivePitch,
+    // >= kFirstReservedPitch) and silently vanish on the next reload.
+    const int lo = std::max ((int) std::ceil  (lastFMinP), kRangeShiftPitch + 1);
+    const int hi = std::min ((int) std::floor (lastFMaxP), kFirstReservedPitch - 1);
     if (hi < lo) return;
 
     const int newPitch = juce::jlimit (lo, hi, dragAnchorPitch + delta);

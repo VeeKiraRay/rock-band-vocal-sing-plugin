@@ -404,14 +404,14 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
         const double startSec = reaperApi.MIDI_GetProjTimeFromPPQPos (take, sppq);
         const double endSec   = reaperApi.MIDI_GetProjTimeFromPPQPos (take, eppq);
 
-        if (pitch == 0)   // Range Shift marker — records section boundary, not a singable note
+        if (pitch == kRangeShiftPitch)   // records a section boundary, not a singable note
         {
             // Sections come from the lead (HARM1/Solo) only.
             if (collectSections)
                 outShiftMarkers.push_back ({ startSec, endSec - startSec });
             continue;
         }
-        if (pitch == 105)  // vocal phrase marker
+        if (pitch == kPhraseMarkerPitch)
         {
             // Each part keeps its own phrase grid (bottom strip uses HARM1's,
             // top strip uses HARM2's). outPhrases is null for parts we don't track.
@@ -419,13 +419,13 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
                 outPhrases->push_back ({ startSec, endSec });
             continue;
         }
-        if (pitch == 116)  // overdrive (Star Power) phrase marker — collected from HARM1/Solo only
+        if (pitch == kOverdrivePitch)    // collected from HARM1/Solo only
         {
             if (outOverdrives != nullptr)
                 outOverdrives->push_back ({ startSec, endSec });
             continue;
         }
-        if (pitch >= 96) continue;  // other special notes
+        if (pitch >= kFirstReservedPitch) continue;  // other special notes
 
         // Match nearest lyric within 50 ms
         juce::String lyric;
@@ -560,22 +560,22 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
             const double startT  = msg.getTimeStamp();
             const double endT    = ev->noteOffObject->message.getTimeStamp();
 
-            if (pitch == 0)    // Range Shift marker
+            if (pitch == kRangeShiftPitch)
             {
                 if (collectSections) shiftMarkers.push_back ({ startT, endT - startT });
                 continue;
             }
-            if (pitch == 105)  // vocal phrase marker
+            if (pitch == kPhraseMarkerPitch)
             {
                 if (phraseList != nullptr) phraseList->push_back ({ startT, endT });
                 continue;
             }
-            if (pitch == 116)  // overdrive (Star Power) phrase marker — collected from HARM1/Solo only
+            if (pitch == kOverdrivePitch)  // collected from HARM1/Solo only
             {
                 if (overdriveList != nullptr) overdriveList->push_back ({ startT, endT });
                 continue;
             }
-            if (pitch >= 96) continue;
+            if (pitch >= kFirstReservedPitch) continue;
 
             juce::String lyric;
             double bestDist = 0.05;

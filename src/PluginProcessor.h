@@ -9,6 +9,14 @@
 // colours with lyrics in the strip above the highway. Order doubles as draw priority.
 enum class VocalPart { Main = 0, Harm2 = 1, Harm3 = 2 };
 
+// Reserved marker pitches in Rock Band vocal charts. The parsers route these to
+// sections/phrases/overdrives instead of chartNotes; the editor's pitch-edit drag
+// clamps so a note can never land on one.
+constexpr int kRangeShiftPitch    = 0;    // Range Shift section boundary
+constexpr int kPhraseMarkerPitch  = 105;  // vocal phrase marker
+constexpr int kOverdrivePitch     = 116;  // overdrive (Star Power) phrase marker
+constexpr int kFirstReservedPitch = 96;   // >= this: reserved / non-singable
+
 struct NoteInfo {
     double       startTime;  // seconds (absolute project time)
     double       endTime;

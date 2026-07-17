@@ -53,6 +53,40 @@ struct TooltipLAF : public juce::LookAndFeel_V4
     }
 };
 
+// ─── Renderer setting ─────────────────────────────────────────────────────────
+// The renderer lives in two encodings: the Settings combo item IDs (1/2/3) and the
+// processor's persisted savedRenderer (0 = CPU, 2 = GL-persist). These helpers are
+// the only place the mapping exists. Invariant: GLSession is NEVER persisted —
+// savedRenderer's legal domain is {0, 2}, so a session-only GL choice deliberately
+// reverts to CPU on the next editor open (see CLAUDE.md, settings persistence).
+
+enum class Renderer { CPU, GLSession, GLPersist };
+
+static int rendererToComboId (Renderer r)
+{
+    switch (r)
+    {
+        case Renderer::GLSession: return 2;
+        case Renderer::GLPersist: return 3;
+        default:                  return 1;  // CPU
+    }
+}
+
+static Renderer rendererFromComboId (int id)
+{
+    return id == 2 ? Renderer::GLSession
+         : id == 3 ? Renderer::GLPersist
+                   : Renderer::CPU;
+}
+
+// Which of the three modes the editor is actually in right now.
+static Renderer rendererFromState (bool glAttached, int savedRenderer)
+{
+    if (! glAttached)       return Renderer::CPU;
+    if (savedRenderer == 2) return Renderer::GLPersist;
+    return Renderer::GLSession;
+}
+
 // ─── Settings Popup ───────────────────────────────────────────────────────────
 // Launched as a CalloutBox when the user clicks "⚙ Settings". Owns all the
 // "configure-once" controls that were formerly in the always-visible panel.
@@ -450,30 +484,28 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setReaperPriority  = [safe] (bool v)   { if (safe) { safe->reaperPriority = v; safe->audioProcessor.savedReaperPriority = v; } };
         // Reflect the actual current renderer state as a combo item ID so the panel
         // shows the right selection even after an auto-close triggered by GL attach.
-        if (! glContext.isAttached())
-            cbs.initRenderer = 1;
-        else if (audioProcessor.savedRenderer == 2)
-            cbs.initRenderer = 3;
-        else
-            cbs.initRenderer = 2;
+        cbs.initRenderer = rendererToComboId (rendererFromState (glContext.isAttached(),
+                                                                 audioProcessor.savedRenderer));
         cbs.setRenderer = [safe] (int id)
         {
             if (! safe) return;
-            if (id == 1)       // CPU (software)
+            switch (rendererFromComboId (id))
             {
-                safe->glContext.detach();
-                safe->audioProcessor.savedRenderer = 0;
-            }
-            else if (id == 2)  // OpenGL - session only (savedRenderer intentionally unchanged)
-            {
-                // Defer attach so the CalloutBox onChange finishes before the component
-                // hierarchy change caused by attachTo() triggers a modal dismiss.
-                juce::MessageManager::callAsync ([safe] { if (safe) safe->glContext.attachTo (*safe); });
-            }
-            else if (id == 3)  // OpenGL - persist
-            {
-                safe->audioProcessor.savedRenderer = 2;  // write now so it's correct if editor closes
-                juce::MessageManager::callAsync ([safe] { if (safe) safe->glContext.attachTo (*safe); });
+                case Renderer::CPU:
+                    safe->glContext.detach();
+                    safe->audioProcessor.savedRenderer = 0;
+                    break;
+
+                case Renderer::GLSession:  // savedRenderer intentionally unchanged (never persisted)
+                    // Defer attach so the CalloutBox onChange finishes before the component
+                    // hierarchy change caused by attachTo() triggers a modal dismiss.
+                    juce::MessageManager::callAsync ([safe] { if (safe) safe->glContext.attachTo (*safe); });
+                    break;
+
+                case Renderer::GLPersist:
+                    safe->audioProcessor.savedRenderer = 2;  // write now so it's correct if editor closes
+                    juce::MessageManager::callAsync ([safe] { if (safe) safe->glContext.attachTo (*safe); });
+                    break;
             }
         };
         cbs.initCalib          = latencyOffsetMs;

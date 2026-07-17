@@ -148,13 +148,20 @@ private:
     float detectPitchYIN             (const float*, int);
     float detectPitchMPM             (const float*, int);
 
+    // kPitchBufSize is the analysis window at the ≤48 kHz baseline (2048 ≈ 42.7 ms).
+    // prepareToPlay scales the effective window (pitchBufTarget) with the sample rate so
+    // its real-time span — and the detectors' 80 Hz floor — survive high rates, capped
+    // at kPitchBufCap (= the window at 192 kHz). kMaxLagBuf must exceed the largest lag,
+    // 192000 / 80 = 2400, indexed inclusively. (CODE_REVIEW.md 1.2)
     static constexpr int kPitchBufSize    = 2048;
+    static constexpr int kPitchBufCap     = 8192;
     static constexpr int kPitchHoldCycles = 6;
-    static constexpr int kMaxLagBuf       = 1500;
+    static constexpr int kMaxLagBuf       = 2500;
 
-    float pitchAccum[kPitchBufSize] = {};
+    float pitchAccum[kPitchBufCap] = {};
     int   pitchAccumFill  { 0 };
     int   pitchHoldFrames { 0 };
+    int   pitchBufTarget  { kPitchBufSize };  // samples per detection window at storedSampleRate
 
     std::vector<NoteInfo>    chartNotes;
     std::vector<PhraseInfo>  chartPhrases;       // HARM1 / Solo phrase grid (bottom strip + static)

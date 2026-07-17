@@ -23,6 +23,13 @@ void RBVocalSingAudioProcessor::prepareToPlay (double sampleRate, int)
 {
     storedSampleRate = sampleRate;
 
+    // Keep the analysis window roughly constant in real time (~42.7 ms): 2048 samples
+    // up to 48 kHz, scaling with the rate above that (96 kHz → 4096, 192 kHz → 8192).
+    // Guarantees pitchBufTarget ≥ 2·maxLag up to kPitchBufCap, so the autocorrelation
+    // guard can't starve at high rates (CODE_REVIEW.md 1.2).
+    pitchBufTarget = juce::jlimit (kPitchBufSize, kPitchBufCap,
+                                   (int) std::lround (sampleRate * (double) kPitchBufSize / 48000.0));
+
     // Drop any partial accumulation from before a stop/start or sample-rate change so
     // stale samples never bleed into the first detection window.
     pitchAccumFill  = 0;
@@ -57,9 +64,9 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     {
         pitchAccum[pitchAccumFill++] = src[i];
 
-        if (pitchAccumFill >= kPitchBufSize)
+        if (pitchAccumFill >= pitchBufTarget)
         {
-            const float hz = detectPitch (pitchAccum, kPitchBufSize);
+            const float hz = detectPitch (pitchAccum, pitchBufTarget);
 
             if (hz > 0.0f)
             {

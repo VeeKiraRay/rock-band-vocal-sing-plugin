@@ -2,16 +2,21 @@
 #include "PluginProcessor.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include <algorithm>
 #include <cmath>
 
 namespace
 {
     // Feeds numBlocks blocks of blockSize samples of a continuous-phase sine through
-    // processBlock. 8 blocks of 512 samples = 4096 samples, comfortably past the
-    // 2048-sample accumulator so at least one detection pass fires.
+    // processBlock. The detection window scales with the sample rate (2048 samples up
+    // to 48 kHz, 8192 at 192 kHz), so the default block count scales too: 8 blocks of
+    // 512 samples per 48 kHz — comfortably past one accumulator fill at any rate.
     void feedSine (RBVocalSingAudioProcessor& proc, double sampleRate, float freqHz,
-                   float amplitude, int blockSize = 512, int numBlocks = 8)
+                   float amplitude, int blockSize = 512, int numBlocks = -1)
     {
+        if (numBlocks < 0)
+            numBlocks = 8 * std::max (1, (int) (sampleRate / 48000.0));
+
         proc.prepareToPlay (sampleRate, blockSize);
         juce::MidiBuffer midi;
         int sampleIndex = 0;
@@ -132,13 +137,25 @@ TEST_CASE ("pitch: prepareToPlay clears a stale partial accumulation (CODE_REVIE
     REQUIRE (proc.currentFrequency.load() == Catch::Approx (440.0f).epsilon (0.01));
 }
 
-TEST_CASE ("pitch: 192 kHz, 110 Hz sine (high-sample-rate bug, CODE_REVIEW.md 1.2)", "[pitch][!mayfail]")
+TEST_CASE ("pitch: 192 kHz, 110 Hz sine detects MIDI 45 (CODE_REVIEW.md 1.2)", "[pitch]")
 {
     RBVocalSingAudioProcessor proc;
     feedSine (proc, 192000.0, 110.0f, 0.5f);
 
-    // Fixed/expected behaviour once CODE_REVIEW.md 1.2 is addressed. Currently the
-    // Autocorrelation detector's `numSamples < maxLag * 2` guard makes it return 0 at
-    // this sample rate, so this is expected to fail until the bug is fixed.
+    // The detection window scales with the sample rate, so the Autocorrelation
+    // detector's `numSamples < maxLag * 2` guard no longer starves at 192 kHz.
     REQUIRE (proc.currentMidiNote.load() == 45);
+    REQUIRE (proc.currentFrequency.load() == Catch::Approx (110.0f).epsilon (0.01));
+}
+
+TEST_CASE ("pitch: 192 kHz, 110 Hz sine with MPM (production algorithm) detects MIDI 45", "[pitch]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);   // MPM — the algorithm the editor fixes at startup
+    feedSine (proc, 192000.0, 110.0f, 0.5f);
+
+    // kMaxLagBuf covers the full 80 Hz floor at 192 kHz (lag 2400), so MPM's clamp no
+    // longer silently raises the minimum detectable frequency to ~128 Hz.
+    REQUIRE (proc.currentMidiNote.load() == 45);
+    REQUIRE (proc.currentFrequency.load() == Catch::Approx (110.0f).epsilon (0.01));
 }

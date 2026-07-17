@@ -33,7 +33,7 @@ float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSampl
 float RBVocalSingAudioProcessor::detectPitchAutocorrelation (const float* samples, int numSamples)
 {
     const int minLag = (int) (storedSampleRate / 1000.0);
-    const int maxLag = (int) (storedSampleRate / 80.0);
+    const int maxLag = std::min ((int) (storedSampleRate / 80.0), kMaxLagBuf - 1);
 
     if (numSamples < maxLag * 2) return 0.0f;
 

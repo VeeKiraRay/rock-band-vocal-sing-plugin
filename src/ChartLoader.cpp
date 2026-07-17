@@ -461,8 +461,8 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
             if (dist < bestDist) { bestDist = dist; lyric = l.text; }
         }
 
-        const bool isTalkie = lyric.endsWithChar ('#') || lyric.endsWithChar ('^');
-        const bool isHidden = lyric.endsWithChar ('$');
+        bool isTalkie = false, isHidden = false;
+        classifyNotationSuffixes (lyric, isTalkie, isHidden);
         out.push_back ({ startSec, endSec, pitch, lyric, isTalkie, isHidden, part, 1.0f,
                          take, srcItem, srcTrack, n });
         minP = std::min (minP, pitch);
@@ -601,8 +601,8 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
                 if (dist < bestDist) { bestDist = dist; lyric = l.text; }
             }
 
-            const bool isTalkie = lyric.endsWithChar ('#') || lyric.endsWithChar ('^');
-            const bool isHidden = lyric.endsWithChar ('$');
+            bool isTalkie = false, isHidden = false;
+            classifyNotationSuffixes (lyric, isTalkie, isHidden);
             notes.push_back ({ startT, endT, pitch, lyric, isTalkie, isHidden, part, 1.0f });
             minP = std::min (minP, pitch);
             maxP = std::max (maxP, pitch);

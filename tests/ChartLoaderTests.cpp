@@ -133,25 +133,27 @@ TEST_CASE ("chartloader solo: suffix flags classify talkie/hidden lyrics", "[cha
     REQUIRE (notes[2].isHidden == true);
 }
 
-TEST_CASE ("chartloader solo: mixed suffix sets both flags (CODE_REVIEW.md 2.1)", "[chartloader][solo][!mayfail]")
+TEST_CASE ("chartloader solo: mixed suffix sets both flags (CODE_REVIEW.md 2.1)", "[chartloader][solo]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
 
     juce::MidiMessageSequence vocals;
-    addNote  (vocals, 1.0, 1.5, 60);
-    addLyric (vocals, 1.0, "word#$");
+    addNote  (vocals, 1.0, 1.5, 60); addLyric (vocals, 1.0, "word#$");
+    addNote  (vocals, 2.0, 2.5, 61); addLyric (vocals, 2.0, "word$#");  // order-swapped run
 
     juce::TemporaryFile tempFile (".mid");
     auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
     proc.loadMidiFile (file);
 
-    REQUIRE (proc.getChartNotes().size() == 1);
-    // Fixed/expected behaviour: both suffix characters should set their own flag.
-    // Currently only the last character ('$') is checked, so isTalkie comes back
-    // false — this case is expected to fail until CODE_REVIEW.md 2.1 is fixed.
-    REQUIRE (proc.getChartNotes()[0].isTalkie == true);
-    REQUIRE (proc.getChartNotes()[0].isHidden == true);
+    // Classification walks the whole trailing suffix run, so each character sets its
+    // own flag regardless of order within the run.
+    const auto& notes = proc.getChartNotes();
+    REQUIRE (notes.size() == 2);
+    REQUIRE (notes[0].isTalkie == true);
+    REQUIRE (notes[0].isHidden == true);
+    REQUIRE (notes[1].isTalkie == true);
+    REQUIRE (notes[1].isHidden == true);
 }
 
 TEST_CASE ("chartloader solo: marker pitches route to sections/phrases/overdrives, never become notes", "[chartloader][solo]")

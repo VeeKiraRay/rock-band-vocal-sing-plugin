@@ -225,9 +225,13 @@ void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&          
     buildPitchSections    (chartNotes, std::move (shiftMarkers), chartPitchSections);
     buildPhraseSeparators (chartPhrases, chartPhraseSeparators);
 
-    // Fallback: last note's end time
+    // Fallback: the latest note end. chartNotes is sorted by START time, so back()
+    // is not necessarily the last-ending note (a long sustain can outlast a short
+    // final stab) — take the max end explicitly. (CODE_REVIEW.md 1.4)
     if (songEndTime <= 0.0 && !chartNotes.empty())
-        songEndTime = chartNotes.back().endTime;
+        songEndTime = std::max_element (chartNotes.begin(), chartNotes.end(),
+                          [] (const NoteInfo& a, const NoteInfo& b) { return a.endTime < b.endTime; })
+                          ->endTime;
 }
 
 // ─── readChartFromReaper (UI thread only) ─────────────────────────────────────

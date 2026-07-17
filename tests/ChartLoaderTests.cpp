@@ -218,8 +218,8 @@ TEST_CASE ("chartloader solo: songEndTime from [end] event on EVENTS track, trim
     REQUIRE (proc.songEndTime == Catch::Approx (180.0).margin (0.001));
 }
 
-TEST_CASE ("chartloader solo: songEndTime fallback should use max end time, not last-starting note (CODE_REVIEW.md 1.4)",
-           "[chartloader][solo][!mayfail]")
+TEST_CASE ("chartloader solo: songEndTime fallback uses max end time, not last-starting note (CODE_REVIEW.md 1.4)",
+           "[chartloader][solo]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
@@ -232,9 +232,9 @@ TEST_CASE ("chartloader solo: songEndTime fallback should use max end time, not 
     auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
     proc.loadMidiFile (file);
 
-    // No [end] event, so songEndTime falls back. Fixed/expected behaviour is the true
-    // max end time (50.0); currently the code uses chartNotes.back().endTime on a
-    // start-time-sorted vector, giving 25.0 instead — expected to fail until fixed.
+    // No [end] event, so songEndTime falls back to the true max end time — not
+    // chartNotes.back().endTime, which on a start-time-sorted vector would be the
+    // last-STARTING note's end (25.0 here).
     REQUIRE (proc.songEndTime == Catch::Approx (50.0).margin (0.001));
 }
 

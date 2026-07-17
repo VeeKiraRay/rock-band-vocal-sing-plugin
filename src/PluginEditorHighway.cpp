@@ -334,10 +334,17 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
             const float cx = phX;
             const float cy = pitchY (drawNote);
 
+            // Tip on the playhead line, body trailing left — matches how the game
+            // renders the sung-pitch arrow. The 6 px glow stroke below is centred on
+            // the path, and its mitered corner at this sharp tip spikes to
+            // halfWidth / sin(tip half-angle) = 3 / sin(atan(10/20)) ≈ 6.7 px past the
+            // geometric tip — pull the path back by that much to stay behind the line.
+            const float tipX = cx - 6.0f;
+
             juce::Path arrow;
-            arrow.startNewSubPath (cx + 16.0f, cy);
-            arrow.lineTo          (cx - 4.0f,  cy - 10.0f);
-            arrow.lineTo          (cx - 4.0f,  cy + 10.0f);
+            arrow.startNewSubPath (tipX,          cy);
+            arrow.lineTo          (tipX - 20.0f,  cy - 10.0f);
+            arrow.lineTo          (tipX - 20.0f,  cy + 10.0f);
             arrow.closeSubPath();
 
             const juce::Colour fillColour = doWrap ? juce::Colour (0xffffaa44)

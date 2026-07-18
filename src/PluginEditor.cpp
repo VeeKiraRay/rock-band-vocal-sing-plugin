@@ -127,6 +127,8 @@ public:
         std::function<void(float)>  setSpeed;
         float                       initLyricScale     { 1.0f };
         std::function<void(float)>  setLyricScale;
+        int                         initSquashGuard    { 0 };   // 0=Off 1=Spacing 2=Auto-shrink 3=Hybrid
+        std::function<void(int)>    setSquashGuard;
         bool                        initWrap           { true };
         std::function<void(bool)>   setWrap;
         bool                        showLoadMidi       { false };
@@ -148,6 +150,7 @@ public:
         static const juce::String kTipCalib    = "Shift note timing to compensate for audio output latency. Positive = notes appear later.";
         static const juce::String kTipSpeed    = "How fast notes scroll across the highway. Higher = notes spread further apart.";
         static const juce::String kTipLyricSize = "Size of the lyric-strip text. The strips (and the default window height) grow or shrink to match.";
+        static const juce::String kTipSquash    = "What scrolling lyrics do when packed words would overlap: push them apart (Spacing), squeeze the text to fit (Auto-shrink), or squeeze a little then push the rest (Hybrid).";
         static const juce::String kTipWrap     = "Wraps your detected pitch by octave to match the chart range when you sing an octave too high or low.";
         static const juce::String kTipGate     = "Minimum mic volume before pitch detection activates. Raise if background noise triggers false readings.";
 
@@ -236,6 +239,20 @@ public:
         };
         addAndMakeVisible (lyricSizeSlider);
 
+        setupLabel (squashLabel, "Squash Guard", kTipSquash);
+        squashCombo.addItem ("Off",         1);
+        squashCombo.addItem ("Spacing",     2);
+        squashCombo.addItem ("Auto-shrink", 3);
+        squashCombo.addItem ("Hybrid",      4);
+        squashCombo.setSelectedId (this->cbs.initSquashGuard + 1, juce::dontSendNotification);
+        styleCombo (squashCombo);
+        squashCombo.setTooltip (kTipSquash);
+        squashCombo.onChange = [this]
+        {
+            this->cbs.setSquashGuard (squashCombo.getSelectedId() - 1);
+        };
+        addAndMakeVisible (squashCombo);
+
         // ── Singing ───────────────────────────────────────────────────────────
         setupLabel (wrapLabel, "Octave Wrapping", kTipWrap);
         setupToggle (wrapToggle, this->cbs.initWrap, kTipWrap);
@@ -310,6 +327,7 @@ public:
         layoutRow (calibLabel, calibSlider);
         layoutRow (speedLabel, noteSpeedSlider);
         layoutRow (lyricSizeLabel, lyricSizeSlider);
+        layoutRow (squashLabel, squashCombo, 130);
 
         area.removeFromTop (kSecGap);
         layoutHdr (singingHeader);
@@ -333,11 +351,11 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (3) + SINGING (2), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (4) + SINGING (2), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (3)
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (4)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (2);
 
 private:
@@ -394,6 +412,8 @@ private:
     juce::Slider        noteSpeedSlider;
     juce::Label         lyricSizeLabel;
     juce::Slider        lyricSizeSlider;
+    juce::Label         squashLabel;
+    juce::ComboBox      squashCombo;
 
     juce::Label         wrapLabel;
     juce::ToggleButton  wrapToggle;
@@ -534,6 +554,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setSpeed           = [safe] (float v)  { if (safe) { safe->pixPerSec = v; safe->audioProcessor.savedPixPerSec = v; safe->repaint(); } };
         cbs.initLyricScale     = lyricScale;
         cbs.setLyricScale      = [safe] (float v)  { if (safe) safe->applyLyricScale (v); };
+        cbs.initSquashGuard    = (int) squashGuard;
+        cbs.setSquashGuard     = [safe] (int v)    { if (safe) { safe->squashGuard = (SquashMode) juce::jlimit (0, 3, v); safe->audioProcessor.savedSquashGuard = v; safe->repaint(); } };
         cbs.initWrap           = octaveWrap;
         cbs.setWrap            = [safe] (bool v)   { if (safe) { safe->octaveWrap = v; safe->audioProcessor.savedOctaveWrap = v; } };
         cbs.showLoadMidi       = !audioProcessor.reaperApi.isLoaded();
@@ -599,6 +621,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     pixPerSec           = audioProcessor.savedPixPerSec;
     lyricScale          = audioProcessor.savedLyricScale;
+    squashGuard         = (SquashMode) juce::jlimit (0, 3, audioProcessor.savedSquashGuard.load());
 
     if (audioProcessor.savedRenderer == 2)
         glContext.attachTo (*this);

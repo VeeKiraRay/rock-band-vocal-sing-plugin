@@ -91,6 +91,8 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
         const auto   startIt  = std::lower_bound (notes.begin(), notes.end(), leftTime,
             [] (const NoteInfo& n, double v) { return n.startTime < v; });
 
+        // ── Pass 1: collect visible pills (note index, anchor x, text width) ─────
+        pillScratch.clear();
         for (auto it = startIt; it != notes.end(); ++it)
         {
             const size_t i = (size_t) (it - notes.begin());  // width-cache index
@@ -101,38 +103,97 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             if (n.lyric.isEmpty() || n.lyric == "+") continue;
             if (n.isHidden)                           continue;
             if (x < area.getX() - cull)              continue;
+            // displayLyric is precomputed at chart load (finalizeChart render cache).
+            if (n.displayLyric.isEmpty())             continue;
 
-            // effectiveEnd ("+"-chain) and displayLyric are precomputed at chart load
-            // (finalizeChart render cache) — no per-frame scan or string allocation.
+            float tw = lyricWidthCache[i];
+            if (tw < 0.0f)
+                tw = lyricWidthCache[i] = lyricFont.getStringWidthFloat (n.displayLyric);
+
+            pillScratch.push_back ({ (int) i, x, x, tw, tw });
+        }
+
+        // ── Pass 2: squash guard — de-overlap per the selected mode ──────────────
+        // (LYRIC_OVERLAP.md). Pills are in time order and per-strip, so neighbours in
+        // pillScratch are the only collision candidates. Text boxes must sit 8·s
+        // apart: 3·s bg padding each side plus a 2·s visible gap.
+        const float pad = 8.0f * s;
+        if (squashGuard == SquashMode::Shrink || squashGuard == SquashMode::Hybrid)
+        {
+            // Cap each pill's drawn width at the space before the next pill's anchor —
+            // fully for Shrink, to at most a 20% squash for Hybrid (the spacing pass
+            // below pushes whatever still overlaps).
+            for (size_t k = 0; k + 1 < pillScratch.size(); ++k)
+            {
+                auto&       p     = pillScratch[k];
+                const float avail = pillScratch[k + 1].anchorX - p.anchorX - pad;
+                float capped = std::min (p.tw, avail);
+                if (squashGuard == SquashMode::Hybrid)
+                    capped = std::max (capped, 0.8f * p.tw);
+                p.drawW = std::max (capped, 12.0f * s);  // keep a legible stub even when
+                                                         // the gap is only a few px
+            }
+        }
+        if (squashGuard == SquashMode::Spacing || squashGuard == SquashMode::Hybrid)
+        {
+            // Greedy push-right: max of two functions continuous in t, so pills glide
+            // back onto their anchors as space opens — no popping.
+            for (size_t k = 1; k < pillScratch.size(); ++k)
+                pillScratch[k].x = std::max (pillScratch[k].anchorX,
+                                             pillScratch[k - 1].x + pillScratch[k - 1].drawW + pad);
+        }
+
+        // ── Pass 3: draw ─────────────────────────────────────────────────────────
+        for (const auto& p : pillScratch)
+        {
+            // effectiveEnd ("+"-chain) is precomputed at chart load.
+            const auto& n = notes[(size_t) p.noteIdx];
             const bool isActive = (n.startTime <= t && t < n.effectiveEnd);
             const bool isPast   = (t >= n.effectiveEnd);
 
-            const juce::String& displayLyric = n.displayLyric;
-            if (displayLyric.isEmpty()) continue;
-
             // Background pill
-            float tw = lyricWidthCache[i];
-            if (tw < 0.0f)
-                tw = lyricWidthCache[i] = lyricFont.getStringWidthFloat (displayLyric);
-            const float bgX = std::floor (x) - 3.0f * s;
+            const float bgX = std::floor (p.x) - 3.0f * s;
             const float bgY = (float) area.getY() + 2.0f * s;
             const float bgH = (float) area.getHeight() - 4.0f * s;
 
             if (isActive) g.setColour (juce::Colour (0xff2a2200));
             else          g.setColour (juce::Colour (0xff141428));
-            g.fillRoundedRectangle (bgX, bgY, tw + 6.0f * s, bgH, 3.0f * s);
+            g.fillRoundedRectangle (bgX, bgY, p.drawW + 6.0f * s, bgH, 3.0f * s);
 
             g.setColour (lyricColour (isActive, isPast, isInOverdrive (n.startTime)));
 
-            // Sub-pixel positioning — GlyphArrangement renders at fractional x so the
-            // glyph antialiasing shifts smoothly between frames rather than snapping
-            const float fracX = x - std::floor (x);
             juce::GlyphArrangement ga;
-            ga.addFittedText (lyricFont, displayLyric,
-                              std::floor (x), (float) area.getY(),
-                              juce::jmax (40.0f * s, tw + 8.0f * s), (float) area.getHeight(),
-                              juce::Justification::centredLeft, 1);
-            ga.draw (g, juce::AffineTransform::translation (fracX, 0.0f));
+            if (p.drawW < p.tw)
+            {
+                // Capped pill: shrink proportionally, not by condensing. Lay the text
+                // out at natural size into a box widened by 1/f, then draw through a
+                // uniform scale of f — visually a smaller font at f × the set Lyrics
+                // Size, without any per-frame Font construction (PERF c6 rule). f is
+                // stable while scrolling (anchor gaps are time-distances × pixPerSec).
+                // Below the 0.5 floor the box stops matching the text width, so the
+                // fitted-text horizontal squash (to 0.25) + ellipsis are the last
+                // resort. The scaled draw centres vertically because the box height
+                // is pre-divided by f; float translation keeps sub-pixel positioning.
+                const float f = juce::jlimit (0.5f, 1.0f, p.drawW / p.tw);
+                ga.addFittedText (lyricFont, n.displayLyric,
+                                  0.0f, 0.0f,
+                                  p.drawW / f, (float) area.getHeight() / f,
+                                  juce::Justification::centredLeft, 1, 0.25f);
+                ga.draw (g, juce::AffineTransform::scale (f)
+                                 .translated (p.x, (float) area.getY()));
+            }
+            else
+            {
+                // Sub-pixel positioning — GlyphArrangement renders at fractional x so
+                // the glyph antialiasing shifts smoothly between frames rather than
+                // snapping. Same call as pre-squash-guard: byte-identical rendering.
+                const float fracX = p.x - std::floor (p.x);
+                ga.addFittedText (lyricFont, n.displayLyric,
+                                  std::floor (p.x), (float) area.getY(),
+                                  juce::jmax (40.0f * s, p.tw + 8.0f * s), (float) area.getHeight(),
+                                  juce::Justification::centredLeft, 1);
+                ga.draw (g, juce::AffineTransform::translation (fracX, 0.0f));
+            }
         }
 
         g.restoreState();

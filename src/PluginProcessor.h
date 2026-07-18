@@ -160,6 +160,7 @@ public:
     std::atomic<int>    savedLatencyOffsetMs { 0 };
     std::atomic<float>  savedPixPerSec       { 200.0f };
     std::atomic<float>  savedLyricScale      { 1.0f };
+    std::atomic<int>    savedSquashGuard     { 0 };   // 0=Off 1=Spacing 2=Auto-shrink 3=Hybrid
     std::atomic<int>    savedLyricMode       { 0 };   // 0=Scrolling, 1=Static
     std::atomic<int>    savedRenderer        { 0 };   // 0=CPU, 2=OpenGL+persist
 

@@ -134,7 +134,7 @@ The stats panel compares your live pitch to the **closest active chart note of a
 
 ### Lyric strips
 
-Both strips honour the **Lyric Mode** toggle (Scrolling or Static) and share a gold / white / grey colour scheme. Scrolling mode slides the words along with the highway; Static mode lays them out on the current phrase's grid. If the text is too small (or too large) for your setup, the **Lyrics Size** setting scales both strips.
+Both strips honour the **Lyric Mode** toggle (Scrolling or Static) and share a gold / white / grey colour scheme. Scrolling mode slides the words along with the highway; Static mode lays them out on the current phrase's grid. If the text is too small (or too large) for your setup, the **Lyrics Size** setting scales both strips. On dense syllable runs, scrolling words can be packed tighter than their text is wide — the **Squash Guard** setting chooses how that overlap is resolved.
 
 ---
 
@@ -163,6 +163,7 @@ Click **Settings** to open these. All of them are saved in the plugin's state, s
 | **Calibration**     | 0 ms             | Shifts the rendered time (−200…+500 ms, ±20 ms steps) so the highway and scoring line up with your audio output latency. Positive = notes appear later.             |
 | **Note Speed**      | 200 px/s         | Scroll rate (100–400 px/s, 25 px steps). Higher = faster, notes more spread out; lower = slower, words pack tighter. Highway and lyrics always share this rate.      |
 | **Lyrics Size**     | 100 %            | Scales the lyric-strip text (50–200%, 10% steps). The strips — and the window — grow or shrink to match, so the highway keeps its height. Highway note labels are unaffected. |
+| **Squash Guard**    | Off              | What scrolling lyrics do when packed words would overlap: **Spacing** pushes them apart (they glide back as room opens), **Auto-shrink** scales them down (to half size, then condenses), **Hybrid** shrinks a little (≤20%) and pushes the rest. Scrolling mode only — Static lays out whole phrases and never overlaps. |
 | **Octave Wrapping** | on               | Wraps your detected pitch by octave to match the chart's range, so singing an octave too high or low still scores against the right note.                            |
 | **Mic Gate**        | —                | RMS threshold (0.001–0.05). Raise if background noise triggers false pitches; lower if quiet singing is ignored.                                                     |
 | **Load MIDI File**  | —                | Only shown outside REAPER — pick the `.mid` chart to load.                                                                                                           |

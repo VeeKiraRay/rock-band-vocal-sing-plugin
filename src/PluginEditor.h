@@ -40,6 +40,11 @@ private:
     enum class LyricMode { Scrolling, Static };
     LyricMode lyricMode { LyricMode::Scrolling };
 
+    // Squash guard — scrolling-strip overlap handling (LYRIC_OVERLAP.md).
+    // Persisted as int (savedSquashGuard); order is part of the saved state.
+    enum class SquashMode { Off, Spacing, Shrink, Hybrid };
+    SquashMode squashGuard { SquashMode::Off };
+
     RBVocalSingAudioProcessor& audioProcessor;
 
     // ── Always-visible controls ───────────────────────────────────────────────
@@ -163,6 +168,12 @@ private:
     std::vector<float> lyricWidthCache;
     int                lyricWidthCacheVersion { -1 };
     float              lyricWidthCacheFontH   { -1.0f };
+
+    // Scrolling-pill scratch for the squash-guard passes (LYRIC_OVERLAP.md): refilled
+    // per strip per frame (collect → adjust → draw). A member so its capacity persists
+    // across frames — after warm-up paint does no allocation.
+    struct ScrollPill { int noteIdx; float anchorX, x, tw, drawW; };
+    std::vector<ScrollPill> pillScratch;
 
     // Static-lyric-mode phrase layout cache (PERFORMANCE_IMPROVEMENT.md c5): the
     // collected syllable list + measured widths for one (strip, role) slot, rebuilt

@@ -21,11 +21,11 @@ work, `_old/` holds completed phases kept for their design rationale.
 | [_old/PERFORMANCE_VERIFICATION.md](_old/PERFORMANCE_VERIFICATION.md) | Manual REAPER checklist per PERF patch + a standing record of one unreproduced lyric-duplication glitch |
 | [_upcoming/PITCH_DETECTION_IMPROVEMENT.md](_upcoming/PITCH_DETECTION_IMPROVEMENT.md) | Pitch-engine assessment + karaoke-style assist features (cents scoring, snap, hit highlighting) |
 | [_upcoming/FONT_SCALING.md](_upcoming/FONT_SCALING.md) | **Implemented 2026-07-18** (5-patch series) — Lyrics Size setting (50–200%, scales text + strip heights). Doc kept for design rationale; the stretch goal (global UI text scale) is still open. Candidate to move to `_old/` |
-| [_upcoming/LYRIC_OVERLAP.md](_upcoming/LYRIC_OVERLAP.md) | "Squash guard" — scrolling-lyric overlap handling (Off / Spacing / Auto-shrink dropdown); designed 2026-07-18, not implemented |
+| [_upcoming/LYRIC_OVERLAP.md](_upcoming/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions. Candidate to move to `_old/` |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 
-Suggested order: PITCH_DETECTION or LYRIC_OVERLAP next, user's choice (TEST_PLAN,
-CODE_REVIEW, PERFORMANCE and FONT_SCALING are done).
+Suggested order: PITCH_DETECTION next (TEST_PLAN, CODE_REVIEW, PERFORMANCE,
+FONT_SCALING and LYRIC_OVERLAP are done).
 
 ---
 
@@ -203,19 +203,25 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   (`lyricStripH()`/`windowH()`/`windowHHarm()` in PluginEditor.h replaced the old
   `kLyricH`/`kWindowH`/`kWindowHHarm` constexprs); fonts are rebuilt lazily on scale
   change and the lyric-width cache keys on font height. At 100% rendering is identical
-  to pre-feature. Known limit: scrolling pills can overlap on dense syllable runs
-  (any scale) — see `_upcoming/LYRIC_OVERLAP.md`.
+  to pre-feature. **Squash guard** (`squashGuard`, `SquashMode` enum, default Off)
+  de-overlaps dense scrolling pills: the scrolling branch is collect → adjust → draw
+  passes over a persistent scratch vector (`pillScratch`); Spacing = greedy push-right
+  (continuous in t, pills glide back onto their anchors), Auto-shrink = proportional
+  glyph scaling via AffineTransform (floor 0.5, then fitted-squash to 0.25 + ellipsis;
+  no per-frame Font construction), Hybrid = cap at 0.8×width then push the rest. Off
+  renders byte-identically to pre-feature (`_upcoming/LYRIC_OVERLAP.md`).
 - **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics;
   chart status string, overridden by an amber can't-keep-up warning when frames drop.
 - **Controls**: bottom bar (Vocal Mode, Lyric Mode, `<<`/Settings/`>>`) + `SettingsPanel`
   CallOutBox (Frame cap 20–60/uncapped default 60; REAPER priority off; Renderer
   CPU/GL-session/GL-persist; Calibration −200..+500 ms; Note Speed 100–400 px/s; Lyrics
   Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
-  window keeps its height; Octave Wrapping on; Mic gate; Load MIDI File when no REAPER
-  API) + **Allow edits** toggle in the stats band.
+  window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
+  Octave Wrapping on; Mic gate; Load MIDI File when no REAPER API) + **Allow edits**
+  toggle in the stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   frameInterval, reaperPriority, octaveWrap, latencyMs, pixPerSec, lyricScale,
-  lyricMode, renderer.
+  squashGuard, lyricMode, renderer.
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
@@ -283,9 +289,13 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 - **FONT_SCALING done** (2026-07-18, 5-patch series) — Lyrics Size setting shipped;
   only the stretch goal (global UI text scale for stats/status/settings text) remains
   open in `_upcoming/FONT_SCALING.md`.
-- **Squash guard (scrolling-lyric overlap)** — Off / Spacing / Auto-shrink dropdown so
-  dense syllable runs stop drawing pills over each other; designed in
-  `_upcoming/LYRIC_OVERLAP.md`, competes with PITCH_DETECTION for the next slot.
+- **Squash guard done** (2026-07-18, 4-patch series) — Off / Spacing / Auto-shrink /
+  Hybrid dropdown shipped, default Off; Auto-shrink uses proportional glyph scaling
+  (`_upcoming/LYRIC_OVERLAP.md` records the design + decisions).
+- **Settings popup clips at the default window height** — the panel (434 px since the
+  Lyrics Size + Squash Guard rows) exceeds the default Solo window (419 px); chosen
+  fix (on hold, planned): launch the CallOutBox with a `nullptr` parent +
+  `localAreaToGlobal` so it floats on the desktop instead of clipping to the editor.
 - **Cents-level accuracy + assist features** — fractional pitch, cents traffic light,
   visual snap, note-hit highlighting; see PITCH_DETECTION_IMPROVEMENT.md.
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on

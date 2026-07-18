@@ -426,6 +426,34 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsPanel)
 };
 
+// Wraps the SettingsPanel in a vertical-scroll viewport sized to the space the editor
+// can offer: when the panel fits, this renders identically to the bare panel (no
+// scrollbar, same size); when it doesn't (small window, or the panel outgrew the
+// default height as settings rows were added), it scrolls instead of clipping.
+class SettingsScroller : public juce::Component
+{
+public:
+    SettingsScroller (std::unique_ptr<SettingsPanel> panel, int maxHeight)
+    {
+        const int panelW = panel->getWidth();
+        const int panelH = panel->getHeight();
+        viewport.setViewedComponent (panel.release(), true);   // viewport takes ownership
+        viewport.setScrollBarsShown (true, false);
+        addAndMakeVisible (viewport);
+
+        const bool scrolling = panelH > maxHeight;
+        setSize (panelW + (scrolling ? viewport.getScrollBarThickness() : 0),
+                 juce::jmin (panelH, maxHeight));
+    }
+
+    void resized() override { viewport.setBounds (getLocalBounds()); }
+
+private:
+    juce::Viewport viewport;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsScroller)
+};
+
 // ─── Playrate step helpers ────────────────────────────────────────────────────
 
 static double stepRateDown (double rate)
@@ -562,8 +590,17 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.loadMidi           = [safe]()           { if (safe) safe->openMidiFile(); };
 
         auto panel = std::make_unique<SettingsPanel> (audioProcessor, std::move (cbs));
+
+        // The popup must stay editor-parented (`this`) so it inherits the host's
+        // editor scale transform. A nullptr/desktop parent was tried twice
+        // (2026-07-18) to stop the panel clipping at small window heights and
+        // reverted both times — see the CallOutBox gotcha in CLAUDE.md. Instead the
+        // panel scrolls inside SettingsScroller when taller than the window (minus
+        // headroom for the CallOutBox border + arrow).
+        auto content = std::make_unique<SettingsScroller> (std::move (panel),
+                                                           juce::jmax (100, getHeight() - 50));
         juce::CallOutBox::launchAsynchronously (
-            std::move (panel),
+            std::move (content),
             settingsButton.getBoundsInParent(),
             this);
     };

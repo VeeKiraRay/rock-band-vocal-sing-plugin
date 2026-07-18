@@ -292,10 +292,12 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 - **Squash guard done** (2026-07-18, 4-patch series) — Off / Spacing / Auto-shrink /
   Hybrid dropdown shipped, default Off; Auto-shrink uses proportional glyph scaling
   (`_upcoming/LYRIC_OVERLAP.md` records the design + decisions).
-- **Settings popup clips at the default window height** — the panel (434 px since the
-  Lyrics Size + Squash Guard rows) exceeds the default Solo window (419 px); chosen
-  fix (on hold, planned): launch the CallOutBox with a `nullptr` parent +
-  `localAreaToGlobal` so it floats on the desktop instead of clipping to the editor.
+- **Settings popup clipping fixed** (2026-07-18) — the panel (434 px since the Lyrics
+  Size + Squash Guard rows) exceeded the default Solo window (419 px). Final solution:
+  the panel scrolls inside `SettingsScroller` (Viewport wrapper, editor-parented
+  CallOutBox as before) whenever it is taller than the window minus popup headroom —
+  which also covers user-shrunk windows. Desktop-parented (`nullptr`) variants were
+  tried and reverted the same day (scale/DPI problems — see Known gotchas).
 - **Cents-level accuracy + assist features** — fractional pitch, cents traffic light,
   visual snap, note-hit highlighting; see PITCH_DETECTION_IMPROVEMENT.md.
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
@@ -376,3 +378,11 @@ fallback — were fixed and un-flagged in the 2026-07-17 patch series.)
   then it contains the actual byte count after. Always null-terminate manually.
 - `CStringA` in `reaper_vst3_interfaces.h` is `typedef const char8* CStringA` from the
   bundled VST3 SDK — plain `const char*`, no ATL required.
+- The Settings CallOutBox must stay **editor-parented** (`this`). A `nullptr`/desktop
+  parent was tried twice (2026-07-18) to stop the panel clipping at small window
+  heights, and reverted both times: (1) a desktop window doesn't inherit the host's
+  editor scale transform, so its text renders visibly smaller; (2) compensating with
+  `setTransform` — even the residual `editorScale / display->scale` with pre-divided
+  target/fit rects — still rendered wrong on a mixed-DPI two-monitor setup (worked on
+  the 100% monitor, glitched on the high-DPI one). Tall panels scroll inside
+  `SettingsScroller` (a Viewport wrapper) instead.

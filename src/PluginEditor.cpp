@@ -1005,7 +1005,16 @@ void RBVocalSingAudioProcessorEditor::onFrame()
 
             const int playState = audioProcessor.reaperApi.GetPlayState
                                       ? audioProcessor.reaperApi.GetPlayState() : 0;
-            lastIsPlaying = (playState & 1) != 0;
+            const bool nowPlaying = (playState & 1) != 0;
+
+            // Every playback start is a new sung pass: clear the note-hit highlights
+            // (b3). Explicit alongside updateNoteHits()'s jump detection so the reset
+            // doesn't depend on REAPER's cursor-on-stop preference (stop-in-place
+            // would otherwise continue the old take).
+            if (nowPlaying && ! lastIsPlaying)
+                hitResetPending = true;
+
+            lastIsPlaying = nowPlaying;
 
             if (! lastIsPlaying && audioProcessor.reaperApi.GetCursorPosition)
                 cachedPlayTime = audioProcessor.reaperApi.GetCursorPosition();
@@ -1021,6 +1030,9 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     {
         cachedPlayTime = audioProcessor.currentPlaybackTime.load (std::memory_order_relaxed);
     }
+
+    // Accumulate note-hit coverage against this frame's final play time (b3).
+    updateNoteHits();
 
     const float livePitch    = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
     const int   curLyricMode = (int) lyricMode;

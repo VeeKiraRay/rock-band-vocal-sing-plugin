@@ -23,6 +23,10 @@ inline const juce::Colour kLyricBg     { 0xff0d0d22 };
 inline const juce::Colour kStatsBg     { 0xff0d0d1a };
 inline const juce::Colour kControlsBg       { 0xff1a1a1a };
 inline const juce::Colour kOverdriveTextColour { 0xffffd000 };  // golden yellow for overdrive lyrics
+// Sung-within-tolerance note fill (b3 hit highlighting). Gold on every part — the RB
+// "spark trail" language. A white overlay was tried first and read too faint on cyan
+// (green+blue already maxed, only the red channel could move).
+inline const juce::Colour kNoteHitColour       { 0xffffd000 };
 inline const juce::Colour kPhraseSepColour     { 0x55aaaacc };  // muted blue-grey phrase separator
 
 inline juce::Colour colourForPart (VocalPart part)

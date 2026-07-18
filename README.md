@@ -116,6 +116,7 @@ From top to bottom:
 - In Harmonies mode, parts are colour-coded: **Main cyan**, **Harm2 amber**, **Harm3 brown**. Where a lower part sits on the same sustained pitch as a higher one, its bar is drawn thicker so the overlap stays visible.
 - Lane grid lines mark every 2 semitones. The vertical range auto-fits the loaded notes (± 2 semitones of padding).
 - The white arrowhead tracks your sung pitch at full (cents) precision, so slides and scoops glide smoothly. When you are within the **Pitch Tolerance** of an active note it locks onto that note's lane — steady green light, steady arrow.
+- As you sing a note correctly, the sung portion of its bar **fills gold** (talkie columns get a faint gold wash on any voiced sound). Stop and scroll around — the gold stays so you can review how the take went. It clears when the next pass starts (playing again after a stop or a seek; each lap of a repeat loop also starts clean) or when the chart reloads.
 - Inline lyric labels on the bars are **Main-only**; HARM2/HARM3 lyrics live in the top strip.
 - **Muted MIDI notes are not treated specially** — a note muted in the REAPER MIDI editor still draws and scores like any other. If you don't want a note charted, delete it or move it to another track. (Let us know if muting matters to your workflow — this can be revisited.)
 - If no chart is loaded, the highway shows a diagnostic message (including the list of tracks it found, if the lead track is missing).

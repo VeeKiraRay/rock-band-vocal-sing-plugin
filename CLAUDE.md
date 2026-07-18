@@ -191,7 +191,16 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   separator lines, white (or amber-when-octave-wrapped) live-pitch arrowhead — drawn at
   the fractional pitch (glides, no semitone stepping) and snapped onto the closest
   active note's lane when within the Pitch Tolerance (b2 visual snap; the idle-repaint
-  gate tracks `currentMidiFloat` so sub-semitone movement repaints). Pitch range
+  gate tracks `currentMidiFloat` so sub-semitone movement repaints), and note-hit
+  highlighting — `updateNoteHits()` (called from `onFrame()`) accumulates per-note
+  sung-within-tolerance spans (`noteHitSpans`, chartVersion-keyed; persist while
+  stopped for review, cleared when the next pass starts via `hitResetPending` —
+  armed by any time discontinuity *and* by every stopped→playing transition so the
+  reset is independent of REAPER's cursor-on-stop preference, fired on the next
+  accumulating frame) and the
+  note loop fills them gold (`kNoteHitColour`; a white overlay was too faint on
+  cyan — see EditorVisuals.h) (b3; the coverage ratio is the future phrase-scoring
+  input). Pitch range
   animates per Range-Shift section (smoothstep over the marker length); the per-frame
   geometry is cached (`lastHighwayArea`/`lastFMinP`/…) so mouse hit-testing matches the
   screen exactly.
@@ -303,10 +312,13 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   CallOutBox as before) whenever it is taller than the window minus popup headroom —
   which also covers user-shrunk windows. Desktop-parented (`nullptr`) variants were
   tried and reverted the same day (scale/DPI problems — see Known gotchas).
-- **Cents-level accuracy + assist features** — fractional pitch, cents traffic light,
-  visual snap, note-hit highlighting; see PITCH_DETECTION_IMPROVEMENT.md.
+- **Cents accuracy + assist features done** (2026-07-18, 4-patch series) — fractional
+  pitch (`currentMidiFloat`), cents traffic light + Pitch Tolerance setting, visual
+  snap, note-hit highlighting (PITCH_DETECTION_IMPROVEMENT.md §d "do first" set).
+  Remaining from that doc: engine v2 (c4 downsample → c3 FFT NSDF → c2 overlapping
+  windows, then c5 confidence gating / c6 median filter) and the b4 pitch trail.
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
-  note-hit tracking above).
+  the note-hit spans: per-note coverage ratio is already accumulated in `noteHitSpans`).
 - **Note timing/length editing** — natural next step after pitch editing, but timing
   edits reorder MIDI so `sourceNoteIndex` can go stale mid-edit; needs re-resolution
   after each commit.

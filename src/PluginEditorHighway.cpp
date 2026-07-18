@@ -36,6 +36,24 @@ static int wrapPitchIntoRange (int P, int minP, int maxP,
     return minP + offset;
 }
 
+// Fractional scoring pitch shared by the traffic light and note-hit tracking: the
+// detected pitch octave-wrapped into [minP, maxP] with the sub-semitone offset carried
+// across the wrap. Passes through unchanged when wrapping is off, the rounded note is
+// already in range, or nothing is detected (negative input).
+static float scoringPitchFor (float midiF, bool octaveWrap, int minP, int maxP,
+                              const std::array<std::vector<int>, 12>& candsByPc)
+{
+    if (midiF < 0.0f || ! octaveWrap)
+        return midiF;
+
+    const int rounded = juce::jlimit (0, 127, juce::roundToInt (midiF));
+    if (rounded >= minP && rounded <= maxP)
+        return midiF;
+
+    return (float) wrapPitchIntoRange (rounded, minP, maxP, candsByPc)
+         + (midiF - (float) rounded);
+}
+
 // ─── Highway ──────────────────────────────────────────────────────────────────
 
 void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
@@ -261,6 +279,26 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                 g.fillRect (drawX1, cy - barH * 0.5f, drawX2 - drawX1, barH);
             }
 
+            // Hit highlight (b3): fill the portions of this note that were sung within
+            // the scoring tolerance (updateNoteHits) in gold — one universal "hit"
+            // colour, solid on bars; talkie columns get a translucent wash to match
+            // their translucency.
+            const auto hitIdx = (size_t) (it - notes.begin());
+            if (hitIdx < noteHitSpans.size() && ! noteHitSpans[hitIdx].empty())
+            {
+                g.setColour (n.isTalkie ? kNoteHitColour.withAlpha (0.18f) : kNoteHitColour);
+                for (const auto& sp : noteHitSpans[hitIdx])
+                {
+                    const float hx1 = std::max (drawX1, phX + (float) (sp.first  - t) * pixPerSec);
+                    const float hx2 = std::min (drawX2, phX + (float) (sp.second - t) * pixPerSec);
+                    if (hx2 <= hx1) continue;
+                    if (n.isTalkie)
+                        g.fillRect (hx1, (float) area.getY(), hx2 - hx1, (float) area.getHeight());
+                    else
+                        g.fillRect (hx1, cy - barH * 0.5f, hx2 - hx1, barH);
+                }
+            }
+
             // Inline bar labels: Main part only — HARM2/HARM3 lyrics live in the top strip.
             if (part == VocalPart::Main
                 && !bend && n.lyric.isNotEmpty()
@@ -427,6 +465,90 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 #endif
 }
 
+// ─── Note-hit tracking ────────────────────────────────────────────────────────
+// Called once per frame from onFrame(). Accumulates, per chart note, the spans of
+// playback time the singer was within the scoring tolerance (talkie = presence),
+// merging contiguous frames into one span. drawHighway overlays the spans on the
+// bars; the coverage ratio is the future phrase-scoring input (b3).
+
+void RBVocalSingAudioProcessorEditor::updateNoteHits()
+{
+    const auto& notes = audioProcessor.getChartNotes();
+
+    if (audioProcessor.getChartVersion() != noteHitVersion)
+    {
+        noteHitVersion = audioProcessor.getChartVersion();
+        noteHitSpans.assign (notes.size(), {});
+        lastHitTrackTime = -1.0;
+    }
+
+    const double t  = cachedPlayTime - (latencyOffsetMs / 1000.0);  // matches paint()
+    const double t0 = lastHitTrackTime;
+    lastHitTrackTime = t;
+
+    // Only a small forward step counts as sung time. A discontinuity — the first
+    // frame, or a jump in either direction (user seek, REAPER's snap-back to the edit
+    // cursor on stop, loop wrap) — arms a deferred reset instead of clearing at once,
+    // so the gold stays reviewable while stopped and clears when the next pass starts.
+    // t == t0 is just a stalled frame (stopped transport, or the playback-time atomic
+    // repeating between audio blocks): neither sung time nor a discontinuity.
+    if (t0 < 0.0 || t < t0 || t - t0 > 0.5)
+    {
+        hitResetPending = true;
+        return;
+    }
+    if (t == t0)
+        return;
+
+    if (hitResetPending)
+    {
+        hitResetPending = false;
+        for (auto& spans : noteHitSpans)
+            spans.clear();
+    }
+
+    const bool  voiced = audioProcessor.audioAboveGate.load (std::memory_order_relaxed);
+    const float midiF  = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
+    const float scoringPitch = scoringPitchFor (midiF, octaveWrap,
+                                                audioProcessor.chartMinPitch,
+                                                audioProcessor.chartMaxPitch,
+                                                audioProcessor.getPitchClassCandidates());
+
+    // Same windowed scan as the traffic light, but over [t0, t] instead of an instant.
+    auto it = std::lower_bound (notes.begin(), notes.end(), t0 - kNoteLookback,
+        [] (const NoteInfo& n, double v) { return n.startTime < v; });
+    while (it != notes.begin())
+    {
+        const auto prev = std::prev (it);
+        if (prev->endTime <= t0) break;
+        it = prev;
+    }
+
+    for (; it != notes.end(); ++it)
+    {
+        const auto& n = *it;
+        if (n.startTime > t) break;
+        if (n.endTime <= t0) continue;
+
+        const bool hit = n.isTalkie
+                             ? voiced
+                             : (scoringPitch >= 0.0f
+                                && std::abs (scoringPitch - (float) n.pitch) * 100.0f
+                                       <= (float) pitchTolCents);
+        if (! hit) continue;
+
+        const double s = std::max (t0, n.startTime);
+        const double e = std::min (t,  n.endTime);
+        if (e <= s) continue;
+
+        auto& spans = noteHitSpans[(size_t) (it - notes.begin())];
+        if (! spans.empty() && s <= spans.back().second + 1e-3)
+            spans.back().second = std::max (spans.back().second, e);
+        else
+            spans.emplace_back (s, e);
+    }
+}
+
 // ─── Stats panel ──────────────────────────────────────────────────────────────
 
 void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
@@ -474,19 +596,12 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     // pitch (cents precision, PITCH_DETECTION_IMPROVEMENT.md b1); `note` keeps
     // driving the note display below. When octave wrapping is on, an out-of-range
     // pitch is mapped to its in-range pitch-class equivalent first, carrying the
-    // sub-semitone offset across the wrap.
+    // sub-semitone offset across the wrap (scoringPitchFor).
     const float midiF = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
-    const int   minP  = audioProcessor.chartMinPitch;
-    const int   maxP  = audioProcessor.chartMaxPitch;
-    float scoringPitch = midiF;
-    if (midiF >= 0.0f && octaveWrap)
-    {
-        const int rounded = juce::jlimit (0, 127, juce::roundToInt (midiF));
-        if (rounded < minP || rounded > maxP)
-            scoringPitch = (float) wrapPitchIntoRange (rounded, minP, maxP,
-                                                       audioProcessor.getPitchClassCandidates())
-                         + (midiF - (float) rounded);
-    }
+    const float scoringPitch = scoringPitchFor (midiF, octaveWrap,
+                                                audioProcessor.chartMinPitch,
+                                                audioProcessor.chartMaxPitch,
+                                                audioProcessor.getPitchClassCandidates());
 
     // Scan all active notes unconditionally (even when no audio is detected) so that
     // silence during any active note correctly scores as OFF (red), not --- (grey).

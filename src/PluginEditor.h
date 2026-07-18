@@ -20,6 +20,9 @@ private:
     void drawStatusBar   (juce::Graphics&, juce::Rectangle<int>);   // fps / priority / renderer info
     void drawMessageBar  (juce::Graphics&, juce::Rectangle<int>);   // chart status + frame-skip warning
     void openMidiFile    ();
+    // Settings-popup callback for the Lyrics size row: stores + persists the scale,
+    // then re-applies window geometry (delta-based resize; see FONT_SCALING.md).
+    void applyLyricScale (float newScale);
 
     void mouseDown  (const juce::MouseEvent&) override;
     void mouseDrag  (const juce::MouseEvent&) override;
@@ -144,6 +147,9 @@ private:
     int    latencyOffsetMs { 0 };
     // Session-only scroll rate (px/s) — drives both highway and lyric strips together.
     float  pixPerSec       { 200.0f };
+    // Lyric-strip scale (1.0 = 100%) — scales strip text and the strip heights
+    // themselves (FONT_SCALING.md). Highway inline labels are not covered.
+    float  lyricScale      { 1.0f };
     // Session-only playback rate (1.0 = normal). Owned locally since GetPlayRate doesn't
     // load in this REAPER version; stepped by Up/Down keys and passed to CSurf_OnPlayRateChange.
     double cachedPlayRate  { 1.0 };
@@ -152,11 +158,11 @@ private:
 
     // Scrolling-strip lyric pixel widths (getStringWidthFloat is a per-glyph walk),
     // index-aligned with chartNotes and shared by both strips; -1 = not yet measured
-    // (lazily filled in drawLyricStrip). Invalidated via getChartVersion(). Keyed by
-    // chart version only because the strip font is fixed — a font-size setting
-    // (FONT_SCALING.md) must add font height to the key.
+    // (lazily filled in drawLyricStrip). Invalidated via getChartVersion() plus the
+    // strip font height, since the Lyrics size setting rescales the font.
     std::vector<float> lyricWidthCache;
     int                lyricWidthCacheVersion { -1 };
+    float              lyricWidthCacheFontH   { -1.0f };
 
     // Static-lyric-mode phrase layout cache (PERFORMANCE_IMPROVEMENT.md c5): the
     // collected syllable list + measured widths for one (strip, role) slot, rebuilt
@@ -182,11 +188,13 @@ private:
                                               int phraseIdx, const PhraseInfo& phrase,
                                               const juce::Font& font);
 
-    // Lyric-strip fonts, constructed once — juce::Font construction does typeface-
-    // cache lookups, so building them per frame in paint was wasted work
-    // (PERFORMANCE_IMPROVEMENT.md c6).
-    const juce::Font lyricFont15 { 15.0f, juce::Font::bold };  // pills + static current row
-    const juce::Font lyricFont11 { 11.0f, juce::Font::bold };  // static preview row
+    // Lyric-strip fonts, constructed once per lyricScale value — juce::Font
+    // construction does typeface-cache lookups, so building them per frame in paint
+    // was wasted work (PERFORMANCE_IMPROVEMENT.md c6). Rebuilt lazily at the top of
+    // drawLyricStrip when the Lyrics size setting changes; base sizes 15 / 11 pt.
+    juce::Font lyricFontCurrent { 15.0f, juce::Font::bold };  // pills + static current row
+    juce::Font lyricFontPreview { 11.0f, juce::Font::bold };  // static preview row
+    float      lyricFontsScale  { 1.0f };  // the lyricScale the fonts were built at
 
     // Perf signals computed in onFrame(), shown by drawStatusBar().
     bool   framesDropping { false };
@@ -198,13 +206,18 @@ private:
     static constexpr int   kStatsH    = 70 + kEditRowH;  // edit-toggle row + time/pitch/light row
     static constexpr int   kStatusH   = 22;   // fps / priority / renderer info bar
     static constexpr int   kMessageH  = 22;   // chart status + frame-skip warning bar
-    static constexpr int   kLyricH    = 46;   // 28 current row + 18 preview row
+    static constexpr int   kLyricBaseH = 46;  // 28 current row + 18 preview row at 100% scale
     // How far back from the left edge to start scanning notes each frame.
     static constexpr double kNoteLookback = 5.0;  // seconds
     // Solo base height; Harmonies adds a second (top) lyric strip. The +kEditRowH keeps
     // the highway height unchanged now that the stats band grew by the edit-toggle row.
-    static constexpr int   kWindowH       = 375 + kMessageH + kEditRowH;  // kControlsH + kStatusH + kMessageH + kStatsH + kLyricH + highway
-    static constexpr int   kWindowHHarm   = kWindowH + kLyricH;
+    static constexpr int   kWindowBaseH   = 375 + kMessageH + kEditRowH;  // kControlsH + kStatusH + kMessageH + kStatsH + kLyricBaseH + highway, at 100% lyric scale
+    // Strip and window heights are computed from lyricScale (FONT_SCALING.md): the
+    // strips scale and the default window height follows, keeping the highway height
+    // constant. At 100% these equal the old kLyricH / kWindowH / kWindowHHarm values.
+    int lyricStripH() const { return juce::roundToInt (kLyricBaseH * lyricScale); }
+    int windowH()     const { return kWindowBaseH - kLyricBaseH + lyricStripH(); }
+    int windowHHarm() const { return windowH() + lyricStripH(); }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RBVocalSingAudioProcessorEditor)
 };

@@ -134,7 +134,7 @@ The stats panel compares your live pitch to the **closest active chart note of a
 
 ### Lyric strips
 
-Both strips honour the **Lyric Mode** toggle (Scrolling or Static) and share a gold / white / grey colour scheme. Scrolling mode slides the words along with the highway; Static mode lays them out on the current phrase's grid.
+Both strips honour the **Lyric Mode** toggle (Scrolling or Static) and share a gold / white / grey colour scheme. Scrolling mode slides the words along with the highway; Static mode lays them out on the current phrase's grid. If the text is too small (or too large) for your setup, the **Lyrics Size** setting scales both strips.
 
 ---
 
@@ -162,6 +162,7 @@ Click **Settings** to open these. All of them are saved in the plugin's state, s
 | **Renderer**        | CPU (software)   | How the highway is drawn: **CPU (software)** (default), **OpenGL - session only** (GPU, reverts to CPU next load), or **OpenGL - persist** (GPU, remembered). The status bar shows `renderer: GPU` / `CPU`. OpenGL is experimental — see [Troubleshooting](#troubleshooting). |
 | **Calibration**     | 0 ms             | Shifts the rendered time (−200…+500 ms, ±20 ms steps) so the highway and scoring line up with your audio output latency. Positive = notes appear later.             |
 | **Note Speed**      | 200 px/s         | Scroll rate (100–400 px/s, 25 px steps). Higher = faster, notes more spread out; lower = slower, words pack tighter. Highway and lyrics always share this rate.      |
+| **Lyrics Size**     | 100 %            | Scales the lyric-strip text (50–200%, 10% steps). The strips — and the window — grow or shrink to match, so the highway keeps its height. Highway note labels are unaffected. |
 | **Octave Wrapping** | on               | Wraps your detected pitch by octave to match the chart's range, so singing an octave too high or low still scores against the right note.                            |
 | **Mic Gate**        | —                | RMS threshold (0.001–0.05). Raise if background noise triggers false pitches; lower if quiet singing is ignored.                                                     |
 | **Load MIDI File**  | —                | Only shown outside REAPER — pick the `.mid` chart to load.                                                                                                           |
@@ -241,11 +242,17 @@ The plugin hears everything on its track. For a pure mic signal, put it on a **n
 
 ```
 cd rock-band-vocal-sing-plugin
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug
+cmake -B build
+cmake --build build --config Release
 ```
 
-Output: `build/RBVocalSing_artefacts/Debug/VST3/Rock Band Vocal Sing - Reaper.vst3`
+Output: `build/RBVocalSing_artefacts/Release/VST3/Rock Band Vocal Sing - Reaper.vst3`
+
+> **Build the Release config for actual use.** A Debug build (`--config Debug`) renders
+> roughly **9× slower** — at large window sizes it can drop the highway to a stuttering
+> frame rate that has nothing to do with your machine. Debug is for development and
+> debugging only; if the plugin feels sluggish, first check you didn't install a Debug
+> build.
 
 JUCE 7.0.12 is fetched automatically via CPM. To install your build, copy `Rock Band Vocal Sing - Reaper.vst3` into your VST3 folder (`C:\Program Files\Common Files\VST3` on Windows) and re-scan in REAPER.
 

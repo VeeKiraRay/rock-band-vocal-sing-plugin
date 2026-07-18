@@ -17,12 +17,15 @@ work, `_old/` holds completed phases kept for their design rationale.
 | Document | Contents |
 | --- | --- |
 | [_old/CODE_REVIEW.md](_old/CODE_REVIEW.md) | 2026-07 full review — §1–§3 all fixed (2026-07-17 patch series); §4 recorded as non-action, §5 informational |
-| [_upcoming/PERFORMANCE_IMPROVEMENT.md](_upcoming/PERFORMANCE_IMPROVEMENT.md) | Paint-cost improvement plan: instrumentation first, then concrete wins, then GPU options |
+| [_old/PERFORMANCE_IMPROVEMENT.md](_old/PERFORMANCE_IMPROVEMENT.md) | 2026-07 paint phase — closed: instrumentation + §c wins shipped (PERF-1…10); Release measurement showed Debug-build profiling was the real problem (~9× slower); §d not needed |
+| [_old/PERFORMANCE_VERIFICATION.md](_old/PERFORMANCE_VERIFICATION.md) | Manual REAPER checklist per PERF patch + a standing record of one unreproduced lyric-duplication glitch |
 | [_upcoming/PITCH_DETECTION_IMPROVEMENT.md](_upcoming/PITCH_DETECTION_IMPROVEMENT.md) | Pitch-engine assessment + karaoke-style assist features (cents scoring, snap, hit highlighting) |
-| [_upcoming/FONT_SCALING.md](_upcoming/FONT_SCALING.md) | Lyric-strip font-size setting (50–200%, scales text + strip heights); stretch: global UI text scale |
+| [_upcoming/FONT_SCALING.md](_upcoming/FONT_SCALING.md) | **Implemented 2026-07-18** (5-patch series) — Lyrics Size setting (50–200%, scales text + strip heights). Doc kept for design rationale; the stretch goal (global UI text scale) is still open. Candidate to move to `_old/` |
+| [_upcoming/LYRIC_OVERLAP.md](_upcoming/LYRIC_OVERLAP.md) | "Squash guard" — scrolling-lyric overlap handling (Off / Spacing / Auto-shrink dropdown); designed 2026-07-18, not implemented |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 
-Suggested order: PERFORMANCE → PITCH_DETECTION (TEST_PLAN and CODE_REVIEW are done).
+Suggested order: PITCH_DETECTION or LYRIC_OVERLAP next, user's choice (TEST_PLAN,
+CODE_REVIEW, PERFORMANCE and FONT_SCALING are done).
 
 ---
 
@@ -148,6 +151,11 @@ note-pitch editor's `MIDI_SetNote` write-back.
   case; revisit if a user asks — options were skip, or render dimmed). Documented in README.
 - Both loaders share `clearChart()` + `finalizeChart()` (`ChartLoader.cpp`) for
   everything after "find source + parse" — the REAPER/file paths stay in sync structurally.
+- `finalizeChart()` also fills the per-note render cache (`displayLyric`,
+  `syllable`/`glue`, `effectiveEnd` = end of the same-part raw-`"+"` chain) and the 12
+  pitch-class octave-wrap candidate lists, and bumps `chartVersion` — the editor's
+  lyric-width and phrase-layout caches key off `getChartVersion()` for invalidation
+  (2026-07 PERF series). Paint never allocates strings or rescans the note list.
 
 ### Vocal mode (Solo / Harmonies)
 
@@ -190,16 +198,24 @@ Details live in the code; this is the map of what exists and its non-obvious dec
 - **Lyric strips** (`drawLyricStrip`): bottom = Main, top = HARM2+HARM3 (Harmonies only).
   Scrolling mode (word pills, sub-pixel GlyphArrangement positioning) or Static mode
   (current phrase + dim next-phrase preview; bottom strip uses HARM1's phrase grid, top
-  uses HARM2's).
+  uses HARM2's). The Lyrics Size setting (`lyricScale`, 50–200%) scales strip text,
+  pill metrics and the strip heights — strip/window heights are computed
+  (`lyricStripH()`/`windowH()`/`windowHHarm()` in PluginEditor.h replaced the old
+  `kLyricH`/`kWindowH`/`kWindowHHarm` constexprs); fonts are rebuilt lazily on scale
+  change and the lyric-width cache keys on font height. At 100% rendering is identical
+  to pre-feature. Known limit: scrolling pills can overlap on dense syllable runs
+  (any scale) — see `_upcoming/LYRIC_OVERLAP.md`.
 - **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics;
   chart status string, overridden by an amber can't-keep-up warning when frames drop.
 - **Controls**: bottom bar (Vocal Mode, Lyric Mode, `<<`/Settings/`>>`) + `SettingsPanel`
   CallOutBox (Frame cap 20–60/uncapped default 60; REAPER priority off; Renderer
-  CPU/GL-session/GL-persist; Calibration −200..+500 ms; Note Speed 100–400 px/s; Octave
-  Wrapping on; Mic gate; Load MIDI File when no REAPER API) + **Allow edits** toggle in
-  the stats band.
+  CPU/GL-session/GL-persist; Calibration −200..+500 ms; Note Speed 100–400 px/s; Lyrics
+  Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
+  window keeps its height; Octave Wrapping on; Mic gate; Load MIDI File when no REAPER
+  API) + **Allow edits** toggle in the stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
-  frameInterval, reaperPriority, octaveWrap, latencyMs, pixPerSec, lyricMode, renderer.
+  frameInterval, reaperPriority, octaveWrap, latencyMs, pixPerSec, lyricScale,
+  lyricMode, renderer.
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
@@ -243,6 +259,14 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 6. **Scrolling lyric blur** was mostly a frame-rate problem (halved by 60 fps). Word
    pills + sub-pixel GlyphArrangement are kept; 80 px/s scroll and 8× outline text were
    tried and reverted (broke highway sync / cost too much).
+7. **Profile (and run) Release builds.** Debug's software rasterizer is ~9× slower per
+   pixel — a 2315×1280 playing frame measured 32.7 ms in Debug vs **3.6 ms** in Release
+   (2026-07-17), and every "paint problem" measured in Debug was mostly that. The
+   `RB_PAINT_PROFILE` CMake option (OFF by default, works in both configs) adds
+   per-section paint EMAs + drawHighway sub-timers to the status bar and an 'S'-key
+   window-size preset cycle; sub-timers showed the background fill dominates and note
+   bars/label text are ≤ 2 ms even in Debug — so §d1 (text image cache) and the
+   Harmonies scan merge are ruled out (`_old/PERFORMANCE_IMPROVEMENT.md`).
 
 ---
 
@@ -252,7 +276,16 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 - **CODE_REVIEW fixes done** (2026-07-17, 17-patch series) — §1–§3 all fixed
   (`_old/CODE_REVIEW.md`; §4 recorded as non-action, §5 informational). The one
   behaviour decision: muted MIDI notes stay charted (1.8, documented in README;
-  revisit on user feedback). PERFORMANCE → PITCH_DETECTION next.
+  revisit on user feedback).
+- **PERFORMANCE phase done** (2026-07-17, PERF-1…PERF-10 series) — profiling
+  instrumentation + windowing/render-cache wins shipped; phase closed after the
+  Release-build measurement (perf lesson 7 above; `_old/PERFORMANCE_IMPROVEMENT.md`).
+- **FONT_SCALING done** (2026-07-18, 5-patch series) — Lyrics Size setting shipped;
+  only the stretch goal (global UI text scale for stats/status/settings text) remains
+  open in `_upcoming/FONT_SCALING.md`.
+- **Squash guard (scrolling-lyric overlap)** — Off / Spacing / Auto-shrink dropdown so
+  dense syllable runs stop drawing pills over each other; designed in
+  `_upcoming/LYRIC_OVERLAP.md`, competes with PITCH_DETECTION for the next slot.
 - **Cents-level accuracy + assist features** — fractional pitch, cents traffic light,
   visual snap, note-hit highlighting; see PITCH_DETECTION_IMPROVEMENT.md.
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on

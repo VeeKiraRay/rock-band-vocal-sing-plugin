@@ -125,6 +125,8 @@ public:
         std::function<void(int)>    setCalib;
         float                       initSpeed          { 200.0f };
         std::function<void(float)>  setSpeed;
+        float                       initLyricScale     { 1.0f };
+        std::function<void(float)>  setLyricScale;
         bool                        initWrap           { true };
         std::function<void(bool)>   setWrap;
         bool                        showLoadMidi       { false };
@@ -145,6 +147,7 @@ public:
         static const juce::String kTipRenderer = "CPU: software renderer (default). OpenGL: GPU rendering, may help at large window sizes. 'session only' reverts on next load; 'persist' saves the choice.";
         static const juce::String kTipCalib    = "Shift note timing to compensate for audio output latency. Positive = notes appear later.";
         static const juce::String kTipSpeed    = "How fast notes scroll across the highway. Higher = notes spread further apart.";
+        static const juce::String kTipLyricSize = "Size of the lyric-strip text. The strips (and the default window height) grow or shrink to match.";
         static const juce::String kTipWrap     = "Wraps your detected pitch by octave to match the chart range when you sing an octave too high or low.";
         static const juce::String kTipGate     = "Minimum mic volume before pitch detection activates. Raise if background noise triggers false readings.";
 
@@ -219,6 +222,20 @@ public:
         };
         addAndMakeVisible (noteSpeedSlider);
 
+        setupLabel (lyricSizeLabel, "Lyrics Size", kTipLyricSize);
+        lyricSizeSlider.setSliderStyle (juce::Slider::IncDecButtons);
+        lyricSizeSlider.setRange (50, 200, 10);
+        lyricSizeSlider.setValue (juce::roundToInt (this->cbs.initLyricScale * 100.0f),
+                                  juce::dontSendNotification);
+        lyricSizeSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        lyricSizeSlider.setTextValueSuffix (" %");
+        lyricSizeSlider.setTooltip (kTipLyricSize);
+        lyricSizeSlider.onValueChange = [this]
+        {
+            this->cbs.setLyricScale ((float) lyricSizeSlider.getValue() / 100.0f);
+        };
+        addAndMakeVisible (lyricSizeSlider);
+
         // ── Singing ───────────────────────────────────────────────────────────
         setupLabel (wrapLabel, "Octave Wrapping", kTipWrap);
         setupToggle (wrapToggle, this->cbs.initWrap, kTipWrap);
@@ -292,6 +309,7 @@ public:
         layoutHdr (highwayHeader);
         layoutRow (calibLabel, calibSlider);
         layoutRow (speedLabel, noteSpeedSlider);
+        layoutRow (lyricSizeLabel, lyricSizeSlider);
 
         area.removeFromTop (kSecGap);
         layoutHdr (singingHeader);
@@ -315,11 +333,11 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (2) + SINGING (2), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (3) + SINGING (2), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (2)
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (3)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (2);
 
 private:
@@ -374,6 +392,8 @@ private:
     juce::Slider        calibSlider;
     juce::Label         speedLabel;
     juce::Slider        noteSpeedSlider;
+    juce::Label         lyricSizeLabel;
+    juce::Slider        lyricSizeSlider;
 
     juce::Label         wrapLabel;
     juce::ToggleButton  wrapToggle;
@@ -433,7 +453,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         audioProcessor.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
         audioProcessor.reloadChart();
         lastStateCount = -1;
-        setSize (kWindowW, harmoniesMode() ? kWindowHHarm : kWindowH);
+        setSize (kWindowW, harmoniesMode() ? windowHHarm() : windowH());
         resized();
     };
     addAndMakeVisible (vocalSoloBtn);
@@ -446,7 +466,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         audioProcessor.vocalMode.store ((int) VocalMode::Harmonies, std::memory_order_relaxed);
         audioProcessor.reloadChart();
         lastStateCount = -1;
-        setSize (kWindowW, harmoniesMode() ? kWindowHHarm : kWindowH);
+        setSize (kWindowW, harmoniesMode() ? windowHHarm() : windowH());
         resized();
     };
     addAndMakeVisible (vocalHarmBtn);
@@ -512,6 +532,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setCalib           = [safe] (int v)    { if (safe) { safe->latencyOffsetMs = v; safe->audioProcessor.savedLatencyOffsetMs = v; safe->repaint(); } };
         cbs.initSpeed          = pixPerSec;
         cbs.setSpeed           = [safe] (float v)  { if (safe) { safe->pixPerSec = v; safe->audioProcessor.savedPixPerSec = v; safe->repaint(); } };
+        cbs.initLyricScale     = lyricScale;
+        cbs.setLyricScale      = [safe] (float v)  { if (safe) safe->applyLyricScale (v); };
         cbs.initWrap           = octaveWrap;
         cbs.setWrap            = [safe] (bool v)   { if (safe) { safe->octaveWrap = v; safe->audioProcessor.savedOctaveWrap = v; } };
         cbs.showLoadMidi       = !audioProcessor.reaperApi.isLoaded();
@@ -576,6 +598,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     octaveWrap          = audioProcessor.savedOctaveWrap;
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     pixPerSec           = audioProcessor.savedPixPerSec;
+    lyricScale          = audioProcessor.savedLyricScale;
 
     if (audioProcessor.savedRenderer == 2)
         glContext.attachTo (*this);
@@ -592,9 +615,9 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     tooltipWindow.setMillisecondsBeforeTipAppears (600);
 
     setOpaque (true);
-    setSize (kWindowW, harmoniesMode() ? kWindowHHarm : kWindowH);
+    setSize (kWindowW, harmoniesMode() ? windowHHarm() : windowH());
     setResizable (true, true);
-    setResizeLimits (kWindowW, kWindowH, 10000, 10000);
+    setResizeLimits (kWindowW, windowH(), 10000, 10000);
 
     vblankAttachment = juce::VBlankAttachment (this, [this]() { onFrame(); });
 }
@@ -611,14 +634,37 @@ bool RBVocalSingAudioProcessorEditor::harmoniesMode() const
                == (int) VocalMode::Harmonies;
 }
 
+// ─── Lyrics size setting ──────────────────────────────────────────────────────
+
+void RBVocalSingAudioProcessorEditor::applyLyricScale (float newScale)
+{
+    if (newScale == lyricScale) return;
+
+    const int oldStripH = lyricStripH();
+    lyricScale = newScale;
+    audioProcessor.savedLyricScale = newScale;
+
+    // Delta-based resize: grow/shrink by the strip-height change × visible strips so
+    // a user-resized window keeps its custom height (unlike the vocal-mode toggles,
+    // which reset to the default). Capture the target height before setResizeLimits —
+    // it clamps the current bounds to the new minimum, which would double-count the
+    // delta when scaling up from the default height.
+    const int nStrips = harmoniesMode() ? 2 : 1;
+    const int targetH = getHeight() + (lyricStripH() - oldStripH) * nStrips;
+    setResizeLimits (kWindowW, windowH(), 10000, 10000);
+    setSize (getWidth(), targetH);
+    resized();
+    repaint();
+}
+
 // ─── Highway area helper ──────────────────────────────────────────────────────
 
 juce::Rectangle<int> RBVocalSingAudioProcessorEditor::getHighwayArea() const
 {
-    const int topStripH = harmoniesMode() ? kLyricH : 0;
+    const int topStripH = harmoniesMode() ? lyricStripH() : 0;
     return getLocalBounds()
                .withTop    (topStripH)
-               .withBottom (getHeight() - kControlsH - kMessageH - kStatusH - kStatsH - kLyricH);
+               .withBottom (getHeight() - kControlsH - kMessageH - kStatusH - kStatsH - lyricStripH());
 }
 
 // ─── Mouse / keyboard transport controls ──────────────────────────────────────
@@ -764,7 +810,7 @@ bool RBVocalSingAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
     // before the REAPER-API guard — resizing needs no API.
     if (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S')
     {
-        const int defaultH = harmoniesMode() ? kWindowHHarm : kWindowH;
+        const int defaultH = harmoniesMode() ? windowHHarm() : windowH();
         profSizePreset = (profSizePreset + 1) % 3;
         if      (profSizePreset == 0) setSize (kWindowW,     defaultH);
         else if (profSizePreset == 1) setSize (kWindowW * 2, defaultH);
@@ -982,7 +1028,7 @@ void RBVocalSingAudioProcessorEditor::resized()
     {
         // Chain off getHighwayArea() (highway → lyric strip → stats band) instead of
         // re-deriving the bottom-band sum (CODE_REVIEW.md 2.6).
-        const int statsTop = getHighwayArea().getBottom() + kLyricH;
+        const int statsTop = getHighwayArea().getBottom() + lyricStripH();
         editToggle.setBounds (8, statsTop + 2, 130, kEditRowH - 2);
     }
 }
@@ -1001,7 +1047,7 @@ void RBVocalSingAudioProcessorEditor::paint (juce::Graphics& g)
     // whatever sits above the highway — empty in Solo mode.
     const auto highwayArea = getHighwayArea();
     const auto topArea     = getLocalBounds().withBottom (highwayArea.getY());
-    const auto lyricArea   = juce::Rectangle<int> (0, highwayArea.getBottom(), getWidth(), kLyricH);
+    const auto lyricArea   = juce::Rectangle<int> (0, highwayArea.getBottom(), getWidth(), lyricStripH());
     const auto statsArea   = juce::Rectangle<int> (0, lyricArea.getBottom(),   getWidth(), kStatsH);
     const auto statusArea  = juce::Rectangle<int> (0, statsArea.getBottom(),   getWidth(), kStatusH);
     const auto messageArea = juce::Rectangle<int> (0, statusArea.getBottom(),  getWidth(), kMessageH);

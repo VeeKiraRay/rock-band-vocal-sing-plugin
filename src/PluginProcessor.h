@@ -159,6 +159,7 @@ public:
     std::atomic<bool>   savedOctaveWrap      { true };
     std::atomic<int>    savedLatencyOffsetMs { 0 };
     std::atomic<float>  savedPixPerSec       { 200.0f };
+    std::atomic<float>  savedLyricScale      { 1.0f };
     std::atomic<int>    savedLyricMode       { 0 };   // 0=Scrolling, 1=Static
     std::atomic<int>    savedRenderer        { 0 };   // 0=CPU, 2=OpenGL+persist
 

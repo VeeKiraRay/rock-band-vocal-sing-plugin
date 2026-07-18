@@ -125,6 +125,7 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("octaveWrap",     savedOctaveWrap.load(),       nullptr);
     state.setProperty ("latencyMs",      savedLatencyOffsetMs.load(),  nullptr);
     state.setProperty ("pixPerSec",      (double) savedPixPerSec.load(), nullptr);
+    state.setProperty ("lyricScale",     (double) savedLyricScale.load(), nullptr);
     state.setProperty ("lyricMode",      savedLyricMode.load(),        nullptr);
     state.setProperty ("renderer",       savedRenderer.load(),         nullptr);
     auto xml = state.createXml();
@@ -145,6 +146,7 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     savedOctaveWrap      =        (bool)   state.getProperty ("octaveWrap",     true);
     savedLatencyOffsetMs =        (int)    state.getProperty ("latencyMs",      0);
     savedPixPerSec       = (float)(double) state.getProperty ("pixPerSec",      200.0);
+    savedLyricScale      = (float)(double) state.getProperty ("lyricScale",     1.0);
     savedLyricMode       =        (int)    state.getProperty ("lyricMode",      0);
     savedRenderer        =        (int)    state.getProperty ("renderer",       0);
 }

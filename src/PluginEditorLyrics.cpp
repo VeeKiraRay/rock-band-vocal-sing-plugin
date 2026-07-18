@@ -19,6 +19,17 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
     const auto& notes = audioProcessor.getChartNotes();
     if (notes.empty()) return;
 
+    // Rebuild the strip fonts when the Lyrics size setting changed — they stay
+    // members so per-frame typeface-cache lookups are avoided
+    // (PERFORMANCE_IMPROVEMENT.md c6).
+    const float s = lyricScale;
+    if (lyricFontsScale != s)
+    {
+        lyricFontCurrent = juce::Font (15.0f * s, juce::Font::bold);
+        lyricFontPreview = juce::Font (11.0f * s, juce::Font::bold);
+        lyricFontsScale  = s;
+    }
+
     // Bottom strip shows Main (HARM1/Solo); top strip shows HARM2+HARM3.
     auto includePart = [harmonyStrip] (VocalPart p)
     {
@@ -51,16 +62,18 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
         g.setColour (juce::Colour (0xff2a2a44));
         g.drawVerticalLine ((int) phX, (float) area.getY(), (float) area.getBottom());
 
-        const juce::Font& lyricFont = lyricFont15;
+        const juce::Font& lyricFont = lyricFontCurrent;
         g.setFont (lyricFont);
 
-        // Reset the width cache when the chart changed (or on first use); entries are
-        // then measured lazily as notes scroll into view.
+        // Reset the width cache when the chart or the strip font changed (or on
+        // first use); entries are then measured lazily as notes scroll into view.
         if (lyricWidthCacheVersion != audioProcessor.getChartVersion()
+            || lyricWidthCacheFontH != lyricFont.getHeight()
             || lyricWidthCache.size() != notes.size())
         {
             lyricWidthCache.assign (notes.size(), -1.0f);
             lyricWidthCacheVersion = audioProcessor.getChartVersion();
+            lyricWidthCacheFontH   = lyricFont.getHeight();
         }
 
         g.saveState();
@@ -70,8 +83,11 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
         // earlier was an O(elapsed-song) `continue` sweep before
         // (PERFORMANCE_IMPROVEMENT.md c1). Pills anchor at startTime, so unlike
         // drawNotesForPart no still-sounding backward extension is needed; the
-        // left-margin `continue` below stays as a boundary guard.
-        const double leftTime = t + ((double) area.getX() - 120.0 - (double) phX) / pixPerSec;
+        // left-margin `continue` below stays as a boundary guard. The margin scales
+        // with the font — scaled-up text is wider, and a fixed margin would pop
+        // pills in/out at the strip edges.
+        const float  cull     = 120.0f * s;
+        const double leftTime = t + ((double) area.getX() - (double) cull - (double) phX) / pixPerSec;
         const auto   startIt  = std::lower_bound (notes.begin(), notes.end(), leftTime,
             [] (const NoteInfo& n, double v) { return n.startTime < v; });
 
@@ -80,11 +96,11 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             const size_t i = (size_t) (it - notes.begin());  // width-cache index
             const auto&  n = *it;
             const float x = phX + (float) (n.startTime - t) * pixPerSec;
-            if (x > area.getRight() + 120.0f)         break;
+            if (x > area.getRight() + cull)           break;
             if (!includePart (n.part))                continue;
             if (n.lyric.isEmpty() || n.lyric == "+") continue;
             if (n.isHidden)                           continue;
-            if (x < area.getX() - 120.0f)            continue;
+            if (x < area.getX() - cull)              continue;
 
             // effectiveEnd ("+"-chain) and displayLyric are precomputed at chart load
             // (finalizeChart render cache) — no per-frame scan or string allocation.
@@ -98,13 +114,13 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             float tw = lyricWidthCache[i];
             if (tw < 0.0f)
                 tw = lyricWidthCache[i] = lyricFont.getStringWidthFloat (displayLyric);
-            const float bgX = std::floor (x) - 3.0f;
-            const float bgY = (float) area.getY() + 2.0f;
-            const float bgH = (float) area.getHeight() - 4.0f;
+            const float bgX = std::floor (x) - 3.0f * s;
+            const float bgY = (float) area.getY() + 2.0f * s;
+            const float bgH = (float) area.getHeight() - 4.0f * s;
 
             if (isActive) g.setColour (juce::Colour (0xff2a2200));
             else          g.setColour (juce::Colour (0xff141428));
-            g.fillRoundedRectangle (bgX, bgY, tw + 6.0f, bgH, 3.0f);
+            g.fillRoundedRectangle (bgX, bgY, tw + 6.0f * s, bgH, 3.0f * s);
 
             g.setColour (lyricColour (isActive, isPast, isInOverdrive (n.startTime)));
 
@@ -114,7 +130,7 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
             juce::GlyphArrangement ga;
             ga.addFittedText (lyricFont, displayLyric,
                               std::floor (x), (float) area.getY(),
-                              juce::jmax (40.0f, tw + 8.0f), (float) area.getHeight(),
+                              juce::jmax (40.0f * s, tw + 8.0f * s), (float) area.getHeight(),
                               juce::Justification::centredLeft, 1);
             ga.draw (g, juce::AffineTransform::translation (fracX, 0.0f));
         }
@@ -145,9 +161,11 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
     }
     if (currentIdx < 0) return;
 
-    // Split the strip: top 28 px for current phrase, remainder for preview
-    static constexpr int kCurrentH = 28;
-    const auto currentArea = area.removeFromTop (kCurrentH);  // area is now previewArea
+    // Split the strip: top 28-px-scaled row for the current phrase, remainder for the
+    // preview. Only the current row is rounded — the preview takes whatever is left of
+    // the strip, so the two rows always sum to lyricStripH() at every scale.
+    const int currentH = juce::roundToInt (28.0f * s);
+    const auto currentArea = area.removeFromTop (currentH);  // area is now previewArea
 
     g.setColour (juce::Colour (0xff161626));
     g.drawHorizontalLine (currentArea.getBottom(),
@@ -204,14 +222,14 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
 
     // Current phrase — full highlighting
     drawParts (getPhraseLayout (harmonyStrip, false, currentIdx,
-                                phrases[currentIdx], lyricFont15),
-               currentArea, lyricFont15, true);
+                                phrases[currentIdx], lyricFontCurrent),
+               currentArea, lyricFontCurrent, true);
 
     // Next phrase — dim preview (area is the remaining lower strip)
     if (currentIdx + 1 < (int) phrases.size())
         drawParts (getPhraseLayout (harmonyStrip, true, currentIdx + 1,
-                                    phrases[currentIdx + 1], lyricFont11),
-                   area, lyricFont11, false);
+                                    phrases[currentIdx + 1], lyricFontPreview),
+                   area, lyricFontPreview, false);
 }
 
 // Rebuilds (on chart/phrase/font change) or returns the cached syllable layout for one

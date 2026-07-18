@@ -188,13 +188,18 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   at 30 % from left, per-part z-order Harm3 → Harm2 → Main (Main cyan / Harm2 amber /
   Harm3 brown), `+`-lyric bend connectors, talkie notes as translucent columns, inline
   lyric labels Main-only, Range-Shift section boundaries with direction arrows, phrase
-  separator lines, white (or amber-when-octave-wrapped) live-pitch arrowhead. Pitch range
+  separator lines, white (or amber-when-octave-wrapped) live-pitch arrowhead — drawn at
+  the fractional pitch (glides, no semitone stepping) and snapped onto the closest
+  active note's lane when within the Pitch Tolerance (b2 visual snap; the idle-repaint
+  gate tracks `currentMidiFloat` so sub-semitone movement repaints). Pitch range
   animates per Range-Shift section (smoothstep over the marker length); the per-frame
   geometry is cached (`lastHighwayArea`/`lastFMinP`/…) so mouse hit-testing matches the
   screen exactly.
 - **Stats panel** (`drawStats`): time `MM:SS.ms / end`, live note name + MIDI + Hz,
-  traffic light vs the closest active note of any part (exact = GREAT, ±1–2 semitones =
-  CLOSE, else MISS; talkie = presence detection; silence during an active note = MISS).
+  traffic light vs the closest active note of any part, scored in cents from
+  `currentMidiFloat` (within ±`pitchTolCents` = GREAT, within 2× = CLOSE, else MISS;
+  talkie = presence detection; silence during an active note = MISS). Octave wrapping
+  wraps the rounded note and carries the sub-semitone offset across.
 - **Lyric strips** (`drawLyricStrip`): bottom = Main, top = HARM2+HARM3 (Harmonies only).
   Scrolling mode (word pills, sub-pixel GlyphArrangement positioning) or Static mode
   (current phrase + dim next-phrase preview; bottom strip uses HARM1's phrase grid, top
@@ -217,11 +222,11 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   CPU/GL-session/GL-persist; Calibration −200..+500 ms; Note Speed 100–400 px/s; Lyrics
   Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
-  Octave Wrapping on; Mic gate; Load MIDI File when no REAPER API) + **Allow edits**
-  toggle in the stats band.
+  Octave Wrapping on; Pitch Tolerance ±25/50/75/100 cents default ±50; Mic gate;
+  Load MIDI File when no REAPER API) + **Allow edits** toggle in the stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
-  frameInterval, reaperPriority, octaveWrap, latencyMs, pixPerSec, lyricScale,
-  squashGuard, lyricMode, renderer.
+  frameInterval, reaperPriority, octaveWrap, pitchTolCents, latencyMs, pixPerSec,
+  lyricScale, squashGuard, lyricMode, renderer.
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s

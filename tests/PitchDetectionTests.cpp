@@ -79,6 +79,17 @@ TEST_CASE ("pitch: 440 Hz sine at 44.1 kHz still detects MIDI 69 (sample-rate in
     REQUIRE (proc.currentMidiNote.load() == 69);
 }
 
+TEST_CASE ("pitch: fractional MIDI pitch is published before rounding (c1)", "[pitch]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);   // MPM — the algorithm the editor fixes at startup
+    // 450 Hz sits between semitones: 69 + 12*log2(450/440) ≈ 69.389.
+    feedSine (proc, 48000.0, 450.0f, 0.5f);
+
+    REQUIRE (proc.currentMidiNote.load() == 69);
+    REQUIRE (proc.currentMidiFloat.load() == Catch::Approx (69.389).margin (0.05));
+}
+
 TEST_CASE ("pitch: amplitude below gate threshold stays undetected", "[pitch]")
 {
     RBVocalSingAudioProcessor proc;
@@ -86,6 +97,7 @@ TEST_CASE ("pitch: amplitude below gate threshold stays undetected", "[pitch]")
     feedSine (proc, 48000.0, 440.0f, 0.001f);
 
     REQUIRE (proc.currentMidiNote.load() == -1);
+    REQUIRE (proc.currentMidiFloat.load() == -1.0f);
 }
 
 TEST_CASE ("pitch: hold-decay keeps the note through kPitchHoldCycles then resets", "[pitch]")
@@ -117,6 +129,7 @@ TEST_CASE ("pitch: hold-decay keeps the note through kPitchHoldCycles then reset
     }
 
     REQUIRE (proc.currentMidiNote.load() == -1);
+    REQUIRE (proc.currentMidiFloat.load() == -1.0f);
 }
 
 TEST_CASE ("pitch: prepareToPlay clears a stale partial accumulation (CODE_REVIEW.md 1.6)", "[pitch]")

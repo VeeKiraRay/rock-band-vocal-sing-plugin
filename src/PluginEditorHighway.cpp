@@ -118,8 +118,8 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     const float phX   = (float) area.getX() + (float) area.getWidth() * 0.3f;
     const float noteH = (float) area.getHeight() / (fMaxP - fMinP + 1.0f);
 
-    auto pitchY = [&] (int p) -> float {
-        return (float) area.getBottom() - ((float) p - fMinP + 0.5f) * noteH;
+    auto pitchY = [&] (float p) -> float {
+        return (float) area.getBottom() - (p - fMinP + 0.5f) * noteH;
     };
 
     // Cache this frame's geometry so mouse hit-testing (hitTestNote) matches exactly
@@ -147,12 +147,12 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
             return juce::String (kNoteNames[p % 12]) + juce::String (p / 12 - 1);
         };
         // Top label: centre on the top note's Y, clamp inside area
-        const float topY = pitchY (maxP);
+        const float topY = pitchY ((float) maxP);
         g.drawText (makeName (maxP),
                     area.getX() + 3, juce::jmax (area.getY(), (int) topY - 5), 28, 10,
                     juce::Justification::centredLeft, false);
         // Bottom label: centre on the bottom note's Y, clamp inside area
-        const float botY = pitchY (minP);
+        const float botY = pitchY ((float) minP);
         g.drawText (makeName (minP),
                     area.getX() + 3, juce::jmin (area.getBottom() - 10, (int) botY - 5), 28, 10,
                     juce::Justification::centredLeft, false);
@@ -223,7 +223,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 
             const float x1   = phX + (float) (n.startTime - t) * pixPerSec;
             const float x2   = phX + (float) (n.endTime   - t) * pixPerSec;
-            const float cy   = pitchY (n.pitch);
+            const float cy   = pitchY ((float) n.pitch);
             const float barH = (noteH - 1.0f) * n.thickScale;
             // "+" is a pitch-bend connector; "+$" (hidden) must bend identically —
             // displayLyric has the suffixes pre-stripped (finalizeChart render cache).
@@ -347,21 +347,52 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         }
     }
 
-    // Arrowhead for live pitch — white when in range; amber when octave-wrapped out of range
-    const int  userNote = audioProcessor.currentMidiNote.load (std::memory_order_relaxed);
-    if (userNote >= 0)
+    // Arrowhead for live pitch — drawn at the fractional pitch (cents precision) so it
+    // glides through slides instead of stepping by semitone (b2). White when in range;
+    // amber when octave-wrapped out of range (the wrap moves the rounded note and
+    // carries the sub-semitone offset across, like the traffic light).
+    const float userPitch = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
+    if (userPitch >= 0.0f)
     {
-        const bool inRange  = ((float) userNote >= fMinP && (float) userNote <= fMaxP);
+        const int  rounded  = juce::jlimit (0, 127, juce::roundToInt (userPitch));
+        const bool inRange  = ((float) rounded >= fMinP && (float) rounded <= fMaxP);
         const bool doWrap   = octaveWrap && !inRange;
-        const int  drawNote = doWrap
-                                  ? wrapPitchIntoRange (userNote, (int) fMinP, (int) fMaxP,
-                                                        audioProcessor.getPitchClassCandidates())
-                                  : userNote;
+        float drawPitch = doWrap
+                              ? (float) wrapPitchIntoRange (rounded, (int) fMinP, (int) fMaxP,
+                                                            audioProcessor.getPitchClassCandidates())
+                                    + (userPitch - (float) rounded)
+                              : userPitch;
 
         if (inRange || doWrap)
         {
+            // Visual snap (PITCH_DETECTION_IMPROVEMENT.md b2): when the drawn pitch is
+            // within the scoring tolerance of an active note, lock the arrow onto that
+            // note's lane — hides natural jitter while the traffic light shows GREAT.
+            // Same windowed scan as the traffic light (notes are sorted, non-overlapping).
+            {
+                auto snapIt = std::lower_bound (notes.begin(), notes.end(), t - kNoteLookback,
+                    [] (const NoteInfo& n, double v) { return n.startTime < v; });
+                while (snapIt != notes.begin())
+                {
+                    const auto prev = std::prev (snapIt);
+                    if (prev->endTime <= t) break;
+                    snapIt = prev;
+                }
+                float bestDiff = -1.0f, bestPitch = 0.0f;
+                for (; snapIt != notes.end(); ++snapIt)
+                {
+                    const auto& n = *snapIt;
+                    if (n.startTime > t) break;
+                    if (t >= n.endTime || n.isTalkie) continue;
+                    const float diff = std::abs (drawPitch - (float) n.pitch);
+                    if (bestDiff < 0.0f || diff < bestDiff) { bestDiff = diff; bestPitch = (float) n.pitch; }
+                }
+                if (bestDiff >= 0.0f && bestDiff * 100.0f <= (float) pitchTolCents)
+                    drawPitch = bestPitch;
+            }
+
             const float cx = phX;
-            const float cy = pitchY (drawNote);
+            const float cy = pitchY (drawPitch);
 
             // Tip on the playhead line, body trailing left — matches how the game
             // renders the sung-pitch arrow. The 6 px glow stroke below is centred on
@@ -439,21 +470,29 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     auto lightCol = row.removeFromRight (70);
 
     // Score against the closest active note of ANY part: green if the singer
-    // matches any harmony line currently sounding. When octave wrapping is on,
-    // an out-of-range note is mapped to its in-range pitch-class equivalent first.
-    const int minP = audioProcessor.chartMinPitch;
-    const int maxP = audioProcessor.chartMaxPitch;
-    const int scoringNote = (note >= 0 && octaveWrap
-                             && (note < minP || note > maxP))
-                                ? wrapPitchIntoRange (note, minP, maxP,
-                                                      audioProcessor.getPitchClassCandidates())
-                                : note;
+    // matches any harmony line currently sounding. Scoring uses the fractional
+    // pitch (cents precision, PITCH_DETECTION_IMPROVEMENT.md b1); `note` keeps
+    // driving the note display below. When octave wrapping is on, an out-of-range
+    // pitch is mapped to its in-range pitch-class equivalent first, carrying the
+    // sub-semitone offset across the wrap.
+    const float midiF = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
+    const int   minP  = audioProcessor.chartMinPitch;
+    const int   maxP  = audioProcessor.chartMaxPitch;
+    float scoringPitch = midiF;
+    if (midiF >= 0.0f && octaveWrap)
+    {
+        const int rounded = juce::jlimit (0, 127, juce::roundToInt (midiF));
+        if (rounded < minP || rounded > maxP)
+            scoringPitch = (float) wrapPitchIntoRange (rounded, minP, maxP,
+                                                       audioProcessor.getPitchClassCandidates())
+                         + (midiF - (float) rounded);
+    }
 
     // Scan all active notes unconditionally (even when no audio is detected) so that
     // silence during any active note correctly scores as OFF (red), not --- (grey).
-    bool activeTalkie  = false;
-    bool activeRegular = false;
-    int  bestDiff      = -1;
+    bool  activeTalkie  = false;
+    bool  activeRegular = false;
+    float bestDiffCents = -1.0f;
 
     // Window the scan like drawNotesForPart instead of walking from the first note of
     // the song every frame (PERFORMANCE_IMPROVEMENT.md c3): jump to the earliest note
@@ -482,10 +521,10 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
             else
             {
                 activeRegular = true;
-                if (scoringNote >= 0)
+                if (scoringPitch >= 0.0f)
                 {
-                    const int diff = std::abs (scoringNote - n.pitch);
-                    if (bestDiff < 0 || diff < bestDiff) bestDiff = diff;
+                    const float diff = std::abs (scoringPitch - (float) n.pitch) * 100.0f;
+                    if (bestDiffCents < 0.0f || diff < bestDiffCents) bestDiffCents = diff;
                 }
             }
         }
@@ -504,11 +543,13 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     }
     else if (activeRegular)
     {
-        if (bestDiff >= 0)
+        if (bestDiffCents >= 0.0f)
         {
-            if      (bestDiff == 0) { lightColour = juce::Colours::limegreen; lightLabel = "GREAT";    }
-            else if (bestDiff <= 2) { lightColour = juce::Colours::yellow;    lightLabel = "CLOSE"; }
-            else                    { lightColour = juce::Colours::red;       lightLabel = "MISS";   }
+            // GREAT within ± pitchTolCents of the note, CLOSE within twice that.
+            const float tol = (float) pitchTolCents;
+            if      (bestDiffCents <= tol)        { lightColour = juce::Colours::limegreen; lightLabel = "GREAT"; }
+            else if (bestDiffCents <= 2.0f * tol) { lightColour = juce::Colours::yellow;    lightLabel = "CLOSE"; }
+            else                                  { lightColour = juce::Colours::red;       lightLabel = "MISS";  }
         }
         else
         {

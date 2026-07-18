@@ -115,20 +115,21 @@ From top to bottom:
 - Notes scroll at the **Note Speed** rate (default 200 px/sec) with the playhead fixed at 30% from the left.
 - In Harmonies mode, parts are colour-coded: **Main cyan**, **Harm2 amber**, **Harm3 brown**. Where a lower part sits on the same sustained pitch as a higher one, its bar is drawn thicker so the overlap stays visible.
 - Lane grid lines mark every 2 semitones. The vertical range auto-fits the loaded notes (± 2 semitones of padding).
+- The white arrowhead tracks your sung pitch at full (cents) precision, so slides and scoops glide smoothly. When you are within the **Pitch Tolerance** of an active note it locks onto that note's lane — steady green light, steady arrow.
 - Inline lyric labels on the bars are **Main-only**; HARM2/HARM3 lyrics live in the top strip.
 - **Muted MIDI notes are not treated specially** — a note muted in the REAPER MIDI editor still draws and scores like any other. If you don't want a note charted, delete it or move it to another track. (Let us know if muting matters to your workflow — this can be revisited.)
 - If no chart is loaded, the highway shows a diagnostic message (including the list of tracks it found, if the lead track is missing).
 
 ### Traffic light
 
-The stats panel compares your live pitch to the **closest active chart note of any part**:
+The stats panel compares your live pitch to the **closest active chart note of any part**, with cents precision (100 cents = one semitone). How forgiving it is comes from the **Pitch Tolerance** setting (default ± 50 cents):
 
-| Light     | Meaning                                  |
-| --------- | ---------------------------------------- |
-| 🟢 Green  | Exact semitone match — you are on it.    |
-| 🟡 Yellow | Within ± 1–2 semitones — close.          |
-| 🔴 Red    | More than 2 semitones off.               |
-| ⚪ Grey   | No chart note active, or no pitch sung.  |
+| Light     | Meaning                                             |
+| --------- | --------------------------------------------------- |
+| 🟢 Green  | Within the tolerance of the note — you are on it.   |
+| 🟡 Yellow | Within twice the tolerance — close.                 |
+| 🔴 Red    | Further off than that.                              |
+| ⚪ Grey   | No chart note active, or no pitch sung.             |
 
 > **About pitch detection.** The plugin uses the MPM (McLeod Pitch Method) algorithm — a solid general-purpose pitch tracker, but not infallible. Breath sounds, hard consonants, background noise, and the attack/release of notes can all produce brief false readings. If background noise triggers spurious pitches, raise the **Mic Gate** in Settings. The traffic light is a charting aid: consistent green across a phrase is a good sign that the notes and lyrics are placed correctly; don't treat individual flickers as a definitive grade.
 
@@ -165,6 +166,7 @@ Click **Settings** to open these. All of them are saved in the plugin's state, s
 | **Lyrics Size**     | 100 %            | Scales the lyric-strip text (50–200%, 10% steps). The strips — and the window — grow or shrink to match, so the highway keeps its height. Highway note labels are unaffected. |
 | **Squash Guard**    | Off              | What scrolling lyrics do when packed words would overlap: **Spacing** pushes them apart (they glide back as room opens), **Auto-shrink** scales them down (to half size, then condenses), **Hybrid** shrinks a little (≤20%) and pushes the rest. Scrolling mode only — Static lays out whole phrases and never overlaps. |
 | **Octave Wrapping** | on               | Wraps your detected pitch by octave to match the chart's range, so singing an octave too high or low still scores against the right note.                            |
+| **Pitch Tolerance** | ± 50 cents       | How close to the note you must sing for a green light (± 25 / 50 / 75 / 100 cents; 100 cents = one semitone). Twice the tolerance still shows yellow. Lower = stricter. |
 | **Mic Gate**        | —                | RMS threshold (0.001–0.05). Raise if background noise triggers false pitches; lower if quiet singing is ignored.                                                     |
 | **Load MIDI File**  | —                | Only shown outside REAPER — pick the `.mid` chart to load.                                                                                                           |
 

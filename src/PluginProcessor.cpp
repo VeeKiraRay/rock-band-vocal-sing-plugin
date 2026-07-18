@@ -73,6 +73,7 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 const float midi = 69.0f + 12.0f * std::log2f (hz / 440.0f);
                 const int   note = std::clamp (static_cast<int> (std::roundf (midi)), 0, 127);
                 currentFrequency.store (hz,   std::memory_order_relaxed);
+                currentMidiFloat.store (std::clamp (midi, 0.0f, 127.0f), std::memory_order_relaxed);
                 currentMidiNote .store (note, std::memory_order_relaxed);
                 pitchHoldFrames = kPitchHoldCycles;
             }
@@ -82,8 +83,9 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             }
             else
             {
-                currentFrequency.store (0.0f, std::memory_order_relaxed);
-                currentMidiNote .store (-1,   std::memory_order_relaxed);
+                currentFrequency.store (0.0f,  std::memory_order_relaxed);
+                currentMidiFloat.store (-1.0f, std::memory_order_relaxed);
+                currentMidiNote .store (-1,    std::memory_order_relaxed);
             }
 
             pitchAccumFill = 0;
@@ -123,6 +125,7 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("frameInterval",  savedFrameInterval.load(),    nullptr);
     state.setProperty ("reaperPriority", savedReaperPriority.load(),   nullptr);
     state.setProperty ("octaveWrap",     savedOctaveWrap.load(),       nullptr);
+    state.setProperty ("pitchTolCents",  savedPitchTolCents.load(),    nullptr);
     state.setProperty ("latencyMs",      savedLatencyOffsetMs.load(),  nullptr);
     state.setProperty ("pixPerSec",      (double) savedPixPerSec.load(), nullptr);
     state.setProperty ("lyricScale",     (double) savedLyricScale.load(), nullptr);
@@ -145,6 +148,7 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     savedFrameInterval   =        (double) state.getProperty ("frameInterval",  1.0 / 60.0);
     savedReaperPriority  =        (bool)   state.getProperty ("reaperPriority", false);
     savedOctaveWrap      =        (bool)   state.getProperty ("octaveWrap",     true);
+    savedPitchTolCents   =        (int)    state.getProperty ("pitchTolCents",  50);
     savedLatencyOffsetMs =        (int)    state.getProperty ("latencyMs",      0);
     savedPixPerSec       = (float)(double) state.getProperty ("pixPerSec",      200.0);
     savedLyricScale      = (float)(double) state.getProperty ("lyricScale",     1.0);

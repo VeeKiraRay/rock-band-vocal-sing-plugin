@@ -113,9 +113,10 @@ private:
     bool   lastIsPlaying    { false };  // last play-state decision (refreshed in poll gate)
 
     // Idle-repaint gating: skip repaint() when nothing visible would change. Sentinels
-    // force a paint on the first frame. See onFrame().
+    // force a paint on the first frame. See onFrame(). The pitch is tracked at
+    // fractional precision — the arrowhead moves on sub-semitone changes (b2).
     double lastPaintTime       { -1.0e18 };
-    int    lastPaintNote       { -2 };
+    float  lastPaintPitch      { -2.0f };
     int    lastPaintStateCount { -2 };
     bool   lastPaintDropping   { false };
     int    lastPaintLyricMode  { -1 };
@@ -160,6 +161,9 @@ private:
     double cachedPlayRate  { 1.0 };
     // Whether out-of-range singing pitch is wrapped by octave onto the chart range.
     bool  octaveWrap      { true };
+    // Traffic-light GREAT window in cents (100 = one semitone); CLOSE is 2× this.
+    // Settings stepper ±25/±50/±75/±100 (PITCH_DETECTION_IMPROVEMENT.md b1).
+    int   pitchTolCents   { 50 };
 
     // Scrolling-strip lyric pixel widths (getStringWidthFloat is a per-glyph walk),
     // index-aligned with chartNotes and shared by both strips; -1 = not yet measured

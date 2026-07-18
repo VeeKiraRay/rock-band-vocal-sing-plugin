@@ -131,6 +131,8 @@ public:
         std::function<void(int)>    setSquashGuard;
         bool                        initWrap           { true };
         std::function<void(bool)>   setWrap;
+        int                         initPitchTol       { 50 };
+        std::function<void(int)>    setPitchTol;
         bool                        showLoadMidi       { false };
         std::function<void()>       loadMidi;
     };
@@ -152,6 +154,7 @@ public:
         static const juce::String kTipLyricSize = "Size of the lyric-strip text. The strips (and the default window height) grow or shrink to match.";
         static const juce::String kTipSquash    = "What scrolling lyrics do when packed words would overlap: push them apart (Spacing), squeeze the text to fit (Auto-shrink), or squeeze a little then push the rest (Hybrid).";
         static const juce::String kTipWrap     = "Wraps your detected pitch by octave to match the chart range when you sing an octave too high or low.";
+        static const juce::String kTipPitchTol = "How close to the note you must sing to score GREAT, in cents (100 = one semitone). Twice this distance still counts as CLOSE.";
         static const juce::String kTipGate     = "Minimum mic volume before pitch detection activates. Raise if background noise triggers false readings.";
 
         setupLabel (rateLabel, "Frame cap", kTipRate);
@@ -261,6 +264,19 @@ public:
             this->cbs.setWrap (wrapToggle.getToggleState());
         };
 
+        setupLabel (pitchTolLabel, "Pitch Tolerance", kTipPitchTol);
+        pitchTolSlider.setSliderStyle (juce::Slider::IncDecButtons);
+        pitchTolSlider.setRange (25, 100, 25);
+        pitchTolSlider.setValue (this->cbs.initPitchTol, juce::dontSendNotification);
+        pitchTolSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        pitchTolSlider.setTextValueSuffix (" cents");
+        pitchTolSlider.setTooltip (kTipPitchTol);
+        pitchTolSlider.onValueChange = [this]
+        {
+            this->cbs.setPitchTol ((int) pitchTolSlider.getValue());
+        };
+        addAndMakeVisible (pitchTolSlider);
+
         setupLabel (gateLabel, "Mic Gate", kTipGate);
         gateSlider.setRange (0.001, 0.05, 0.0);
         gateSlider.setValue (proc.gateThreshold.load (std::memory_order_relaxed),
@@ -332,6 +348,7 @@ public:
         area.removeFromTop (kSecGap);
         layoutHdr (singingHeader);
         layoutRow (wrapLabel, wrapToggle, 24);
+        layoutRow (pitchTolLabel, pitchTolSlider);
         layoutRow (gateLabel, gateSlider);
 
         if (cbs.showLoadMidi)
@@ -351,12 +368,12 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (4) + SINGING (2), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (4) + SINGING (3), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (4)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (2);
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (3);
 
 private:
     void setupHeader (juce::Label& lbl, const juce::String& text)
@@ -417,6 +434,8 @@ private:
 
     juce::Label         wrapLabel;
     juce::ToggleButton  wrapToggle;
+    juce::Label         pitchTolLabel;
+    juce::Slider        pitchTolSlider;
     juce::Label         gateLabel;
     juce::Slider        gateSlider;
 
@@ -586,6 +605,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setSquashGuard     = [safe] (int v)    { if (safe) { safe->squashGuard = (SquashMode) juce::jlimit (0, 3, v); safe->audioProcessor.savedSquashGuard = v; safe->repaint(); } };
         cbs.initWrap           = octaveWrap;
         cbs.setWrap            = [safe] (bool v)   { if (safe) { safe->octaveWrap = v; safe->audioProcessor.savedOctaveWrap = v; } };
+        cbs.initPitchTol       = pitchTolCents;
+        cbs.setPitchTol        = [safe] (int v)    { if (safe) { safe->pitchTolCents = juce::jlimit (25, 100, v); safe->audioProcessor.savedPitchTolCents = safe->pitchTolCents; } };
         cbs.showLoadMidi       = !audioProcessor.reaperApi.isLoaded();
         cbs.loadMidi           = [safe]()           { if (safe) safe->openMidiFile(); };
 
@@ -655,6 +676,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     targetFrameInterval = audioProcessor.savedFrameInterval;
     reaperPriority      = audioProcessor.savedReaperPriority;
     octaveWrap          = audioProcessor.savedOctaveWrap;
+    pitchTolCents       = juce::jlimit (25, 100, audioProcessor.savedPitchTolCents.load());
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     pixPerSec           = audioProcessor.savedPixPerSec;
     lyricScale          = audioProcessor.savedLyricScale;
@@ -1000,10 +1022,10 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         cachedPlayTime = audioProcessor.currentPlaybackTime.load (std::memory_order_relaxed);
     }
 
-    const int liveNote    = audioProcessor.currentMidiNote.load (std::memory_order_relaxed);
-    const int curLyricMode = (int) lyricMode;
+    const float livePitch    = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
+    const int   curLyricMode = (int) lyricMode;
     const bool changed = (cachedPlayTime  != lastPaintTime)
-                      || (liveNote        != lastPaintNote)
+                      || (livePitch       != lastPaintPitch)
                       || (lastStateCount  != lastPaintStateCount)
                       || (framesDropping  != lastPaintDropping)
                       || (curLyricMode    != lastPaintLyricMode)
@@ -1012,7 +1034,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     if (changed)
     {
         lastPaintTime       = cachedPlayTime;
-        lastPaintNote       = liveNote;
+        lastPaintPitch      = livePitch;
         lastPaintStateCount = lastStateCount;
         lastPaintDropping   = framesDropping;
         lastPaintLyricMode  = curLyricMode;

@@ -378,6 +378,11 @@ fallback — were fixed and un-flagged in the 2026-07-17 patch series.)
   then it contains the actual byte count after. Always null-terminate manually.
 - `CStringA` in `reaper_vst3_interfaces.h` is `typedef const char8* CStringA` from the
   bundled VST3 SDK — plain `const char*`, no ATL required.
+- Never call height-only `g.setFont (12.0f)` in paint code — it keeps the typeface
+  *style* of whatever font is currently in the Graphics context, so text silently
+  flips bold/plain depending on which section drew first (bit us 2026-07-18: the top
+  lyric strip's bold font leaked into the highway labels in Scrolling mode only).
+  Always pass a full `juce::Font (size, style)`.
 - The Settings CallOutBox must stay **editor-parented** (`this`). A `nullptr`/desktop
   parent was tried twice (2026-07-18) to stop the panel clipping at small window
   heights, and reverted both times: (1) a desktop window doesn't inherit the host's

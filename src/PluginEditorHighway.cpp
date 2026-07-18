@@ -139,7 +139,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 
     // Pitch range labels (top = highest, bottom = lowest)
     {
-        g.setFont (10.0f);
+        g.setFont (juce::Font (10.0f, juce::Font::bold));
         g.setColour (juce::Colour (0x99ffffff));
         const int maxP = (int) std::round (fMaxP);
         const int minP = (int) std::round (fMinP);
@@ -171,7 +171,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     // the z-order (Harm3 → Harm2 → Main) keeps the lead on top.
     g.saveState();
     g.reduceClipRegion (area);
-    g.setFont (10.0f);
+    g.setFont (juce::Font (10.0f, juce::Font::bold));
 
     // Visible time window. Notes are sorted by startTime, so each part can binary-search
     // to the first potentially-visible note and stop once notes scroll past the right
@@ -432,7 +432,7 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
         timeStr += " / " + fmtTime (endTime);
 
     g.setColour (juce::Colours::white);
-    g.setFont   (11.0f);
+    g.setFont   (juce::Font (11.0f, juce::Font::bold));
     g.drawText  (timeStr, timeCol, juce::Justification::centredLeft, false);
 
     // ── Traffic light ────────────────────────────────────────────────────────
@@ -528,7 +528,7 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     g.fillEllipse (lx + 1.5f, ly + 1.5f, r * 2.0f - 3.0f, r * 2.0f - 3.0f);
 
     g.setColour (juce::Colours::lightgrey);
-    g.setFont   (10.0f);
+    g.setFont   (juce::Font (10.0f, juce::Font::bold));
     g.drawText  (lightLabel, lightCol.withTrimmedTop (30), juce::Justification::centred, false);
 
     // ── Note display ─────────────────────────────────────────────────────────
@@ -543,14 +543,14 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
                      row.withHeight (38), juce::Justification::centred, false);
 
         g.setColour (juce::Colours::grey);
-        g.setFont   (12.0f);
+        g.setFont   (juce::Font (12.0f, juce::Font::bold));
         g.drawText  ("MIDI " + juce::String (note) + "   " + juce::String (hz, 1) + " Hz",
                      row.withTrimmedTop (38), juce::Justification::centred, false);
     }
     else
     {
         g.setColour (juce::Colours::darkgrey);
-        g.setFont   (14.0f);
+        g.setFont   (juce::Font (14.0f, juce::Font::bold));
         g.drawText  ("Waiting for audio...", row, juce::Justification::centred, false);
     }
 }
@@ -570,7 +570,7 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
 
     const int  fps  = (int) std::lround (displayFps);
     const auto text = area.reduced (8, 0);
-    g.setFont (12.0f);
+    g.setFont (juce::Font (12.0f, juce::Font::bold));
     g.setColour (juce::Colour (0xff556070));  // always faint
     const juce::String calibStr = (latencyOffsetMs == 0)
                                       ? "0 ms"
@@ -617,7 +617,7 @@ void RBVocalSingAudioProcessorEditor::drawMessageBar (juce::Graphics& g,
     g.drawHorizontalLine (area.getY(), (float) area.getX(), (float) area.getRight());
 
     const auto text = area.reduced (8, 0);
-    g.setFont (12.0f);
+    g.setFont (juce::Font (12.0f, juce::Font::bold));
 
     if (framesDropping)
     {

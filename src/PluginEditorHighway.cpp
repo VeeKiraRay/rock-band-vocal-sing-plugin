@@ -385,6 +385,49 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         }
     }
 
+    // Pitch trail (b4): the sung contour of the current pass, drawn behind the
+    // arrowhead at raw (unsnapped) pitch. Samples are time-ascending — binary-search
+    // to the first visible one and walk. Octave wrapping mirrors the arrowhead (wrap
+    // the rounded note into the section range, carry the fractional offset); with
+    // wrapping off, out-of-range samples break the contour like gap markers do.
+    if (pitchTrailOn && ! pitchTrail.empty())
+    {
+        auto trailIt = std::lower_bound (pitchTrail.begin(), pitchTrail.end(), visibleLeft,
+            [] (const TrailSample& s, double v) { return s.time < v; });
+
+        juce::Path trail;
+        bool open = false;
+        for (; trailIt != pitchTrail.end(); ++trailIt)
+        {
+            if (trailIt->time > rightTime) break;
+            if (trailIt->pitch < 0.0f) { open = false; continue; }
+
+            const int  rounded = juce::jlimit (0, 127, juce::roundToInt (trailIt->pitch));
+            const bool inR     = ((float) rounded >= fMinP && (float) rounded <= fMaxP);
+            if (! inR && ! octaveWrap) { open = false; continue; }
+
+            const float p = inR ? trailIt->pitch
+                                : (float) wrapPitchIntoRange (rounded, (int) fMinP, (int) fMaxP,
+                                                              audioProcessor.getPitchClassCandidates())
+                                      + (trailIt->pitch - (float) rounded);
+
+            const float x = phX + (float) (trailIt->time - t) * pixPerSec;
+            const float y = pitchY (p);
+            if (open) trail.lineTo (x, y);
+            else      { trail.startNewSubPath (x, y); open = true; }
+        }
+
+        if (! trail.isEmpty())
+        {
+            g.saveState();
+            g.reduceClipRegion (area);
+            g.setColour (kPitchTrailColour);
+            g.strokePath (trail, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved,
+                                                       juce::PathStrokeType::rounded));
+            g.restoreState();
+        }
+    }
+
     // Arrowhead for live pitch — drawn at the fractional pitch (cents precision) so it
     // glides through slides instead of stepping by semitone (b2). White when in range;
     // amber when octave-wrapped out of range (the wrap moves the rounded note and
@@ -465,11 +508,13 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 #endif
 }
 
-// ─── Note-hit tracking ────────────────────────────────────────────────────────
+// ─── Sung-pass tracking (note hits + pitch trail) ─────────────────────────────
 // Called once per frame from onFrame(). Accumulates, per chart note, the spans of
 // playback time the singer was within the scoring tolerance (talkie = presence),
-// merging contiguous frames into one span. drawHighway overlays the spans on the
-// bars; the coverage ratio is the future phrase-scoring input (b3).
+// merging contiguous frames into one span — drawHighway overlays the spans on the
+// bars, and the coverage ratio is the future phrase-scoring input (b3). Also appends
+// the sung fractional pitch to the pass's pitch trail (b4); both share the
+// hitResetPending / chart-version lifecycle so a new pass starts clean together.
 
 void RBVocalSingAudioProcessorEditor::updateNoteHits()
 {
@@ -479,6 +524,7 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     {
         noteHitVersion = audioProcessor.getChartVersion();
         noteHitSpans.assign (notes.size(), {});
+        pitchTrail.clear();
         lastHitTrackTime = -1.0;
     }
 
@@ -505,10 +551,28 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         hitResetPending = false;
         for (auto& spans : noteHitSpans)
             spans.clear();
+        pitchTrail.clear();
     }
 
     const bool  voiced = audioProcessor.audioAboveGate.load (std::memory_order_relaxed);
     const float midiF  = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
+
+    // Trail capture (b4, skipped when the Pitch Trail setting is off): one sample per
+    // accumulating frame; an unvoiced stretch adds a single gap marker so the drawn
+    // contour breaks across silences.
+    if (pitchTrailOn)
+    {
+        if (midiF >= 0.0f)
+            pitchTrail.push_back ({ t, midiF });
+        else if (! pitchTrail.empty() && pitchTrail.back().pitch >= 0.0f)
+            pitchTrail.push_back ({ t, -1.0f });
+    }
+
+    // Degenerate-session guard (~25 min of continuous singing at 60 fps) — drop the
+    // older half rather than growing without bound.
+    if (pitchTrail.size() > 100000)
+        pitchTrail.erase (pitchTrail.begin(),
+                          pitchTrail.begin() + (std::ptrdiff_t) (pitchTrail.size() / 2));
     const float scoringPitch = scoringPitchFor (midiF, octaveWrap,
                                                 audioProcessor.chartMinPitch,
                                                 audioProcessor.chartMaxPitch,

@@ -27,6 +27,9 @@ inline const juce::Colour kOverdriveTextColour { 0xffffd000 };  // golden yellow
 // "spark trail" language. A white overlay was tried first and read too faint on cyan
 // (green+blue already maxed, only the red channel could move).
 inline const juce::Colour kNoteHitColour       { 0xffffd000 };
+// Sung-pitch contour of the current pass (b4 pitch trail) — faint white so it reads
+// over the dark background and every part colour without competing with the bars.
+inline const juce::Colour kPitchTrailColour    { 0x66ffffff };
 inline const juce::Colour kPhraseSepColour     { 0x55aaaacc };  // muted blue-grey phrase separator
 
 inline juce::Colour colourForPart (VocalPart part)

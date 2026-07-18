@@ -133,6 +133,8 @@ public:
         std::function<void(bool)>   setWrap;
         int                         initPitchTol       { 50 };
         std::function<void(int)>    setPitchTol;
+        bool                        initPitchTrail     { true };
+        std::function<void(bool)>   setPitchTrail;
         bool                        showLoadMidi       { false };
         std::function<void()>       loadMidi;
     };
@@ -155,6 +157,7 @@ public:
         static const juce::String kTipSquash    = "What scrolling lyrics do when packed words would overlap: push them apart (Spacing), squeeze the text to fit (Auto-shrink), or squeeze a little then push the rest (Hybrid).";
         static const juce::String kTipWrap     = "Wraps your detected pitch by octave to match the chart range when you sing an octave too high or low.";
         static const juce::String kTipPitchTol = "How close to the note you must sing to score GREAT, in cents (100 = one semitone). Twice this distance still counts as CLOSE.";
+        static const juce::String kTipTrail    = "Draws the pitch you actually sang as a faint contour on the highway (no snapping), so scoops and drift are visible. Clears when the next pass starts.";
         static const juce::String kTipGate     = "Minimum mic volume before pitch detection activates. Raise if background noise triggers false readings.";
 
         setupLabel (rateLabel, "Frame cap", kTipRate);
@@ -264,6 +267,13 @@ public:
             this->cbs.setWrap (wrapToggle.getToggleState());
         };
 
+        setupLabel (trailLabel, "Pitch Trail", kTipTrail);
+        setupToggle (trailToggle, this->cbs.initPitchTrail, kTipTrail);
+        trailToggle.onClick = [this]
+        {
+            this->cbs.setPitchTrail (trailToggle.getToggleState());
+        };
+
         setupLabel (pitchTolLabel, "Pitch Tolerance", kTipPitchTol);
         pitchTolSlider.setSliderStyle (juce::Slider::IncDecButtons);
         pitchTolSlider.setRange (25, 100, 25);
@@ -348,6 +358,7 @@ public:
         area.removeFromTop (kSecGap);
         layoutHdr (singingHeader);
         layoutRow (wrapLabel, wrapToggle, 24);
+        layoutRow (trailLabel, trailToggle, 24);
         layoutRow (pitchTolLabel, pitchTolSlider);
         layoutRow (gateLabel, gateSlider);
 
@@ -368,12 +379,12 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (4) + SINGING (3), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (4) + SINGING (4), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (4)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (3);
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (4);
 
 private:
     void setupHeader (juce::Label& lbl, const juce::String& text)
@@ -434,6 +445,8 @@ private:
 
     juce::Label         wrapLabel;
     juce::ToggleButton  wrapToggle;
+    juce::Label         trailLabel;
+    juce::ToggleButton  trailToggle;
     juce::Label         pitchTolLabel;
     juce::Slider        pitchTolSlider;
     juce::Label         gateLabel;
@@ -607,6 +620,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setWrap            = [safe] (bool v)   { if (safe) { safe->octaveWrap = v; safe->audioProcessor.savedOctaveWrap = v; } };
         cbs.initPitchTol       = pitchTolCents;
         cbs.setPitchTol        = [safe] (int v)    { if (safe) { safe->pitchTolCents = juce::jlimit (25, 100, v); safe->audioProcessor.savedPitchTolCents = safe->pitchTolCents; } };
+        cbs.initPitchTrail     = pitchTrailOn;
+        cbs.setPitchTrail      = [safe] (bool v)   { if (safe) { safe->pitchTrailOn = v; safe->audioProcessor.savedPitchTrail = v; safe->repaint(); } };
         cbs.showLoadMidi       = !audioProcessor.reaperApi.isLoaded();
         cbs.loadMidi           = [safe]()           { if (safe) safe->openMidiFile(); };
 
@@ -677,6 +692,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     reaperPriority      = audioProcessor.savedReaperPriority;
     octaveWrap          = audioProcessor.savedOctaveWrap;
     pitchTolCents       = juce::jlimit (25, 100, audioProcessor.savedPitchTolCents.load());
+    pitchTrailOn        = audioProcessor.savedPitchTrail;
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     pixPerSec           = audioProcessor.savedPixPerSec;
     lyricScale          = audioProcessor.savedLyricScale;

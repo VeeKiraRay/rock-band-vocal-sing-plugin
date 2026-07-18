@@ -168,6 +168,9 @@ private:
     // Traffic-light GREAT window in cents (100 = one semitone); CLOSE is 2× this.
     // Settings stepper ±25/±50/±75/±100 (PITCH_DETECTION_IMPROVEMENT.md b1).
     int   pitchTolCents   { 50 };
+    // Whether the sung-pitch contour draws on the highway (b4). Off skips capture and
+    // draw; the pass-lifecycle clears stay unconditional so stale trail can't linger.
+    bool  pitchTrailOn    { true };
 
     // Note-hit tracking (b3): per-note spans of playback time sung within the scoring
     // tolerance, index-aligned with chartNotes and keyed on getChartVersion() like the
@@ -182,6 +185,14 @@ private:
     int    noteHitVersion   { -1 };
     double lastHitTrackTime { -1.0 };   // previous frame's play time; <0 = no history
     bool   hitResetPending  { true };   // clear spans when accumulation next resumes
+
+    // Pitch trail (b4): the sung fractional pitch of the current pass, one sample per
+    // accumulating frame, time-ascending. Raw (unsnapped, unwrapped) pitch — octave
+    // wrapping is applied per-sample at draw so the toggle and section transitions
+    // apply live; pitch < 0 is a gap marker that breaks the drawn contour. Shares the
+    // hit-span lifecycle: cleared with noteHitSpans on a new pass or chart reload.
+    struct TrailSample { double time; float pitch; };
+    std::vector<TrailSample> pitchTrail;
 
     // Scrolling-strip lyric pixel widths (getStringWidthFloat is a per-glyph walk),
     // index-aligned with chartNotes and shared by both strips; -1 = not yet measured

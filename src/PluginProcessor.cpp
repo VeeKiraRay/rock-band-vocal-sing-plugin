@@ -126,6 +126,7 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("reaperPriority", savedReaperPriority.load(),   nullptr);
     state.setProperty ("octaveWrap",     savedOctaveWrap.load(),       nullptr);
     state.setProperty ("pitchTolCents",  savedPitchTolCents.load(),    nullptr);
+    state.setProperty ("pitchTrail",     savedPitchTrail.load(),       nullptr);
     state.setProperty ("latencyMs",      savedLatencyOffsetMs.load(),  nullptr);
     state.setProperty ("pixPerSec",      (double) savedPixPerSec.load(), nullptr);
     state.setProperty ("lyricScale",     (double) savedLyricScale.load(), nullptr);
@@ -149,6 +150,7 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     savedReaperPriority  =        (bool)   state.getProperty ("reaperPriority", false);
     savedOctaveWrap      =        (bool)   state.getProperty ("octaveWrap",     true);
     savedPitchTolCents   =        (int)    state.getProperty ("pitchTolCents",  50);
+    savedPitchTrail      =        (bool)   state.getProperty ("pitchTrail",     true);
     savedLatencyOffsetMs =        (int)    state.getProperty ("latencyMs",      0);
     savedPixPerSec       = (float)(double) state.getProperty ("pixPerSec",      200.0);
     savedLyricScale      = (float)(double) state.getProperty ("lyricScale",     1.0);

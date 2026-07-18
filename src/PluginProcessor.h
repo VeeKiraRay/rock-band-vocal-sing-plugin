@@ -162,6 +162,7 @@ public:
     std::atomic<bool>   savedReaperPriority  { false };
     std::atomic<bool>   savedOctaveWrap      { true };
     std::atomic<int>    savedPitchTolCents   { 50 };  // GREAT window ± cents; CLOSE = 2× (b1)
+    std::atomic<bool>   savedPitchTrail      { true };  // sung-pitch contour on the highway (b4)
     std::atomic<int>    savedLatencyOffsetMs { 0 };
     std::atomic<float>  savedPixPerSec       { 200.0f };
     std::atomic<float>  savedLyricScale      { 1.0f };

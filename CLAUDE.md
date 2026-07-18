@@ -200,7 +200,11 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   accumulating frame) and the
   note loop fills them gold (`kNoteHitColour`; a white overlay was too faint on
   cyan — see EditorVisuals.h) (b3; the coverage ratio is the future phrase-scoring
-  input). Pitch range
+  input), and a pitch trail (b4) — `updateNoteHits()` also appends the sung
+  fractional pitch per frame (`pitchTrail`, gap markers break silences, same
+  new-pass lifecycle as the hit spans) and drawHighway strokes it as a faint white
+  contour (`kPitchTrailColour`) behind the arrowhead, raw/unsnapped, octave-wrapped
+  per-sample at draw. Pitch range
   animates per Range-Shift section (smoothstep over the marker length); the per-frame
   geometry is cached (`lastHighwayArea`/`lastFMinP`/…) so mouse hit-testing matches the
   screen exactly.
@@ -231,11 +235,12 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   CPU/GL-session/GL-persist; Calibration −200..+500 ms; Note Speed 100–400 px/s; Lyrics
   Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
-  Octave Wrapping on; Pitch Tolerance ±25/50/75/100 cents default ±50; Mic gate;
-  Load MIDI File when no REAPER API) + **Allow edits** toggle in the stats band.
+  Octave Wrapping on; Pitch Trail on; Pitch Tolerance ±25/50/75/100 cents default
+  ±50; Mic gate; Load MIDI File when no REAPER API) + **Allow edits** toggle in the
+  stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
-  frameInterval, reaperPriority, octaveWrap, pitchTolCents, latencyMs, pixPerSec,
-  lyricScale, squashGuard, lyricMode, renderer.
+  frameInterval, reaperPriority, octaveWrap, pitchTolCents, pitchTrail, latencyMs,
+  pixPerSec, lyricScale, squashGuard, lyricMode, renderer.
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
@@ -312,11 +317,12 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   CallOutBox as before) whenever it is taller than the window minus popup headroom —
   which also covers user-shrunk windows. Desktop-parented (`nullptr`) variants were
   tried and reverted the same day (scale/DPI problems — see Known gotchas).
-- **Cents accuracy + assist features done** (2026-07-18, 4-patch series) — fractional
+- **Cents accuracy + assist features done** (2026-07-18/19 patch series) — fractional
   pitch (`currentMidiFloat`), cents traffic light + Pitch Tolerance setting, visual
-  snap, note-hit highlighting (PITCH_DETECTION_IMPROVEMENT.md §d "do first" set).
-  Remaining from that doc: engine v2 (c4 downsample → c3 FFT NSDF → c2 overlapping
-  windows, then c5 confidence gating / c6 median filter) and the b4 pitch trail.
+  snap, note-hit highlighting, and the b4 pitch trail (Pitch Trail toggle, default
+  on). Remaining from PITCH_DETECTION_IMPROVEMENT.md: engine v2 (c4 downsample →
+  c3 FFT NSDF → c2 overlapping windows, then c5 confidence gating / c6 median
+  filter).
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
   the note-hit spans: per-note coverage ratio is already accumulated in `noteHitSpans`).
 - **Note timing/length editing** — natural next step after pitch editing, but timing

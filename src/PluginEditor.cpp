@@ -1021,7 +1021,12 @@ void RBVocalSingAudioProcessorEditor::onFrame()
 
             const int playState = audioProcessor.reaperApi.GetPlayState
                                       ? audioProcessor.reaperApi.GetPlayState() : 0;
-            const bool nowPlaying = (playState & 1) != 0;
+
+            // Playing = bit 0 set and NOT paused (bit 1). REAPER can report paused
+            // playback with both bits set; a paused transport must never count as
+            // playing here — audio isn't running, so no sung time can accumulate and
+            // the deferred highlight reset must not fire on paused cursor moves.
+            const bool nowPlaying = (playState & 1) != 0 && (playState & 2) == 0;
 
             // Every playback start is a new sung pass: clear the note-hit highlights.
             // Explicit alongside updateNoteHits()'s jump detection so the reset

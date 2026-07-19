@@ -21,6 +21,9 @@ private:
     // frame. Body in PluginEditorHighway.cpp next to the scoring helpers it shares
     // with the traffic light.
     void updateNoteHits  ();
+    // Re-aligns noteHitSpans to a freshly reloaded chart by note identity (see
+    // noteHitKeys) instead of clearing — only actually-changed notes lose their gold.
+    void remapNoteHitSpans ();
     void drawStatusBar   (juce::Graphics&, juce::Rectangle<int>);   // fps / priority / renderer info
     void drawMessageBar  (juce::Graphics&, juce::Rectangle<int>);   // chart status + frame-skip warning
     void openMidiFile    ();
@@ -173,24 +176,38 @@ private:
     bool  pitchTrailOn    { true };
 
     // Note-hit tracking: per-note spans of playback time sung within the scoring
-    // tolerance, index-aligned with chartNotes and keyed on getChartVersion() like the
-    // lyric-width cache. drawHighway fills the covered portions of each bar gold; the
-    // per-note coverage ratio is the building block for phrase-level scoring later.
+    // tolerance, index-aligned with chartNotes. drawHighway fills the covered
+    // portions of each bar gold; the per-note coverage ratio is the building block
+    // for phrase-level scoring later. Accumulation only happens while the transport
+    // is actually playing (REAPER path) — while stopped the tracked time follows the
+    // edit cursor, so cursor moves must not count as singing or fire the reset.
     // Highlights persist while stopped so the take can be reviewed; hitResetPending
     // arms on any time discontinuity (seek, loop wrap) *and* on every stopped→playing
     // transition (onFrame poll gate — uniform across REAPER cursor-on-stop prefs),
-    // then the next sung pass starts from a clean slate. (Could become a setting if a
-    // keep-across-passes workflow surfaces.)
+    // then the next sung pass starts from a clean slate. Chart reloads remap the
+    // spans by note identity (remapNoteHitSpans) instead of clearing. (Could become
+    // a setting if a keep-across-passes workflow surfaces.)
     std::vector<std::vector<std::pair<double, double>>> noteHitSpans;
     int    noteHitVersion   { -1 };
     double lastHitTrackTime { -1.0 };   // previous frame's play time; <0 = no history
     bool   hitResetPending  { true };   // clear spans when accumulation next resumes
 
+    // Identity snapshot of the chart the spans are aligned to. On reload, a note
+    // matching on (startTime, endTime, part) keeps its gold if its pitch is also
+    // unchanged — so editing one note drops only that note's spans, and unrelated
+    // project changes (which still trigger a chart re-read) drop nothing.
+    struct NoteKey { double start, end; VocalPart part; int pitch; };
+    std::vector<NoteKey> noteHitKeys;
+    // Spans parked during a transient empty reload (still aligned with the preserved
+    // noteHitKeys); the next non-empty remap consumes them, so a mid-flush failed
+    // chart read doesn't permanently lose the gold. See remapNoteHitSpans().
+    std::vector<std::vector<std::pair<double, double>>> parkedHitSpans;
+
     // Pitch trail: the sung fractional pitch of the current pass, one sample per
     // accumulating frame, time-ascending. Raw (unsnapped, unwrapped) pitch — octave
     // wrapping is applied per-sample at draw so the toggle and section transitions
-    // apply live; pitch < 0 is a gap marker that breaks the drawn contour. Shares the
-    // hit-span lifecycle: cleared with noteHitSpans on a new pass or chart reload.
+    // apply live; pitch < 0 is a gap marker that breaks the drawn contour. Cleared on
+    // a new pass with the hit spans; survives chart reloads (references no notes).
     struct TrailSample { double time; float pitch; };
     std::vector<TrailSample> pitchTrail;
 

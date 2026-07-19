@@ -198,11 +198,15 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   active note's lane when within the Pitch Tolerance (b2 visual snap; the idle-repaint
   gate tracks `currentMidiFloat` so sub-semitone movement repaints), and note-hit
   highlighting — `updateNoteHits()` (called from `onFrame()`) accumulates per-note
-  sung-within-tolerance spans (`noteHitSpans`, chartVersion-keyed; persist while
-  stopped for review, cleared when the next pass starts via `hitResetPending` —
-  armed by any time discontinuity *and* by every stopped→playing transition so the
-  reset is independent of REAPER's cursor-on-stop preference, fired on the next
-  accumulating frame) and the
+  sung-within-tolerance spans (`noteHitSpans`; accumulation only while actually
+  playing on the REAPER path, since the stopped-state time follows the edit cursor;
+  persist while stopped for review, cleared when the next pass starts via
+  `hitResetPending` — armed by any time discontinuity *and* by every stopped→playing
+  transition so the reset is independent of REAPER's cursor-on-stop preference,
+  fired on the next accumulating frame; chart reloads remap spans by note identity
+  via `remapNoteHitSpans()` — tolerance-matched, since REAPER take rewrites drift
+  the PPQ→time recompute by ULPs, and robust to transient empty reads — so only
+  actually-edited notes lose their gold) and the
   note loop fills them gold (`kNoteHitColour`; a white overlay was too faint on
   cyan — see EditorVisuals.h) (b3; the coverage ratio is the future phrase-scoring
   input), and a pitch trail (b4) — `updateNoteHits()` also appends the sung

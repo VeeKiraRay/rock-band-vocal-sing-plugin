@@ -513,19 +513,21 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 // playback time the singer was within the scoring tolerance (talkie = presence),
 // merging contiguous frames into one span — drawHighway overlays the spans on the
 // bars, and the coverage ratio is the future phrase-scoring input. Also appends
-// the sung fractional pitch to the pass's pitch trail; both share the
-// hitResetPending / chart-version lifecycle so a new pass starts clean together.
+// the sung fractional pitch to the pass's pitch trail. Both clear together when the
+// next pass starts (hitResetPending); chart reloads remap the spans by note identity
+// (remapNoteHitSpans) and leave the trail untouched.
 
 void RBVocalSingAudioProcessorEditor::updateNoteHits()
 {
     const auto& notes = audioProcessor.getChartNotes();
 
+    // A chart reload is not a time discontinuity and must not wipe the review state
+    // — remap the spans onto the reloaded note list by identity instead (only
+    // actually-changed notes lose their gold; the trail references no notes at all).
     if (audioProcessor.getChartVersion() != noteHitVersion)
     {
         noteHitVersion = audioProcessor.getChartVersion();
-        noteHitSpans.assign (notes.size(), {});
-        pitchTrail.clear();
-        lastHitTrackTime = -1.0;
+        remapNoteHitSpans();
     }
 
     const double t  = cachedPlayTime - (latencyOffsetMs / 1000.0);  // matches paint()
@@ -544,6 +546,14 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         return;
     }
     if (t == t0)
+        return;
+
+    // While stopped, the tracked time follows the edit cursor — a small forward
+    // nudge (clicking/dragging in REAPER's arrange view) must neither count as sung
+    // time nor fire a pending reset. Only the REAPER path has a play-state signal;
+    // the file fallback keeps the pure time heuristic (its host playhead only
+    // advances during playback).
+    if (audioProcessor.reaperApi.isLoaded() && ! lastIsPlaying)
         return;
 
     if (hitResetPending)
@@ -611,6 +621,70 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         else
             spans.emplace_back (s, e);
     }
+}
+
+// Re-aligns noteHitSpans to a freshly reloaded chart. Both the old identity snapshot
+// (noteHitKeys) and the reloaded chartNotes are sorted by startTime, so a two-pointer
+// walk matches each new note to its old self on (startTime, endTime, part); the gold
+// carries over only when the pitch is also unchanged (the spans measured tolerance
+// against the old pitch). Unmatched notes — timing edits, insertions, deletions —
+// start with no spans, and everything else survives the reload untouched.
+
+void RBVocalSingAudioProcessorEditor::remapNoteHitSpans()
+{
+    // Matching needs a tolerance, not exact equality: whenever REAPER rewrites the
+    // take (a MIDI editor flushing its buffer on stop, MIDI_SetNote +
+    // MarkTrackItemsDirty re-serialising after a pitch edit) the PPQ→time recompute
+    // can drift by last-bit ULPs, and exact comparison then silently dropped every
+    // span. 0.1 ms is far above any serialisation drift, far below any real edit.
+    static constexpr double kNoteMatchEps = 1e-4;
+
+    const auto& notes = audioProcessor.getChartNotes();
+
+    // Transient empty read (e.g. a reload racing the take flush): park the spans and
+    // keep the identity snapshot, so a recovered chart gets its gold back on the
+    // next non-empty reload. Nothing is drawn while the chart is empty anyway.
+    if (notes.empty())
+    {
+        if (! noteHitKeys.empty() && parkedHitSpans.empty())
+            parkedHitSpans = std::move (noteHitSpans);
+        noteHitSpans.clear();
+        return;
+    }
+
+    auto& oldSpans = parkedHitSpans.empty() ? noteHitSpans : parkedHitSpans;
+
+    std::vector<std::vector<std::pair<double, double>>> newSpans (notes.size());
+
+    size_t oldIdx = 0;
+    for (size_t newIdx = 0; newIdx < notes.size(); ++newIdx)
+    {
+        const auto& n = notes[newIdx];
+        while (oldIdx < noteHitKeys.size()
+               && noteHitKeys[oldIdx].start < n.startTime - kNoteMatchEps)
+            ++oldIdx;
+        // Scan the run of near-equal start times (Harmonies parts can share one) for
+        // the matching part + end time.
+        for (size_t k = oldIdx; k < noteHitKeys.size()
+                                && noteHitKeys[k].start <= n.startTime + kNoteMatchEps; ++k)
+        {
+            const auto& key = noteHitKeys[k];
+            if (std::abs (key.end - n.endTime) < kNoteMatchEps && key.part == n.part)
+            {
+                if (key.pitch == n.pitch && k < oldSpans.size())
+                    newSpans[newIdx] = std::move (oldSpans[k]);
+                break;
+            }
+        }
+    }
+
+    noteHitSpans = std::move (newSpans);
+    parkedHitSpans.clear();
+
+    noteHitKeys.resize (notes.size());
+    for (size_t i = 0; i < notes.size(); ++i)
+        noteHitKeys[i] = { notes[i].startTime, notes[i].endTime,
+                           notes[i].part, notes[i].pitch };
 }
 
 // ─── Stats panel ──────────────────────────────────────────────────────────────

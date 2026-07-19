@@ -64,6 +64,7 @@ target_link_libraries(RBVocalSing
         juce::juce_audio_processors
         juce::juce_audio_formats
         juce::juce_audio_utils
+        juce::juce_dsp             # juce::dsp::FFT for the pitch detector's NSDF
         juce::juce_opengl          # opt-in GPU rendering (experimental OpenGL toggle)
     PUBLIC
         juce::juce_recommended_config_flags
@@ -107,6 +108,7 @@ if (RBVS_BUILD_TESTS)
             juce::juce_audio_processors
             juce::juce_audio_formats
             juce::juce_audio_utils
+            juce::juce_dsp
             juce::juce_opengl
             Catch2::Catch2
         PUBLIC

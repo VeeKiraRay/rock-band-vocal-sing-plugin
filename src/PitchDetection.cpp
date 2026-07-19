@@ -6,7 +6,8 @@
 // Monophonic pitch detectors for processBlock. detectPitch() applies the RMS gate
 // then dispatches to the algorithm chosen by pitchMethod. All members of
 // RBVocalSingAudioProcessor; processBlock (in PluginProcessor.cpp) calls detectPitch
-// across the TU boundary.
+// across the TU boundary. The detectors operate on the decimated ~16 kHz stream —
+// all lag/frequency maths uses detectRate, never the host rate.
 
 // ─── Pitch dispatcher ─────────────────────────────────────────────────────────
 
@@ -20,20 +21,30 @@ float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSampl
     if (!aboveGate)
         return 0.0f;
 
+    lastDetectClarity = 0.0f;
+
+    float hz = 0.0f;
     switch (pitchMethod.load (std::memory_order_relaxed))
     {
-        case 1:  return detectPitchYIN             (samples, numSamples);
-        case 2:  return detectPitchMPM             (samples, numSamples);
-        default: return detectPitchAutocorrelation (samples, numSamples);
+        case 1:  hz = detectPitchYIN             (samples, numSamples); break;
+        case 2:  hz = detectPitchMPM             (samples, numSamples); break;
+        default: hz = detectPitchAutocorrelation (samples, numSamples); break;
     }
+
+    // The fallback detectors have no confidence measure — a successful detection
+    // counts as fully voiced so the clarity consumers behave sanely under them.
+    if (hz > 0.0f && lastDetectClarity <= 0.0f)
+        lastDetectClarity = 1.0f;
+
+    return hz;
 }
 
 // ─── Autocorrelation ──────────────────────────────────────────────────────────
 
 float RBVocalSingAudioProcessor::detectPitchAutocorrelation (const float* samples, int numSamples)
 {
-    const int minLag = (int) (storedSampleRate / 1000.0);
-    const int maxLag = std::min ((int) (storedSampleRate / 80.0), kMaxLagBuf - 1);
+    const int minLag = (int) (detectRate / 1000.0);
+    const int maxLag = std::min ((int) (detectRate / 80.0), kMaxLagBuf - 1);
 
     if (numSamples < maxLag * 2) return 0.0f;
 
@@ -50,15 +61,15 @@ float RBVocalSingAudioProcessor::detectPitchAutocorrelation (const float* sample
         if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
     }
 
-    return (float) storedSampleRate / (float) bestLag;
+    return (float) detectRate / (float) bestLag;
 }
 
 // ─── YIN ──────────────────────────────────────────────────────────────────────
 
 float RBVocalSingAudioProcessor::detectPitchYIN (const float* samples, int numSamples)
 {
-    const int minLag = (int) (storedSampleRate / 1000.0);
-    const int maxLag = std::min ((int) (storedSampleRate / 80.0), kMaxLagBuf - 1);
+    const int minLag = (int) (detectRate / 1000.0);
+    const int maxLag = std::min ((int) (detectRate / 80.0), kMaxLagBuf - 1);
     const int W      = numSamples - maxLag;
 
     if (W <= 0) return 0.0f;
@@ -106,26 +117,45 @@ float RBVocalSingAudioProcessor::detectPitchYIN (const float* samples, int numSa
             betterTau = (float) bestTau + (s2 - s0) / (2.0f * denom);
     }
 
-    return (float) storedSampleRate / betterTau;
+    return (float) detectRate / betterTau;
 }
 
 // ─── MPM ──────────────────────────────────────────────────────────────────────
 
 float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSamples)
 {
-    const int minLag = (int) (storedSampleRate / 1000.0);
-    const int maxLag = std::min ((int) (storedSampleRate / 80.0), kMaxLagBuf - 1);
+    const int minLag = (int) (detectRate / 1000.0);
+    const int maxLag = std::min ((int) (detectRate / 80.0), kMaxLagBuf - 1);
+
+    // nsdf(τ) = 2·acf(τ) / m(τ), same values as the direct O(N × maxLag) loop this
+    // replaced — only the computation route changed. acf(τ) for all lags at once is
+    // IFFT(|FFT(x)|²) (zero-padded, kFftSize ≥ numSamples + maxLag keeps it linear);
+    // m(τ) = Σ x_j² + Σ x_{j+τ}² over the overlap comes from a prefix sum of x².
+    jassert (numSamples + maxLag <= kFftSize);
+    jassert (numSamples <= kPitchWindow);
+
+    std::fill (fftScratch, fftScratch + 2 * kFftSize, 0.0f);
+    std::copy (samples, samples + numSamples, fftScratch);
+    pitchFft.performRealOnlyForwardTransform (fftScratch);
+    for (int k = 0; k < kFftSize; ++k)
+    {
+        const float re = fftScratch[2 * k];
+        const float im = fftScratch[2 * k + 1];
+        fftScratch[2 * k]     = re * re + im * im;
+        fftScratch[2 * k + 1] = 0.0f;
+    }
+    pitchFft.performRealOnlyInverseTransform (fftScratch);   // fftScratch[τ] = acf(τ)
+
+    float cum[kPitchWindow + 1];
+    cum[0] = 0.0f;
+    for (int j = 0; j < numSamples; ++j)
+        cum[j + 1] = cum[j] + samples[j] * samples[j];
 
     float nsdf[kMaxLagBuf];
     for (int tau = 0; tau <= maxLag; ++tau)
     {
-        float acf = 0.0f, norm = 0.0f;
-        for (int j = 0; j < numSamples - tau; ++j)
-        {
-            acf  += samples[j] * samples[j + tau];
-            norm += samples[j] * samples[j] + samples[j + tau] * samples[j + tau];
-        }
-        nsdf[tau] = (norm > 0.0f) ? 2.0f * acf / norm : 0.0f;
+        const float m = cum[numSamples - tau] + cum[numSamples] - cum[tau];
+        nsdf[tau] = (m > 0.0f) ? 2.0f * fftScratch[tau] / m : 0.0f;
     }
 
     const float globalMax    = *std::max_element (nsdf + minLag, nsdf + maxLag + 1);
@@ -156,8 +186,20 @@ float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSa
 
     if (bestTau < 0) return 0.0f;
 
+    // A peak sitting on a scan boundary is never a trustworthy pitch — transients
+    // (e.g. the front-end high-pass ringing after an abrupt signal stop) pin the
+    // detection at exactly minLag or maxLag. Reject rather than publish the cap.
+    if (bestTau <= minLag || bestTau >= maxLag)
+        return 0.0f;
+
+    // The chosen NSDF peak height is a 0–1 voicing confidence. Breath, consonants
+    // and noise pass the RMS energy gate but correlate poorly — treat those frames
+    // as unvoiced (they feed the hold decay in processBlock, like silence).
+    lastDetectClarity = std::min (localMax, 1.0f);
+    if (lastDetectClarity < kClarityThreshold)
+        return 0.0f;
+
     float betterTau = (float) bestTau;
-    if (bestTau > minLag && bestTau < maxLag)
     {
         const float s0    = nsdf[bestTau - 1];
         const float s1    = nsdf[bestTau];
@@ -167,5 +209,5 @@ float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSa
             betterTau = (float) bestTau + (s2 - s0) / (2.0f * denom);
     }
 
-    return (float) storedSampleRate / betterTau;
+    return (float) detectRate / betterTau;
 }

@@ -133,7 +133,7 @@ The stats panel compares your live pitch to the **closest active chart note of a
 | 🔴 Red    | Further off than that.                              |
 | ⚪ Grey   | No chart note active, or no pitch sung.             |
 
-> **About pitch detection.** The plugin uses the MPM (McLeod Pitch Method) algorithm — a solid general-purpose pitch tracker, but not infallible. Breath sounds, hard consonants, background noise, and the attack/release of notes can all produce brief false readings. If background noise triggers spurious pitches, raise the **Mic Gate** in Settings. The traffic light is a charting aid: consistent green across a phrase is a good sign that the notes and lyrics are placed correctly; don't treat individual flickers as a definitive grade.
+> **About pitch detection.** The plugin uses the MPM (McLeod Pitch Method) algorithm at roughly 60 estimates per second, with a voicing gate that discards breath sounds, hard consonants and other unpitched audio, and a median filter that suppresses momentary octave errors on note attacks. It is a solid tracker but not infallible — if background noise still triggers spurious pitches, raise the **Mic Gate** in Settings. The traffic light is a charting aid: consistent green across a phrase is a good sign that the notes and lyrics are placed correctly; don't treat individual flickers as a definitive grade.
 
 ### Lyric strips
 

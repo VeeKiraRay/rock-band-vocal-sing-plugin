@@ -144,12 +144,16 @@ public:
     // stored before rounding; -1 when undetected. Feeds cents scoring, the smooth
     // arrowhead, snap assist and the pitch trail.
     std::atomic<float>  currentMidiFloat    { -1.0f };
+    // Voicing confidence of the last analysis (MPM's chosen NSDF peak height, 0–1;
+    // 0 while unvoiced or held). Frames below kClarityThreshold are treated as
+    // unvoiced; the UI may also use this (e.g. dim the arrowhead when uncertain).
+    std::atomic<float>  currentClarity      { 0.0f };
     std::atomic<double> currentPlaybackTime { 0.0 };  // fallback when API unavailable
 
     // ── UI thread -> audio thread ─────────────────────────────────────────────
     std::atomic<float> gateThreshold  { 0.01f };
     std::atomic<bool>  audioAboveGate { false };
-    std::atomic<int>   pitchMethod   { 0 };   // 0=Autocorr  1=YIN  2=MPM
+    std::atomic<int>   pitchMethod   { 2 };   // 0=Autocorr  1=YIN  2=MPM (production default)
 
     // ── Vocal mode (Solo / Harmonies) — set by editor, drives chart re-read ────
     std::atomic<int> vocalMode { (int) VocalMode::Solo };
@@ -179,27 +183,83 @@ private:
         RBVocalSingAudioProcessor& proc;
     } vst3Ext { *this };
 
-    double storedSampleRate { 44100.0 };
-
     float detectPitch                (const float*, int);
     float detectPitchAutocorrelation (const float*, int);
     float detectPitchYIN             (const float*, int);
     float detectPitchMPM             (const float*, int);
 
-    // kPitchBufSize is the analysis window at the ≤48 kHz baseline (2048 ≈ 42.7 ms).
-    // prepareToPlay scales the effective window (pitchBufTarget) with the sample rate so
-    // its real-time span — and the detectors' 80 Hz floor — survive high rates, capped
-    // at kPitchBufCap (= the window at 192 kHz). kMaxLagBuf must exceed the largest lag,
-    // 192000 / 80 = 2400, indexed inclusively. (CODE_REVIEW.md 1.2)
-    static constexpr int kPitchBufSize    = 2048;
-    static constexpr int kPitchBufCap     = 8192;
-    static constexpr int kPitchHoldCycles = 6;
-    static constexpr int kMaxLagBuf       = 2500;
+    // ── Pitch-detection front end ─────────────────────────────────────────────
+    // Detection runs at a fixed ~16 kHz internal rate: processBlock conditions the
+    // input (70 Hz high-pass against rumble/plosives, 6 kHz low-pass anti-alias),
+    // keeps every decimFactor-th sample into a ring of the last kPitchWindow
+    // samples, and analyses the ring every kPitchHop new samples — overlapping
+    // windows, one estimate every ~16 ms (~62/s). All window/lag maths uses
+    // detectRate, never the host rate, so the constants below hold at every host
+    // rate by construction. kPitchWindow = 768 internal samples ≈ 48 ms at 16 kHz.
+    // kMaxLagBuf must exceed the largest lag, detectRate / 80 Hz; the worst case is
+    // a host rate just under 24 kHz (decimFactor 1 → lag ≈ 298), hence 320.
+    // kPitchWindow ≥ 2 × maxLag holds everywhere, keeping the detectors'
+    // autocorrelation guards satisfied.
+    static constexpr int kPitchWindow     = 768;
+    static constexpr int kPitchHop        = 256;  // 3 hops per window
+    static constexpr int kPitchHoldCycles = 16;   // ≈ 260 ms of hold at the ~16 ms hop cadence
+    static constexpr int kMaxLagBuf       = 320;
 
-    float pitchAccum[kPitchBufCap] = {};
-    int   pitchAccumFill  { 0 };
+    // Frames whose NSDF peak is below this are unvoiced (breath, consonants, noise):
+    // they feed the hold decay instead of publishing a garbage pitch.
+    static constexpr float kClarityThreshold = 0.80f;
+
+    // MPM's NSDF autocorrelation term is computed as IFFT(|FFT(x)|²) — O(N log N)
+    // instead of the direct O(N × maxLag) form. kFftSize must be ≥ kPitchWindow +
+    // maxLag (≤ 1087) so the circular correlation is linear over the scanned lags.
+    static constexpr int kFftOrder = 11;
+    static constexpr int kFftSize  = 1 << kFftOrder;   // 2048
+
+    // One transposed-direct-form-II biquad section. Coefficients are written by
+    // setBiquadLP/HP in prepareToPlay only; process() runs on the audio thread.
+    struct Biquad
+    {
+        float b0 {}, b1 {}, b2 {}, a1 {}, a2 {};
+        float z1 {}, z2 {};
+        float process (float x) noexcept
+        {
+            const float y = b0 * x + z1;
+            z1 = b1 * x - a1 * y + z2;
+            z2 = b2 * x - a2 * y;
+            return y;
+        }
+        void reset() noexcept { z1 = z2 = 0.0f; }
+    };
+    static void setBiquadLP (Biquad&, double sampleRate, double freq);
+    static void setBiquadHP (Biquad&, double sampleRate, double freq);
+
+    double detectRate  { 16000.0 };  // internal detection rate = host rate / decimFactor
+    int    decimFactor { 3 };
+    int    decimPhase  { 0 };
+    Biquad hpFilter;                 // 70 Hz high-pass (rumble / plosive rejection)
+    Biquad lpFilter1, lpFilter2;     // 2 × 6 kHz low-pass (decimation anti-alias)
+
+    // Ring of the most recent kPitchWindow internal samples, linearised into
+    // windowScratch for each detection so the detectors see contiguous memory.
+    float pitchRing[kPitchWindow]     = {};
+    float windowScratch[kPitchWindow] = {};
+    int   ringPos         { 0 };   // next write index == oldest sample once filled
+    int   ringFilled      { 0 };   // saturates at kPitchWindow
+    int   hopCount        { 0 };   // internal samples since the last detection
     int   pitchHoldFrames { 0 };
-    int   pitchBufTarget  { kPitchBufSize };  // samples per detection window at storedSampleRate
+    float lastDetectClarity { 0.0f };   // written by detectPitch, published by processBlock
+
+    // The published pitch is the median of the last 3 accepted estimates once the
+    // history is full — a single-frame octave/subharmonic error (note onsets, tone
+    // transitions) never reaches the UI, at the cost of one hop ≈ 16 ms of latency.
+    // Reset on every unvoiced frame so a fresh onset publishes immediately.
+    float medianHist[3] = {};
+    int   medianCount { 0 };
+
+    // Constructed once with the processor (allocation happens off the audio thread);
+    // fftScratch is the in-place real-FFT workspace (2 × kFftSize floats).
+    juce::dsp::FFT pitchFft { kFftOrder };
+    float fftScratch[2 * kFftSize] = {};
 
     std::vector<NoteInfo>    chartNotes;
     std::vector<PhraseInfo>  chartPhrases;       // HARM1 / Solo phrase grid (bottom strip + static)

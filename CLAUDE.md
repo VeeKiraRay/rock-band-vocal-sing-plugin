@@ -19,14 +19,13 @@ work, `_old/` holds completed phases kept for their design rationale.
 | [_old/CODE_REVIEW.md](_old/CODE_REVIEW.md) | 2026-07 full review — §1–§3 all fixed (2026-07-17 patch series); §4 recorded as non-action, §5 informational |
 | [_old/PERFORMANCE_IMPROVEMENT.md](_old/PERFORMANCE_IMPROVEMENT.md) | 2026-07 paint phase — closed: instrumentation + §c wins shipped (PERF-1…10); Release measurement showed Debug-build profiling was the real problem (~9× slower); §d not needed |
 | [_old/PERFORMANCE_VERIFICATION.md](_old/PERFORMANCE_VERIFICATION.md) | Manual REAPER checklist per PERF patch + a standing record of one unreproduced lyric-duplication glitch |
-| [_upcoming/PITCH_DETECTION_IMPROVEMENT.md](_upcoming/PITCH_DETECTION_IMPROVEMENT.md) | Pitch-engine assessment + assist features. **Assist phase implemented 2026-07-18/19** (c1 fractional pitch, b1 cents light, b2 snap, b3 hit highlight, b4 trail); engine phase planned in ENGINE_V2.md |
-| [_upcoming/ENGINE_V2.md](_upcoming/ENGINE_V2.md) | **Approved plan, not yet started** — pitch engine v2 (c4 downsample → c3 FFT NSDF → c2 overlapping windows, then c5 clarity gate + c6 median), 5-patch series with agreed constants |
+| [_old/PITCH_DETECTION_IMPROVEMENT.md](_old/PITCH_DETECTION_IMPROVEMENT.md) | Pitch assessment — **fully implemented**: assist phase 2026-07-18/19 (c1, b1–b4), engine phase 2026-07-19 (ENGINE_V2.md) |
+| [_old/ENGINE_V2.md](_old/ENGINE_V2.md) | **Implemented 2026-07-19** (5-patch series) — engine v2 design, agreed constants and patch-by-patch findings (kept for rationale) |
 | [_upcoming/FONT_SCALING.md](_upcoming/FONT_SCALING.md) | **Implemented 2026-07-18** (5-patch series) — Lyrics Size setting (50–200%, scales text + strip heights). Doc kept for design rationale; the stretch goal (global UI text scale) is still open. Candidate to move to `_old/` |
 | [_upcoming/LYRIC_OVERLAP.md](_upcoming/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions. Candidate to move to `_old/` |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 
-Suggested order: ENGINE_V2 next (TEST_PLAN, CODE_REVIEW, PERFORMANCE, FONT_SCALING,
-LYRIC_OVERLAP and the PITCH_DETECTION assist phase are done).
+All listed phases are complete — next work comes from the Backlog section below.
 
 ---
 
@@ -178,11 +177,16 @@ note-pitch editor's `MIDI_SetNote` write-back.
 
 Details live in the code; this is the map of what exists and its non-obvious decisions.
 
-- **Pitch detection** (`PitchDetection.cpp`): MPM fixed as the algorithm (`pitchMethod = 2`
-  set in the editor constructor; the runtime selector UI was removed — Autocorrelation and
-  YIN remain as code-level fallbacks). 2048-sample accumulation, RMS gate
-  (`gateThreshold`), 6-cycle hold decay. See PITCH_DETECTION_IMPROVEMENT.md before
-  changing.
+- **Pitch detection** (`PitchDetection.cpp` + the front end in `processBlock`): MPM
+  fixed as the algorithm (processor default `pitchMethod = 2`; Autocorrelation and
+  YIN remain code-level fallbacks). Engine v2 pipeline (2026-07-19): 70 Hz high-pass
+  + 2× 6 kHz low-pass → integer decimation to a fixed ~16 kHz internal rate
+  (`detectRate` — all window/lag maths is host-rate-independent by construction, so
+  high sample rates need no buffer scaling) → 768-sample window analysed every
+  256-sample hop (~62 estimates/s) → RMS gate (`gateThreshold`) → FFT NSDF
+  (`juce::dsp::FFT`, 2048-point) with boundary-lag rejection and a clarity gate
+  (NSDF peak < 0.80 = unvoiced; published as `currentClarity`) → 3-tap median →
+  16-hop (~260 ms) hold decay. Design rationale in `_old/ENGINE_V2.md`.
 - **Chart loading**: REAPER path (auto-reload on `GetProjectStateChangeCount` change) and
   `.mid` fallback, per the host-support table above.
 - **Highway** (`drawHighway`): horizontal scroll (`pixPerSec`, default 200 px/s), playhead
@@ -321,9 +325,13 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 - **Cents accuracy + assist features done** (2026-07-18/19 patch series) — fractional
   pitch (`currentMidiFloat`), cents traffic light + Pitch Tolerance setting, visual
   snap, note-hit highlighting, and the b4 pitch trail (Pitch Trail toggle, default
-  on). Remaining from PITCH_DETECTION_IMPROVEMENT.md: engine v2 (c4 downsample →
-  c3 FFT NSDF → c2 overlapping windows, then c5 confidence gating / c6 median
-  filter).
+  on).
+- **Engine v2 done** (2026-07-19, 5-patch series) — decimating front end (fixed
+  ~16 kHz internal rate, 70 Hz HP + 6 kHz LP), FFT NSDF, 256-hop overlapping
+  windows, clarity gate + boundary-lag rejection, 3-tap median. Closes
+  PITCH_DETECTION_IMPROVEMENT.md (both docs now in `_old/`). The `currentClarity`
+  atomic is published but not yet consumed by the UI (candidate: dim the arrowhead
+  when uncertain).
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
   the note-hit spans: per-note coverage ratio is already accumulated in `noteHitSpans`).
 - **Note timing/length editing** — natural next step after pitch editing, but timing

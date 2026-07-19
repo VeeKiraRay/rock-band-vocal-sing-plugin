@@ -19,21 +19,63 @@ JUCE_END_IGNORE_WARNINGS_MSVC
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
+// RBJ-cookbook biquad coefficients, Q = 1/√2. The cutoff is clamped below Nyquist so
+// a degenerate host rate can't produce an unstable filter.
+void RBVocalSingAudioProcessor::setBiquadLP (Biquad& f, double sampleRate, double freq)
+{
+    const double w0    = juce::MathConstants<double>::twoPi
+                             * std::min (freq, sampleRate * 0.45) / sampleRate;
+    const double cosw  = std::cos (w0);
+    const double alpha = std::sin (w0) / juce::MathConstants<double>::sqrt2;
+    const double a0    = 1.0 + alpha;
+    f.b0 = (float) ((1.0 - cosw) * 0.5 / a0);
+    f.b1 = (float) ((1.0 - cosw)       / a0);
+    f.b2 = f.b0;
+    f.a1 = (float) (-2.0 * cosw        / a0);
+    f.a2 = (float) ((1.0 - alpha)      / a0);
+}
+
+void RBVocalSingAudioProcessor::setBiquadHP (Biquad& f, double sampleRate, double freq)
+{
+    const double w0    = juce::MathConstants<double>::twoPi
+                             * std::min (freq, sampleRate * 0.45) / sampleRate;
+    const double cosw  = std::cos (w0);
+    const double alpha = std::sin (w0) / juce::MathConstants<double>::sqrt2;
+    const double a0    = 1.0 + alpha;
+    f.b0 = (float) ((1.0 + cosw) * 0.5 / a0);
+    f.b1 = (float) (-(1.0 + cosw)      / a0);
+    f.b2 = f.b0;
+    f.a1 = (float) (-2.0 * cosw        / a0);
+    f.a2 = (float) ((1.0 - alpha)      / a0);
+}
+
 void RBVocalSingAudioProcessor::prepareToPlay (double sampleRate, int)
 {
-    storedSampleRate = sampleRate;
+    // Fixed ~16 kHz internal detection rate by integer decimation: 44.1/48 kHz ÷ 3,
+    // 96 kHz ÷ 6, 176.4 kHz ÷ 11, 192 kHz ÷ 12 → detectRate ≈ 14.7–16.04 kHz. The
+    // window and lag ranges are in internal samples, so the detection floor and
+    // cadence survive every host rate without buffer scaling.
+    decimFactor = std::max (1, (int) std::lround (sampleRate / 16000.0));
+    detectRate  = sampleRate / (double) decimFactor;
 
-    // Keep the analysis window roughly constant in real time (~42.7 ms): 2048 samples
-    // up to 48 kHz, scaling with the rate above that (96 kHz → 4096, 192 kHz → 8192).
-    // Guarantees pitchBufTarget ≥ 2·maxLag up to kPitchBufCap, so the autocorrelation
-    // guard can't starve at high rates (CODE_REVIEW.md 1.2).
-    pitchBufTarget = juce::jlimit (kPitchBufSize, kPitchBufCap,
-                                   (int) std::lround (sampleRate * (double) kPitchBufSize / 48000.0));
+    // Front-end conditioning at the host rate: high-pass against rumble/plosives,
+    // two cascaded low-passes as the decimator's anti-alias filter (the internal
+    // Nyquist is ≥ 7.35 kHz at the rates above; NSDF needs nothing past ~2 kHz).
+    setBiquadHP (hpFilter,  sampleRate, 70.0);
+    setBiquadLP (lpFilter1, sampleRate, 6000.0);
+    setBiquadLP (lpFilter2, sampleRate, 6000.0);
+    hpFilter.reset();
+    lpFilter1.reset();
+    lpFilter2.reset();
 
     // Drop any partial accumulation from before a stop/start or sample-rate change so
     // stale samples never bleed into the first detection window.
-    pitchAccumFill  = 0;
+    decimPhase      = 0;
+    ringPos         = 0;
+    ringFilled      = 0;
+    hopCount        = 0;
     pitchHoldFrames = 0;
+    medianCount     = 0;
 }
 
 // ─── processBlock ─────────────────────────────────────────────────────────────
@@ -62,33 +104,76 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     for (int i = 0; i < numSamples; ++i)
     {
-        pitchAccum[pitchAccumFill++] = src[i];
+        // Condition at the host rate, then keep every decimFactor-th sample for the
+        // ~16 kHz detection pipeline (see the front-end block in the header).
+        const float conditioned = lpFilter2.process (lpFilter1.process (hpFilter.process (src[i])));
 
-        if (pitchAccumFill >= pitchBufTarget)
+        if (++decimPhase < decimFactor)
+            continue;
+        decimPhase = 0;
+
+        pitchRing[ringPos] = conditioned;
+        if (++ringPos == kPitchWindow) ringPos = 0;
+        if (ringFilled < kPitchWindow) ++ringFilled;
+
+        if (++hopCount >= kPitchHop && ringFilled == kPitchWindow)
         {
-            const float hz = detectPitch (pitchAccum, pitchBufTarget);
+            hopCount = 0;
+
+            // Linearise the ring (the oldest sample sits at ringPos) so the
+            // detectors see one contiguous window.
+            const int tail = kPitchWindow - ringPos;
+            std::copy (pitchRing + ringPos, pitchRing + kPitchWindow, windowScratch);
+            std::copy (pitchRing, pitchRing + ringPos, windowScratch + tail);
+
+            const float hz = detectPitch (windowScratch, kPitchWindow);
+            currentClarity.store (hz > 0.0f ? lastDetectClarity : 0.0f,
+                                  std::memory_order_relaxed);
 
             if (hz > 0.0f)
             {
-                const float midi = 69.0f + 12.0f * std::log2f (hz / 440.0f);
+                // Median-of-3 over the accepted estimates (see medianHist); until
+                // the history fills, the newest value passes through unfiltered.
+                if (medianCount == 3)
+                {
+                    medianHist[0] = medianHist[1];
+                    medianHist[1] = medianHist[2];
+                    medianHist[2] = hz;
+                }
+                else
+                {
+                    medianHist[medianCount++] = hz;
+                }
+                const float pubHz = (medianCount == 3)
+                    ? std::max (std::min (medianHist[0], medianHist[1]),
+                                std::min (std::max (medianHist[0], medianHist[1]),
+                                          medianHist[2]))
+                    : hz;
+
+                const float midi = 69.0f + 12.0f * std::log2f (pubHz / 440.0f);
                 const int   note = std::clamp (static_cast<int> (std::roundf (midi)), 0, 127);
-                currentFrequency.store (hz,   std::memory_order_relaxed);
+                currentFrequency.store (pubHz, std::memory_order_relaxed);
                 currentMidiFloat.store (std::clamp (midi, 0.0f, 127.0f), std::memory_order_relaxed);
-                currentMidiNote .store (note, std::memory_order_relaxed);
+                currentMidiNote .store (note,  std::memory_order_relaxed);
                 pitchHoldFrames = kPitchHoldCycles;
-            }
-            else if (pitchHoldFrames > 0)
-            {
-                --pitchHoldFrames;
             }
             else
             {
-                currentFrequency.store (0.0f,  std::memory_order_relaxed);
-                currentMidiFloat.store (-1.0f, std::memory_order_relaxed);
-                currentMidiNote .store (-1,    std::memory_order_relaxed);
-            }
+                // Unvoiced frame: restart the median history so no stale estimate
+                // bridges across a gap into the next onset.
+                medianCount = 0;
 
-            pitchAccumFill = 0;
+                if (pitchHoldFrames > 0)
+                {
+                    --pitchHoldFrames;
+                }
+                else
+                {
+                    currentFrequency.store (0.0f,  std::memory_order_relaxed);
+                    currentMidiFloat.store (-1.0f, std::memory_order_relaxed);
+                    currentMidiNote .store (-1,    std::memory_order_relaxed);
+                }
+            }
         }
     }
 }

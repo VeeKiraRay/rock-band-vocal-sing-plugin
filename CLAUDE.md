@@ -367,7 +367,14 @@ cmake --build build --config Debug
 Output: `build/RBVocalSing_artefacts/Debug/VST3/Rock Band Vocal Sing - Reaper.vst3`
 (bundle name from `PRODUCT_NAME` in `CMakeLists.txt`).
 
-Install: copy the `.vst3` into `C:\Program Files\Common Files\VST3` and re-scan in REAPER.
+Install: `scripts\deploy_plugin.bat` (optionally `-Config Debug`, `-NoRestart`) —
+builds Release, closes REAPER gracefully (the user answers any save prompt; REAPER
+locks the installed DLL), then an elevated stage (UAC prompt) removes **every** copy
+of the bundle under `C:\Program Files\Common Files\VST3` and installs the fresh one,
+and REAPER restarts unelevated. The remove-all step exists because a stray nested
+copy (`VST3\Release\VST3\…`) once shadowed the real install with the same plugin ID
+and a stale build was tested against for a day (2026-07-19). Manual alternative:
+copy the `.vst3` into `C:\Program Files\Common Files\VST3` and re-scan in REAPER.
 
 ---
 

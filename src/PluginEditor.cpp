@@ -675,6 +675,16 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         addAndMakeVisible (editToggle);
     }
 
+    // ── Save take button (pitch trail → MIDI export) ──────────────────────────
+    // Starts disabled: the trail is empty until a pass is sung. The onFrame() poll
+    // gate re-evaluates enablement (export API resolved + frozen non-empty trail).
+    saveTakeBtn.setTooltip ("Save the current sung take (the pitch trail) as MIDI notes "
+                            "on a new track below this one. Stop playback first - "
+                            "stopping freezes the take.");
+    saveTakeBtn.setEnabled (false);
+    saveTakeBtn.onClick = [this]() { saveCurrentTake(); };
+    addAndMakeVisible (saveTakeBtn);
+
     setWantsKeyboardFocus (true);
 
     // Pitch detection fixed to MPM.
@@ -900,6 +910,97 @@ void RBVocalSingAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
     dragNoteIndex = -1;
 }
 
+// ─── Save take (pitch trail → MIDI on a new track) ────────────────────────────
+// TAKE_EXPORT.md. Message thread (button handler) — REAPER calls are safe here.
+// The trail is frozen: enablement requires a stopped transport, and updateNoteHits()
+// stops appending the moment playback stops.
+
+void RBVocalSingAudioProcessorEditor::saveCurrentTake()
+{
+    auto& api = audioProcessor.reaperApi;
+    if (lastIsPlaying || ! api.isLoaded() || ! api.canExportTake())
+        return;   // enablement prevents this; defensive against a stale click
+
+    const auto flash = [this] (const juce::String& msg)
+    {
+        flashMessage = msg;
+        flashUntil   = juce::Time::getMillisecondCounterHiRes() * 0.001 + 4.0;
+        repaint();
+    };
+
+    const auto notes = rbtake::segmentPitchTrail (pitchTrail);
+    if (notes.empty())
+    {
+        flash ("No take to save - sing a pass first.");
+        return;
+    }
+
+    // Insert below the plugin's own track, asked from REAPER *now* (a handover-time
+    // capture can be null — the FX isn't attached to its track yet during
+    // instantiation). IP_TRACKNUMBER is 1-based, which is exactly the 0-based index
+    // of the slot after the track; 0 / -1 (not found / master) falls back to
+    // appending at the end of the project.
+    int insertIdx = api.CountTracks (nullptr);
+    if (audioProcessor.reaperHost != nullptr)
+        if (void* selfTrack = audioProcessor.reaperHost->getReaperParent (1))
+        {
+            const int trackNum = (int) api.GetMediaTrackInfo_Value (selfTrack, "IP_TRACKNUMBER");
+            if (trackNum > 0)
+                insertIdx = trackNum;
+        }
+
+    const juce::String trackName = "RB Vocal Sing "
+        + juce::Time::getCurrentTime().formatted ("%Y%m%d %H%M");
+
+    api.Undo_BeginBlock2 (nullptr);
+
+    api.InsertTrackAtIndex (insertIdx, false);   // false = bare track, no default FX
+    if (api.TrackList_AdjustWindows)
+        api.TrackList_AdjustWindows (false);
+
+    void* newTrack = api.GetTrack (nullptr, insertIdx);
+    if (newTrack == nullptr)
+    {
+        api.Undo_EndBlock2 (nullptr, "Save RB vocal take as MIDI", -1);
+        flash ("Take export failed - could not create track.");
+        return;
+    }
+
+    // GetSetMediaTrackInfo_String reads the new value through the (mutable) buffer.
+    char nameBuf[64] = {};
+    trackName.copyToUTF8 (nameBuf, sizeof (nameBuf));
+    api.GetSetMediaTrackInfo_String (newTrack, "P_NAME", nameBuf, true);
+
+    void* item = api.CreateNewMIDIItemInProj (newTrack, notes.front().startTime,
+                                              notes.back().endTime, nullptr);  // seconds
+    void* take = item != nullptr ? api.GetActiveTake (item) : nullptr;
+    if (take == nullptr)
+    {
+        api.Undo_EndBlock2 (nullptr, "Save RB vocal take as MIDI", -1);
+        flash ("Take export failed - could not create MIDI item.");
+        lastStateCount = -1;   // the bare track was still inserted → clean reload
+        return;
+    }
+
+    const bool noSort = true;
+    for (const auto& n : notes)
+        api.MIDI_InsertNote (take, false, false,
+                             api.MIDI_GetPPQPosFromProjTime (take, n.startTime),
+                             api.MIDI_GetPPQPosFromProjTime (take, n.endTime),
+                             0, n.pitch, 96, &noSort);
+    api.MIDI_Sort (take);
+    api.MarkTrackItemsDirty (newTrack, item);
+
+    api.Undo_EndBlock2 (nullptr, "Save RB vocal take as MIDI", -1);
+    if (api.UpdateArrange)
+        api.UpdateArrange();
+
+    // No track/item/take pointers survive this handler — an undo of the export must
+    // leave nothing stale. The forced reload re-syncs the chart view.
+    lastStateCount = -1;
+    flash ("Saved take: " + juce::String ((int) notes.size()) + " notes - " + trackName);
+}
+
 bool RBVocalSingAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 {
 #if RB_PAINT_PROFILE
@@ -1037,6 +1138,14 @@ void RBVocalSingAudioProcessorEditor::onFrame()
 
             lastIsPlaying = nowPlaying;
 
+            // "Save take" wakes up the same way as the edit toggle, but additionally
+            // needs a frozen non-empty trail: stopped transport (stopping is what
+            // freezes the trail) with a take still on screen.
+            const bool canSaveNow = audioProcessor.reaperApi.canExportTake()
+                                 && ! pitchTrail.empty() && ! lastIsPlaying;
+            if (canSaveNow != saveTakeBtn.isEnabled())
+                saveTakeBtn.setEnabled (canSaveNow);
+
             if (! lastIsPlaying && audioProcessor.reaperApi.GetCursorPosition)
                 cachedPlayTime = audioProcessor.reaperApi.GetCursorPosition();
 
@@ -1058,12 +1167,16 @@ void RBVocalSingAudioProcessorEditor::onFrame()
 
     const float livePitch    = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
     const int   curLyricMode = (int) lyricMode;
+    // Flash visibility participates in the idle gate so the message-bar flash both
+    // appears and expires while the transport sits idle (nothing else would repaint).
+    const bool  flashActive  = juce::Time::getMillisecondCounterHiRes() * 0.001 < flashUntil;
     const bool changed = (cachedPlayTime  != lastPaintTime)
                       || (livePitch       != lastPaintPitch)
                       || (lastStateCount  != lastPaintStateCount)
                       || (framesDropping  != lastPaintDropping)
                       || (curLyricMode    != lastPaintLyricMode)
-                      || (cachedPlayRate  != lastPaintRate);
+                      || (cachedPlayRate  != lastPaintRate)
+                      || (flashActive     != lastPaintFlash);
 
     if (changed)
     {
@@ -1073,6 +1186,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         lastPaintDropping   = framesDropping;
         lastPaintLyricMode  = curLyricMode;
         lastPaintRate       = cachedPlayRate;
+        lastPaintFlash      = flashActive;
 
         // Dirty only the dynamic areas — controls panel is static widgets that repaint themselves
         repaint (getLocalBounds().withBottom (getHeight() - kControlsH));
@@ -1146,6 +1260,7 @@ void RBVocalSingAudioProcessorEditor::resized()
         // re-deriving the bottom-band sum (CODE_REVIEW.md 2.6).
         const int statsTop = getHighwayArea().getBottom() + lyricStripH();
         editToggle.setBounds (8, statsTop + 2, 130, kEditRowH - 2);
+        saveTakeBtn.setBounds (146, statsTop + 2, 90, kEditRowH - 2);
     }
 }
 

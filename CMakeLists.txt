@@ -46,6 +46,7 @@ target_sources(RBVocalSing
         src/PluginProcessor.cpp
         src/PitchDetection.cpp
         src/ChartLoader.cpp
+        src/TakeExport.cpp
         src/PluginEditor.cpp
         src/PluginEditorHighway.cpp
         src/PluginEditorLyrics.cpp
@@ -81,6 +82,7 @@ if (RBVS_BUILD_TESTS)
             src/PluginProcessor.cpp
             src/PitchDetection.cpp
             src/ChartLoader.cpp
+            src/TakeExport.cpp
             src/PluginEditor.cpp
             src/PluginEditorHighway.cpp
             src/PluginEditorLyrics.cpp
@@ -88,6 +90,7 @@ if (RBVS_BUILD_TESTS)
             tests/PitchDetectionTests.cpp
             tests/ChartLoaderTests.cpp
             tests/StateTests.cpp
+            tests/TakeExportTests.cpp
     )
 
     target_compile_definitions(RBVocalSingTests

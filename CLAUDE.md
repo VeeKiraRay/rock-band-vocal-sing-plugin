@@ -5,8 +5,8 @@ It reads mic input for pitch detection and displays a scrolling note highway syn
 REAPER transport, letting the user sing along and see how well they match the chart.
 
 **Status:** feature-complete PoC plus post-PoC features (Harmonies mode, Settings popup with
-persisted settings, transport navigation, write-back note-pitch editing). Builds and runs
-inside REAPER. User-facing documentation lives in **README.md** (installation, setup,
+persisted settings, transport navigation, write-back note-pitch editing, save-take MIDI
+export). Builds and runs inside REAPER. User-facing documentation lives in **README.md** (installation, setup,
 usage) — keep it in sync when behaviour changes.
 
 ## Reference documents (read before starting related tasks)
@@ -21,9 +21,10 @@ work, `_old/` holds completed phases kept for their design rationale.
 | [_old/PERFORMANCE_VERIFICATION.md](_old/PERFORMANCE_VERIFICATION.md) | Manual REAPER checklist per PERF patch + a standing record of one unreproduced lyric-duplication glitch |
 | [_old/PITCH_DETECTION_IMPROVEMENT.md](_old/PITCH_DETECTION_IMPROVEMENT.md) | Pitch assessment — **fully implemented**: assist phase 2026-07-18/19 (c1, b1–b4), engine phase 2026-07-19 (ENGINE_V2.md) |
 | [_old/ENGINE_V2.md](_old/ENGINE_V2.md) | **Implemented 2026-07-19** (5-patch series) — engine v2 design, agreed constants and patch-by-patch findings (kept for rationale) |
-| [_upcoming/FONT_SCALING.md](_upcoming/FONT_SCALING.md) | **Implemented 2026-07-18** (5-patch series) — Lyrics Size setting (50–200%, scales text + strip heights). Doc kept for design rationale; the stretch goal (global UI text scale) is still open. Candidate to move to `_old/` |
-| [_upcoming/LYRIC_OVERLAP.md](_upcoming/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions. Candidate to move to `_old/` |
+| [_old/FONT_SCALING.md](_old/FONT_SCALING.md) | **Implemented 2026-07-18** (5-patch series) — Lyrics Size setting (50–200%, scales text + strip heights). Doc kept for design rationale; the stretch goal (global UI text scale) is still open |
+| [_old/LYRIC_OVERLAP.md](_old/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
+| [_old/TAKE_EXPORT.md](_old/TAKE_EXPORT.md) | **Implemented 2026-07-19/20** (4-patch series) — "Save take": pitch trail → semitone MIDI notes on a new timestamped track below the plugin's track. Doc kept for design rationale + segmentation constants + the in-REAPER findings (stopped-only gating, lazy self-track query, ASCII strings) |
 
 All listed phases are complete — next work comes from the Backlog section below.
 
@@ -66,6 +67,8 @@ rock-band-vocal-sing-plugin/          (repo root)
     PitchDetection.cpp            — detectPitch + Autocorrelation/YIN/MPM (processor members)
     ChartLoader.cpp               — readChartFromReaper / loadMidiFile / parseChartNotes +
                                     MIDI-text decode, pitch sections, harmony post-passes
+    TakeExport.h / .cpp           — rbtake::segmentPitchTrail: pure pitch-trail → MIDI-note
+                                    segmentation (JUCE-free; unit-tested directly)
     PluginEditor.h                — RBVocalSingAudioProcessorEditor decl
     PluginEditor.cpp              — editor lifecycle, VBlank frame loop, layout, paint dispatch,
                                     SettingsPanel popup, transport keys, note-pitch edit drag
@@ -127,7 +130,12 @@ Editor onFrame() — VBlankAttachment, ≈ display refresh
 `PluginProcessor` holds a `ReaperApi` struct (`src/reaper_api.h`) of typed function
 pointers loaded from `IReaperHostApplication::getReaperApi()`; the inner
 `Vst3Ext : VST3ClientExtensions` overrides `setIHostApplication` to do the load.
-`reaperApi.canEdit()` additionally checks the write-side pointers (note editing).
+`reaperApi.canEdit()` additionally checks the write-side pointers (note editing), and
+`canExportTake()` the take-export set on top of that. The processor also **retains the
+host interface** (`reaperHost`, add-ref'd at handover, released in the destructor) so
+the plugin's own `MediaTrack*` can be queried at point of use via `getReaperParent(1)`
+— a handover-time capture comes back null because the FX isn't attached to its track
+yet during instantiation (found 2026-07-20).
 
 ### Chart data
 
@@ -236,7 +244,7 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   (continuous in t, pills glide back onto their anchors), Auto-shrink = proportional
   glyph scaling via AffineTransform (floor 0.5, then fitted-squash to 0.25 + ellipsis;
   no per-frame Font construction), Hybrid = cap at 0.8×width then push the rest. Off
-  renders byte-identically to pre-feature (`_upcoming/LYRIC_OVERLAP.md`).
+  renders byte-identically to pre-feature (`_old/LYRIC_OVERLAP.md`).
 - **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics;
   chart status string, overridden by an amber can't-keep-up warning when frames drop.
 - **Controls**: bottom bar (Vocal Mode, Lyric Mode, `<<`/Settings/`>>`) + `SettingsPanel`
@@ -261,6 +269,19 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   undo block + `MarkTrackItemsDirty`, then forces a clean reload (`lastStateCount = -1`).
   Drags clamp to visible lanes ∩ pitch 1..95 so a note can never land on a reserved
   marker pitch. Pitch only — timing/lyrics untouched, so `sourceNoteIndex` stays valid.
+- **Save take as MIDI** (`saveCurrentTake()` in PluginEditor.cpp + `src/TakeExport.h/.cpp`,
+  requires `reaperApi.canExportTake()`): the **Save take** button next to Allow edits
+  (enabled by the poll gate only when stopped with a non-empty trail — stopping is what
+  freezes the trail) segments `pitchTrail` via `rbtake::segmentPitchTrail` (pure,
+  unit-tested: 120 ms min note, 80 ms same-pitch gap merge, 20 ms spacing when notes
+  butt, 0.65 st split hysteresis, clamp 1..95) and writes one MIDI item (vel 96, ch 0,
+  PPQ via `MIDI_GetPPQPosFromProjTime`) on a new track `RB Vocal Sing YYYYMMDD HHMM`
+  directly below the plugin's track (`reaperHost->getReaperParent(1)` at click time;
+  fallback = end of project), all inside one undo block, then forces a clean reload.
+  Feedback via a ~4 s amber message-bar flash (`flashMessage`/`flashUntil`) that
+  outranks chartStatus *and* the frame-drop warning, and participates in the
+  idle-repaint gate so it appears/expires while the transport is idle. Design +
+  findings: `_old/TAKE_EXPORT.md`.
 
 ---
 
@@ -316,10 +337,10 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   Release-build measurement (perf lesson 7 above; `_old/PERFORMANCE_IMPROVEMENT.md`).
 - **FONT_SCALING done** (2026-07-18, 5-patch series) — Lyrics Size setting shipped;
   only the stretch goal (global UI text scale for stats/status/settings text) remains
-  open in `_upcoming/FONT_SCALING.md`.
+  open in `_old/FONT_SCALING.md`.
 - **Squash guard done** (2026-07-18, 4-patch series) — Off / Spacing / Auto-shrink /
   Hybrid dropdown shipped, default Off; Auto-shrink uses proportional glyph scaling
-  (`_upcoming/LYRIC_OVERLAP.md` records the design + decisions).
+  (`_old/LYRIC_OVERLAP.md` records the design + decisions).
 - **Settings popup clipping fixed** (2026-07-18) — the panel (434 px since the Lyrics
   Size + Squash Guard rows) exceeded the default Solo window (419 px). Final solution:
   the panel scrolls inside `SettingsScroller` (Viewport wrapper, editor-parented
@@ -336,6 +357,11 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   PITCH_DETECTION_IMPROVEMENT.md (both docs now in `_old/`). The `currentClarity`
   atomic is published but not yet consumed by the UI (candidate: dim the arrowhead
   when uncertain).
+- **Save take as MIDI done** (2026-07-19/20, 4-patch series, user-requested) — see the
+  Implemented features bullet; `_old/TAKE_EXPORT.md` records the design and the
+  in-REAPER findings (stopped-only gating; lazy self-track query via the retained
+  `reaperHost`; ASCII-only user-visible strings → Known gotchas). Strengthens the case
+  for the "Minimum highway range" item below — same stem-guided-charting workflow.
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
   the note-hit spans: per-note coverage ratio is already accumulated in `noteHitSpans`).
 - **Note timing/length editing** — natural next step after pitch editing, but timing
@@ -381,8 +407,9 @@ copy the `.vst3` into `C:\Program Files\Common Files\VST3` and re-scan in REAPER
 ## Testing
 
 Catch2 unit tests (`RBVocalSingTests` target, `tests/*.cpp`) exercise the processor's
-public API directly — pitch detection, chart loading (Solo + Harmonies), and settings
-persistence. Piece A is a pluginval black-box smoke script. See TEST_PLAN.md for the
+public API directly — pitch detection, chart loading (Solo + Harmonies), settings
+persistence — plus the take-export segmenter (pure functions in `src/TakeExport.h`,
+tested without any plugin scaffolding). Piece A is a pluginval black-box smoke script. See TEST_PLAN.md for the
 full design rationale.
 
 ```
@@ -432,6 +459,11 @@ fallback — were fixed and un-flagged in the 2026-07-17 patch series.)
   flips bold/plain depending on which section drew first (bit us 2026-07-18: the top
   lyric strip's bold font leaked into the highway labels in Scrolling mode only).
   Always pass a full `juce::Font (size, style)`.
+- Keep **user-visible string literals ASCII-only**. MSVC compiles this project's source
+  in the system ANSI codepage (no `/utf-8` flag) while JUCE decodes `const char*`
+  literals as UTF-8 — so an em dash or `→` in a literal renders as mojibake (bit us
+  2026-07-20: the take-export flash message). Comments can use any Unicode; strings the
+  user sees cannot.
 - The Settings CallOutBox must stay **editor-parented** (`this`). A `nullptr`/desktop
   parent was tried twice (2026-07-18) to stop the panel clipping at small window
   heights, and reverted both times: (1) a desktop window doesn't inherit the host's

@@ -75,6 +75,12 @@ public:
             .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
     {}
 
+    ~RBVocalSingAudioProcessor() override
+    {
+        if (reaperHost != nullptr)
+            reaperHost->release();   // balances the queryInterface add-ref (handover)
+    }
+
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -102,6 +108,13 @@ public:
 
     // ── Reaper API (loaded once by VST3 host handover) ──────────────────────
     ReaperApi reaperApi;
+    // REAPER's host interface, retained (add-ref'd) at handover and released in the
+    // destructor, so the plugin's own parent MediaTrack* can be queried on demand via
+    // getReaperParent(1). Queried lazily at point of use: during instantiation the FX
+    // may not yet be attached to its track, so a handover-time capture can come back
+    // null (bit us 2026-07-20 — take export landed at the end of the project).
+    // Message thread only.
+    reaper::IReaperHostApplication* reaperHost { nullptr };
 
     // ── MIDI chart -- UI thread only ─────────────────────────────────────────
     // readChartFromReaper() — call from message thread when reaperApi.isLoaded()

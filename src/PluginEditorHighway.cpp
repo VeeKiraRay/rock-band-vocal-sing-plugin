@@ -900,7 +900,8 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
 
 // ─── Message bar ──────────────────────────────────────────────────────────────
 // Chart status ("Loaded N notes from …") is shown here at all times. When
-// frames are dropping the warning overrides the status message.
+// frames are dropping the warning overrides the status message, and a transient
+// flash (take-export feedback) overrides both while active.
 
 void RBVocalSingAudioProcessorEditor::drawMessageBar (juce::Graphics& g,
                                                        juce::Rectangle<int> area)
@@ -913,7 +914,15 @@ void RBVocalSingAudioProcessorEditor::drawMessageBar (juce::Graphics& g,
     const auto text = area.reduced (8, 0);
     g.setFont (juce::Font (12.0f, juce::Font::bold));
 
-    if (framesDropping)
+    if (juce::Time::getMillisecondCounterHiRes() * 0.001 < flashUntil)
+    {
+        // Transient action feedback (take export). Outranks even the frame-skip
+        // warning for its ~4 s — the result of an explicit click must not be hidden,
+        // and chartStatus alone would be overwritten by the post-export chart reload.
+        g.setColour (juce::Colour (0xffffb030));
+        g.drawText (flashMessage, text, juce::Justification::centredLeft, true);
+    }
+    else if (framesDropping)
     {
         const int fps = (int) std::lround (displayFps);
         juce::String msg = "[!] Can't keep up (~" + juce::String (fps) + " fps) - ";

@@ -76,6 +76,26 @@ struct ReaperApi
     void   (*Undo_EndBlock2)         (void* proj, const char* desc, int flags)    = nullptr;
     void   (*MarkTrackItemsDirty)    (void* track, void* item)                    = nullptr;
 
+    // ── Write side (take export) — const bool* args are REAPER "Optional" params;
+    // NULL selects the default. Signatures transcribed from the REAPER API docs —
+    // they must match exactly (the void* function-pointer cast can't catch a drift).
+    void   (*InsertTrackAtIndex)          (int idx, bool wantDefaults)            = nullptr;
+    bool   (*GetSetMediaTrackInfo_String) (void* track, const char* parmname,
+                                           char* stringNeedBig, bool setNewValue) = nullptr;
+    double (*GetMediaTrackInfo_Value)     (void* track, const char* parmname)     = nullptr;
+    void*  (*CreateNewMIDIItemInProj)     (void* track, double starttime, double endtime,
+                                           const bool* qnInOptional)              = nullptr;
+    bool   (*MIDI_InsertNote)             (void* take, bool selected, bool muted,
+                                           double startppqpos, double endppqpos,
+                                           int chan, int pitch, int vel,
+                                           const bool* noSortInOptional)          = nullptr;
+    void   (*MIDI_Sort)                   (void* take)                            = nullptr;
+    double (*MIDI_GetPPQPosFromProjTime)  (void* take, double projtime)           = nullptr;
+    // Arrange-view refresh cosmetics — not gated by canExportTake(); null-guard at
+    // the call site.
+    void   (*UpdateArrange)               ()                                      = nullptr;
+    void   (*TrackList_AdjustWindows)     (bool isMinor)                          = nullptr;
+
     bool isLoaded() const { return CountTracks != nullptr; }
 
     // True when every write-side pointer resolved (older REAPER → read-only).
@@ -83,6 +103,17 @@ struct ReaperApi
     {
         return MIDI_SetNote != nullptr && Undo_BeginBlock2 != nullptr
             && Undo_EndBlock2 != nullptr && MarkTrackItemsDirty != nullptr;
+    }
+
+    // True when the take-export write path fully resolved (canEdit covers the undo
+    // block + MarkTrackItemsDirty it shares with note editing).
+    bool canExportTake() const
+    {
+        return canEdit()
+            && InsertTrackAtIndex != nullptr && GetSetMediaTrackInfo_String != nullptr
+            && GetMediaTrackInfo_Value != nullptr && CreateNewMIDIItemInProj != nullptr
+            && MIDI_InsertNote != nullptr && MIDI_Sort != nullptr
+            && MIDI_GetPPQPosFromProjTime != nullptr;
     }
 
     void load (reaper::IReaperHostApplication* app)
@@ -111,6 +142,15 @@ struct ReaperApi
         RLOAD (Undo_BeginBlock2);
         RLOAD (Undo_EndBlock2);
         RLOAD (MarkTrackItemsDirty);
+        RLOAD (InsertTrackAtIndex);
+        RLOAD (GetSetMediaTrackInfo_String);
+        RLOAD (GetMediaTrackInfo_Value);
+        RLOAD (CreateNewMIDIItemInProj);
+        RLOAD (MIDI_InsertNote);
+        RLOAD (MIDI_Sort);
+        RLOAD (MIDI_GetPPQPosFromProjTime);
+        RLOAD (UpdateArrange);
+        RLOAD (TrackList_AdjustWindows);
         #undef RLOAD
     }
 };

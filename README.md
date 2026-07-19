@@ -104,7 +104,7 @@ From top to bottom:
 | **Top lyric strip**     | Harmonies only — the shared HARM2 + HARM3 lyrics above the highway.                                                                                            |
 | **Note highway**        | The scrolling chart. Notes move right-to-left; the playhead is fixed at 30% from the left. A white arrowhead marks your live detected pitch.                   |
 | **Bottom lyric strip**  | The Main (HARM1 / Solo) lyrics, below the highway.                                                                                                             |
-| **Allow edits toggle**  | A checkbox above the stats panel. When on, you can drag notes on the highway to change their pitch (REAPER only — see [Editing note pitches](#editing-note-pitches)). |
+| **Allow edits / Save take** | A row above the stats panel. **Allow edits** lets you drag notes on the highway to change their pitch; **Save take** writes the sung pitch trail to a new MIDI track (both REAPER only — see [Editing note pitches](#editing-note-pitches) and [Saving a take as MIDI](#saving-a-take-as-midi)). |
 | **Stats panel**         | Current time, your live pitch (note name, MIDI number, Hz), and the traffic light.                                                                             |
 | **Status bar**          | Faint diagnostics: `N fps \| REAPER priority: on/off \| renderer: CPU/GPU \| calib: X ms`.                                                                     |
 | **Message bar**         | The chart status (e.g. "Loaded N notes from …"). Turns into an amber ⚠ warning if frames start dropping.                                                       |
@@ -117,7 +117,7 @@ From top to bottom:
 - Lane grid lines mark every 2 semitones. The vertical range auto-fits the loaded notes (± 2 semitones of padding).
 - The white arrowhead tracks your sung pitch at full (cents) precision, so slides and scoops glide smoothly. When you are within the **Pitch Tolerance** of an active note it locks onto that note's lane — steady green light, steady arrow.
 - As you sing a note correctly, the sung portion of its bar **fills gold** (talkie columns get a faint gold wash on any voiced sound). Stop and scroll around — the gold stays so you can review how the take went, no matter how you move the cursor or what else you tweak in the project. It clears when the next pass starts (playing again after a stop or a seek; each lap of a repeat loop also starts clean); editing a note clears just that note's gold.
-- A faint white **pitch trail** draws the contour you actually sang — raw pitch, no snapping — so scoops, drift and wobble are visible against the bars. It breaks across silences, follows the same clear-on-new-pass rule as the gold, and stays up while stopped: together they show *whether* each note was hit and *what* was sung.
+- A faint white **pitch trail** draws the contour you actually sang — raw pitch, no snapping — so scoops, drift and wobble are visible against the bars. It breaks across silences, follows the same clear-on-new-pass rule as the gold, and stays up while stopped: together they show *whether* each note was hit and *what* was sung. A stopped trail can also be kept for good — see [Saving a take as MIDI](#saving-a-take-as-midi).
 - Inline lyric labels on the bars are **Main-only**; HARM2/HARM3 lyrics live in the top strip.
 - **Muted MIDI notes are not treated specially** — a note muted in the REAPER MIDI editor still draws and scores like any other. If you don't want a note charted, delete it or move it to another track. (Let us know if muting matters to your workflow — this can be revisited.)
 - If no chart is loaded, the highway shows a diagnostic message (including the list of tracks it found, if the lead track is missing).
@@ -200,6 +200,26 @@ You can correct a note's pitch without leaving the plugin — REAPER only.
 3. Release to commit. The change is written straight into REAPER's MIDI as a single undo step (labelled "Edit vocal note pitch"), so REAPER's Ctrl+Z reverts it.
 
 Only pitch can be changed this way (timing and lyrics are unchanged), and drags are clamped to the singable range so a note can never land on REAPER's reserved marker pitches. With **Allow edits** off, clicking the highway only moves the playhead — so you cannot nudge a note by accident while singing.
+
+---
+
+## Saving a take as MIDI
+
+After singing a pass — or playing a recorded vocal through the plugin — you can keep the take: the **Save take** button next to **Allow edits** writes the pitch trail into your project as real MIDI notes. REAPER only.
+
+1. Sing your pass, then **stop playback**. Stopping freezes the take (the trail and the gold stay on screen), and the button enables.
+2. Click **Save take**. A new track named `RB Vocal Sing <date> <time>` appears **directly below the plugin's track**, holding one MIDI item with the notes of your take. The message bar confirms with the note count and track name.
+3. The whole export is a single undo step (labelled "Save RB vocal take as MIDI"), so REAPER's Ctrl+Z removes the track again.
+
+What gets written follows the trail on screen, cleaned up for charting:
+
+- Pitches snap to whole semitones, and vibrato or wobble around a note stays one note.
+- Blips shorter than ~120 ms (detection spikes, hard consonants) are dropped, and brief unvoiced gaps inside a held note are bridged.
+- Notes that would butt against each other get a small gap, so they read as separate notes in the MIDI editor.
+
+The button is greyed out while playing, when no take is on screen yet, outside REAPER, and in REAPER versions without the write API. Each save makes a fresh timestamped track — sing, save, tweak, sing again, and keep whichever take reads best.
+
+**Charting from a stem:** put the plugin on a track with the real singer's vocal stem (see "Review takes offline" in [Tips](#tips)), play it through, stop, and save — the exported notes are a draft chart of the actual melody, ready to refine with [note edits](#editing-note-pitches).
 
 ---
 

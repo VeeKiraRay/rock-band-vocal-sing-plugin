@@ -191,12 +191,15 @@ void RBVocalSingAudioProcessor::Vst3Ext::setIHostApplication (Steinberg::FUnknow
     {
         auto* host = static_cast<reaper::IReaperHostApplication*> (obj);
         proc.reaperApi.load (host);
-        proc.chartStatus = "Reaper connected — reading PART VOCALS...";
+        proc.chartStatus = "Reaper connected - reading PART VOCALS...";
 
-        // queryInterface add-refs the returned interface. The loaded entries are plain C
-        // function pointers owned by REAPER itself, not by this COM object, so the
-        // reference can be dropped immediately.
-        host->release();
+        // Keep the interface (queryInterface add-ref'd it; released in the processor
+        // destructor): the plugin's parent track is queried on demand via
+        // getReaperParent(1) — during instantiation the FX may not yet be attached to
+        // its track, so capturing the track here can come back null.
+        if (proc.reaperHost != nullptr)
+            proc.reaperHost->release();
+        proc.reaperHost = host;
     }
 }
 

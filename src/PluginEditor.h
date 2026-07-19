@@ -1,5 +1,6 @@
 #pragma once
 #include "PluginProcessor.h"
+#include "TakeExport.h"   // rbtake::TrailPoint (= TrailSample) + segmentPitchTrail
 
 class RBVocalSingAudioProcessorEditor
     : public juce::AudioProcessorEditor
@@ -26,6 +27,9 @@ private:
     void remapNoteHitSpans ();
     void drawStatusBar   (juce::Graphics&, juce::Rectangle<int>);   // fps / priority / renderer info
     void drawMessageBar  (juce::Graphics&, juce::Rectangle<int>);   // chart status + frame-skip warning
+    // "Save take" button handler: segments pitchTrail and writes the notes as a MIDI
+    // item on a new timestamped track below the plugin's track (TAKE_EXPORT.md).
+    void saveCurrentTake ();
     void openMidiFile    ();
     // Settings-popup callback for the Lyrics size row: stores + persists the scale,
     // then re-applies window geometry (delta-based resize; see FONT_SCALING.md).
@@ -72,6 +76,11 @@ private:
     // connected and the write-side API resolved. Session-only — never persisted.
     juce::ToggleButton editToggle { "Allow edits" };
     bool editMode { false };
+
+    // Export the current take (pitch trail) as MIDI on a new track. Enabled only when
+    // REAPER's export API resolved, a take is on screen, and the transport is stopped
+    // (stopping freezes the trail — the button always operates on a finished pass).
+    juce::TextButton saveTakeBtn { "Save take" };
 
     // ── Note drag-edit state (message thread only) ────────────────────────────
     bool  dragActive      { false };
@@ -128,6 +137,7 @@ private:
     bool   lastPaintDropping   { false };
     int    lastPaintLyricMode  { -1 };
     double lastPaintRate       { -1.0 };
+    bool   lastPaintFlash      { false };
 
     // Measured duration of the last paint() (seconds), used by onFrame() to cap paint's
     // duty cycle so a heavy (large-window) paint can't starve REAPER's UI thread.
@@ -208,8 +218,15 @@ private:
     // wrapping is applied per-sample at draw so the toggle and section transitions
     // apply live; pitch < 0 is a gap marker that breaks the drawn contour. Cleared on
     // a new pass with the hit spans; survives chart reloads (references no notes).
-    struct TrailSample { double time; float pitch; };
+    using TrailSample = rbtake::TrailPoint;   // identical layout {double time; float pitch}
     std::vector<TrailSample> pitchTrail;
+
+    // Transient message-bar flash (take-export feedback). Drawn by drawMessageBar with
+    // priority over chartStatus until flashUntil (seconds, Time::getMillisecondCounterHiRes
+    // clock) — chartStatus alone would be overwritten ~50 ms later by the post-export
+    // chart reload.
+    juce::String flashMessage;
+    double       flashUntil { 0.0 };
 
     // Scrolling-strip lyric pixel widths (getStringWidthFloat is a per-glyph walk),
     // index-aligned with chartNotes and shared by both strips; -1 = not yet measured

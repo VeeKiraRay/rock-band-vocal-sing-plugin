@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-rem scripts\run_tests.bat — configure, build, and run RBVocalSingTests in one
+rem scripts\run_tests.bat ? configure, build, and run RBVocalSingTests in one
 rem command for fast local feedback. Plain batch (not PowerShell) so it runs with
 rem a double-click or `scripts\run_tests.bat` with no -ExecutionPolicy prompt.
 

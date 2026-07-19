@@ -142,7 +142,7 @@ public:
     std::atomic<int>    currentMidiNote     { -1 };
     // Fractional MIDI pitch (cents precision) — same estimate as currentMidiNote but
     // stored before rounding; -1 when undetected. Feeds cents scoring, the smooth
-    // arrowhead, snap assist and the pitch trail (PITCH_DETECTION_IMPROVEMENT.md c1).
+    // arrowhead, snap assist and the pitch trail.
     std::atomic<float>  currentMidiFloat    { -1.0f };
     std::atomic<double> currentPlaybackTime { 0.0 };  // fallback when API unavailable
 
@@ -161,8 +161,8 @@ public:
     std::atomic<double> savedFrameInterval   { 1.0 / 60.0 };
     std::atomic<bool>   savedReaperPriority  { false };
     std::atomic<bool>   savedOctaveWrap      { true };
-    std::atomic<int>    savedPitchTolCents   { 50 };  // GREAT window ± cents; CLOSE = 2× (b1)
-    std::atomic<bool>   savedPitchTrail      { true };  // sung-pitch contour on the highway (b4)
+    std::atomic<int>    savedPitchTolCents   { 50 };    // GREAT window ± cents; CLOSE = 2×
+    std::atomic<bool>   savedPitchTrail      { true };  // sung-pitch contour on the highway
     std::atomic<int>    savedLatencyOffsetMs { 0 };
     std::atomic<float>  savedPixPerSec       { 200.0f };
     std::atomic<float>  savedLyricScale      { 1.0f };

@@ -19,13 +19,14 @@ work, `_old/` holds completed phases kept for their design rationale.
 | [_old/CODE_REVIEW.md](_old/CODE_REVIEW.md) | 2026-07 full review — §1–§3 all fixed (2026-07-17 patch series); §4 recorded as non-action, §5 informational |
 | [_old/PERFORMANCE_IMPROVEMENT.md](_old/PERFORMANCE_IMPROVEMENT.md) | 2026-07 paint phase — closed: instrumentation + §c wins shipped (PERF-1…10); Release measurement showed Debug-build profiling was the real problem (~9× slower); §d not needed |
 | [_old/PERFORMANCE_VERIFICATION.md](_old/PERFORMANCE_VERIFICATION.md) | Manual REAPER checklist per PERF patch + a standing record of one unreproduced lyric-duplication glitch |
-| [_upcoming/PITCH_DETECTION_IMPROVEMENT.md](_upcoming/PITCH_DETECTION_IMPROVEMENT.md) | Pitch-engine assessment + karaoke-style assist features (cents scoring, snap, hit highlighting) |
+| [_upcoming/PITCH_DETECTION_IMPROVEMENT.md](_upcoming/PITCH_DETECTION_IMPROVEMENT.md) | Pitch-engine assessment + assist features. **Assist phase implemented 2026-07-18/19** (c1 fractional pitch, b1 cents light, b2 snap, b3 hit highlight, b4 trail); engine phase planned in ENGINE_V2.md |
+| [_upcoming/ENGINE_V2.md](_upcoming/ENGINE_V2.md) | **Approved plan, not yet started** — pitch engine v2 (c4 downsample → c3 FFT NSDF → c2 overlapping windows, then c5 clarity gate + c6 median), 5-patch series with agreed constants |
 | [_upcoming/FONT_SCALING.md](_upcoming/FONT_SCALING.md) | **Implemented 2026-07-18** (5-patch series) — Lyrics Size setting (50–200%, scales text + strip heights). Doc kept for design rationale; the stretch goal (global UI text scale) is still open. Candidate to move to `_old/` |
 | [_upcoming/LYRIC_OVERLAP.md](_upcoming/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions. Candidate to move to `_old/` |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 
-Suggested order: PITCH_DETECTION next (TEST_PLAN, CODE_REVIEW, PERFORMANCE,
-FONT_SCALING and LYRIC_OVERLAP are done).
+Suggested order: ENGINE_V2 next (TEST_PLAN, CODE_REVIEW, PERFORMANCE, FONT_SCALING,
+LYRIC_OVERLAP and the PITCH_DETECTION assist phase are done).
 
 ---
 
@@ -328,6 +329,12 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 - **Note timing/length editing** — natural next step after pitch editing, but timing
   edits reorder MIDI so `sourceNoteIndex` can go stale mid-edit; needs re-resolution
   after each commit.
+- **Minimum highway range for charting-from-scratch** — the display range is purely
+  content-derived (chart min/max ± 2, or Range-Shift section ± 5), so a flat
+  placeholder chart (e.g. every note C3) collapses the highway to ~5 semitones and
+  the pitch trail from a vocal stem wraps/folds uselessly. Enforce a minimum span
+  (e.g. ≥ 1 octave centred on the content) so stem-guided charting works from a flat
+  start. (Surfaced 2026-07-19 discussing the trail as a charting aid.)
 - **Track identity by GUID** — name matching breaks on rename; `GetTrackGUID` is stable.
 - **Play/stop/record indicator** — `GetPlayState` bitmask (1=play 2=pause 4=record) is
   already polled; show it in the UI.

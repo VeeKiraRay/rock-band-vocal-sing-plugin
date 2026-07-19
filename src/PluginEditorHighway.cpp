@@ -279,7 +279,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                 g.fillRect (drawX1, cy - barH * 0.5f, drawX2 - drawX1, barH);
             }
 
-            // Hit highlight (b3): fill the portions of this note that were sung within
+            // Hit highlight: fill the portions of this note that were sung within
             // the scoring tolerance (updateNoteHits) in gold — one universal "hit"
             // colour, solid on bars; talkie columns get a translucent wash to match
             // their translucency.
@@ -385,7 +385,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         }
     }
 
-    // Pitch trail (b4): the sung contour of the current pass, drawn behind the
+    // Pitch trail: the sung contour of the current pass, drawn behind the
     // arrowhead at raw (unsnapped) pitch. Samples are time-ascending — binary-search
     // to the first visible one and walk. Octave wrapping mirrors the arrowhead (wrap
     // the rounded note into the section range, carry the fractional offset); with
@@ -429,7 +429,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     }
 
     // Arrowhead for live pitch — drawn at the fractional pitch (cents precision) so it
-    // glides through slides instead of stepping by semitone (b2). White when in range;
+    // glides through slides instead of stepping by semitone. White when in range;
     // amber when octave-wrapped out of range (the wrap moves the rounded note and
     // carries the sub-semitone offset across, like the traffic light).
     const float userPitch = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
@@ -446,7 +446,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 
         if (inRange || doWrap)
         {
-            // Visual snap (PITCH_DETECTION_IMPROVEMENT.md b2): when the drawn pitch is
+            // Visual snap: when the drawn pitch is
             // within the scoring tolerance of an active note, lock the arrow onto that
             // note's lane — hides natural jitter while the traffic light shows GREAT.
             // Same windowed scan as the traffic light (notes are sorted, non-overlapping).
@@ -512,8 +512,8 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 // Called once per frame from onFrame(). Accumulates, per chart note, the spans of
 // playback time the singer was within the scoring tolerance (talkie = presence),
 // merging contiguous frames into one span — drawHighway overlays the spans on the
-// bars, and the coverage ratio is the future phrase-scoring input (b3). Also appends
-// the sung fractional pitch to the pass's pitch trail (b4); both share the
+// bars, and the coverage ratio is the future phrase-scoring input. Also appends
+// the sung fractional pitch to the pass's pitch trail; both share the
 // hitResetPending / chart-version lifecycle so a new pass starts clean together.
 
 void RBVocalSingAudioProcessorEditor::updateNoteHits()
@@ -557,7 +557,7 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     const bool  voiced = audioProcessor.audioAboveGate.load (std::memory_order_relaxed);
     const float midiF  = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
 
-    // Trail capture (b4, skipped when the Pitch Trail setting is off): one sample per
+    // Trail capture (skipped when the Pitch Trail setting is off): one sample per
     // accumulating frame; an unvoiced stretch adds a single gap marker so the drawn
     // contour breaks across silences.
     if (pitchTrailOn)
@@ -657,7 +657,7 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
 
     // Score against the closest active note of ANY part: green if the singer
     // matches any harmony line currently sounding. Scoring uses the fractional
-    // pitch (cents precision, PITCH_DETECTION_IMPROVEMENT.md b1); `note` keeps
+    // pitch (cents precision); `note` keeps
     // driving the note display below. When octave wrapping is on, an out-of-range
     // pitch is mapped to its in-range pitch-class equivalent first, carrying the
     // sub-semitone offset across the wrap (scoringPitchFor).

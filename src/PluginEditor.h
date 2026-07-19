@@ -17,9 +17,9 @@ private:
     // harmonyStrip=false → bottom strip (Main/HARM1 lyrics); true → top strip (HARM2+HARM3).
     void drawLyricStrip  (juce::Graphics&, juce::Rectangle<int>, double playTime, bool harmonyStrip);
     void drawStats       (juce::Graphics&, juce::Rectangle<int>, double playTime);
-    // Accumulates per-note sung-within-tolerance spans each frame (note-hit
-    // highlighting, PITCH_DETECTION_IMPROVEMENT.md b3). Body in PluginEditorHighway.cpp
-    // next to the scoring helpers it shares with the traffic light.
+    // Accumulates per-note sung-within-tolerance spans and the pitch trail each
+    // frame. Body in PluginEditorHighway.cpp next to the scoring helpers it shares
+    // with the traffic light.
     void updateNoteHits  ();
     void drawStatusBar   (juce::Graphics&, juce::Rectangle<int>);   // fps / priority / renderer info
     void drawMessageBar  (juce::Graphics&, juce::Rectangle<int>);   // chart status + frame-skip warning
@@ -118,7 +118,7 @@ private:
 
     // Idle-repaint gating: skip repaint() when nothing visible would change. Sentinels
     // force a paint on the first frame. See onFrame(). The pitch is tracked at
-    // fractional precision — the arrowhead moves on sub-semitone changes (b2).
+    // fractional precision — the arrowhead moves on sub-semitone changes.
     double lastPaintTime       { -1.0e18 };
     float  lastPaintPitch      { -2.0f };
     int    lastPaintStateCount { -2 };
@@ -166,13 +166,13 @@ private:
     // Whether out-of-range singing pitch is wrapped by octave onto the chart range.
     bool  octaveWrap      { true };
     // Traffic-light GREAT window in cents (100 = one semitone); CLOSE is 2× this.
-    // Settings stepper ±25/±50/±75/±100 (PITCH_DETECTION_IMPROVEMENT.md b1).
+    // Settings stepper ±25/±50/±75/±100.
     int   pitchTolCents   { 50 };
-    // Whether the sung-pitch contour draws on the highway (b4). Off skips capture and
+    // Whether the sung-pitch contour draws on the highway. Off skips capture and
     // draw; the pass-lifecycle clears stay unconditional so stale trail can't linger.
     bool  pitchTrailOn    { true };
 
-    // Note-hit tracking (b3): per-note spans of playback time sung within the scoring
+    // Note-hit tracking: per-note spans of playback time sung within the scoring
     // tolerance, index-aligned with chartNotes and keyed on getChartVersion() like the
     // lyric-width cache. drawHighway fills the covered portions of each bar gold; the
     // per-note coverage ratio is the building block for phrase-level scoring later.
@@ -186,7 +186,7 @@ private:
     double lastHitTrackTime { -1.0 };   // previous frame's play time; <0 = no history
     bool   hitResetPending  { true };   // clear spans when accumulation next resumes
 
-    // Pitch trail (b4): the sung fractional pitch of the current pass, one sample per
+    // Pitch trail: the sung fractional pitch of the current pass, one sample per
     // accumulating frame, time-ascending. Raw (unsnapped, unwrapped) pitch — octave
     // wrapping is applied per-sample at draw so the toggle and section transitions
     // apply live; pitch < 0 is a gap marker that breaks the drawn contour. Shares the

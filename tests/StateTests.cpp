@@ -4,7 +4,7 @@
 #include <catch2/catch_approx.hpp>
 #include <vector>
 
-TEST_CASE ("state: all 13 persisted fields round-trip through a fresh processor", "[state]")
+TEST_CASE ("state: all 14 persisted fields round-trip through a fresh processor", "[state]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store       ((int) VocalMode::Harmonies, std::memory_order_relaxed);
@@ -15,6 +15,7 @@ TEST_CASE ("state: all 13 persisted fields round-trip through a fresh processor"
     proc.savedPitchTolCents   = 75;
     proc.savedPitchTrail      = false;
     proc.savedLatencyOffsetMs = 123;
+    proc.savedLiveMicInput    = true;
     proc.savedPixPerSec       = 275.0f;
     proc.savedLyricScale      = 1.5f;
     proc.savedSquashGuard     = 3;
@@ -36,6 +37,7 @@ TEST_CASE ("state: all 13 persisted fields round-trip through a fresh processor"
     REQUIRE (proc2.savedPitchTolCents   == 75);
     REQUIRE (proc2.savedPitchTrail      == false);
     REQUIRE (proc2.savedLatencyOffsetMs == 123);
+    REQUIRE (proc2.savedLiveMicInput    == true);
     REQUIRE (proc2.savedPixPerSec       == Catch::Approx (275.0f));
     REQUIRE (proc2.savedLyricScale      == Catch::Approx (1.5f));
     REQUIRE (proc2.savedSquashGuard     == 3);
@@ -58,6 +60,7 @@ TEST_CASE ("state: garbage bytes are rejected without crashing, defaults intact"
     REQUIRE (proc.savedPitchTolCents   == 50);
     REQUIRE (proc.savedPitchTrail      == true);
     REQUIRE (proc.savedLatencyOffsetMs == 0);
+    REQUIRE (proc.savedLiveMicInput    == false);
     REQUIRE (proc.savedPixPerSec       == Catch::Approx (200.0f));
     REQUIRE (proc.savedLyricScale      == Catch::Approx (1.0f));
     REQUIRE (proc.savedSquashGuard     == 0);
@@ -79,6 +82,7 @@ TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "
     REQUIRE (proc.savedPitchTolCents   == 50);
     REQUIRE (proc.savedPitchTrail      == true);
     REQUIRE (proc.savedLatencyOffsetMs == 0);
+    REQUIRE (proc.savedLiveMicInput    == false);
     REQUIRE (proc.savedPixPerSec       == Catch::Approx (200.0f));
     REQUIRE (proc.savedLyricScale      == Catch::Approx (1.0f));
     REQUIRE (proc.savedSquashGuard     == 0);

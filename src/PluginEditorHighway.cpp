@@ -198,6 +198,15 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     const double leftTime    = visibleLeft - kNoteLookback;
     const double rightTime   = t + (double) (area.getRight() - phX) / pixPerSec;
 
+    // Detection placement (see detectionOffsetSec): detOffset moves a raw sample time onto
+    // the chart, detLead is how far the detector runs ahead of the listener's ears — zero
+    // with a live mic, calibration-wide for playback, whose audio has been analysed but is
+    // not yet audible. `heard` is the sample being heard now; the marker shows it and the
+    // contour stops there while playing, so the picture matches the ears in both modes.
+    const double      detOffset = detectionOffsetSec();
+    const double      detLead   = latencyOffsetMs / 1000.0 - detOffset;
+    const TrailSample heard     = heardDetection();
+
     auto drawNotesForPart = [&] (VocalPart part)
     {
         const juce::Colour partCol = colourForPart (part);
@@ -290,7 +299,14 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                 for (const auto& sp : noteHitSpans[hitIdx])
                 {
                     const float hx1 = std::max (drawX1, phX + (float) (sp.first  - t) * pixPerSec);
-                    const float hx2 = std::min (drawX2, phX + (float) (sp.second - t) * pixPerSec);
+                    float       hx2 = std::min (drawX2, phX + (float) (sp.second - t) * pixPerSec);
+                    // Same rule as the pitch trail: while playing, nothing is shown ahead
+                    // of the playhead line. Spans run to the end of the scoring window,
+                    // which in playback mode is a calibration ahead of the listener's
+                    // ears — so a note would light up gold while still approaching the
+                    // line. Inert with a live mic (spans end at the playhead already) and
+                    // lifted when stopped, so a whole reviewed pass stays visible.
+                    if (lastIsPlaying) hx2 = std::min (hx2, phX);
                     if (hx2 <= hx1) continue;
                     if (n.isTalkie)
                         g.fillRect (hx1, (float) area.getY(), hx2 - hx1, (float) area.getHeight());
@@ -393,19 +409,28 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     if (pitchTrailOn && ! pitchTrail.empty())
     {
         // Samples are stored on the raw project timeline (see updateNoteHits) and shifted
-        // onto the calibrated one here — so the window bounds move the opposite way from
-        // the sample times.
-        const double calibSec = latencyOffsetMs / 1000.0;
+        // onto the chart by detOffset here — so the window bounds move the opposite way
+        // from the sample times.
+        //
+        // While playing, the contour stops at the sample being heard: anything past it is
+        // audio already analysed but not yet audible, and drawing it would run the contour
+        // ahead of the marker. When stopped, draw the lot — the pass is being reviewed and
+        // REAPER may have snapped the cursor back to the start of it, which would
+        // otherwise hide the whole trail. Inert with a live mic, where the heard sample is
+        // the newest one.
+        const double trailRight = (lastIsPlaying && detHistoryCount > 0)
+                                      ? std::min (rightTime + detOffset, heard.time)
+                                      : rightTime + detOffset;
 
         auto trailIt = std::lower_bound (pitchTrail.begin(), pitchTrail.end(),
-                                         visibleLeft + calibSec,
+                                         visibleLeft + detOffset,
             [] (const TrailSample& s, double v) { return s.time < v; });
 
         juce::Path trail;
         bool open = false;
         for (; trailIt != pitchTrail.end(); ++trailIt)
         {
-            if (trailIt->time > rightTime + calibSec) break;
+            if (trailIt->time > trailRight) break;
             if (trailIt->pitch < 0.0f) { open = false; continue; }
 
             const int  rounded = juce::jlimit (0, 127, juce::roundToInt (trailIt->pitch));
@@ -417,7 +442,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                                                               audioProcessor.getPitchClassCandidates())
                                       + (trailIt->pitch - (float) rounded);
 
-            const float x = phX + (float) (trailIt->time - calibSec - t) * pixPerSec;
+            const float x = phX + (float) (trailIt->time - detOffset - t) * pixPerSec;
             const float y = pitchY (p);
             if (open) trail.lineTo (x, y);
             else      { trail.startNewSubPath (x, y); open = true; }
@@ -438,7 +463,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     // glides through slides instead of stepping by semitone. White when in range;
     // amber when octave-wrapped out of range (the wrap moves the rounded note and
     // carries the sub-semitone offset across, like the traffic light).
-    const float userPitch = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
+    const float userPitch = heard.pitch;
     if (userPitch >= 0.0f)
     {
         const int  rounded  = juce::jlimit (0, 127, juce::roundToInt (userPitch));
@@ -455,7 +480,8 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
             // Visual snap: when the drawn pitch is
             // within the scoring tolerance of an active note, lock the arrow onto that
             // note's lane — hides natural jitter while the traffic light shows GREAT.
-            // Same windowed scan as the traffic light (notes are sorted, non-overlapping).
+            // Same windowed scan as the traffic light (notes are sorted, non-overlapping),
+            // at t: the pitch shown is the one belonging there, so the notes must be too.
             {
                 auto snapIt = std::lower_bound (notes.begin(), notes.end(), t - kNoteLookback,
                     [] (const NoteInfo& n, double v) { return n.startTime < v; });
@@ -478,7 +504,11 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                     drawPitch = bestPitch;
             }
 
-            const float cx = phX;
+            // On the playhead line: the sample being shown is the one whose chart position
+            // is there, in both modes. The exception is a negative lead (negative
+            // Calibration while in playback mode), where that sample has not been analysed
+            // yet — nothing to pin to, so the marker falls back to following the newest.
+            const float cx = phX + (float) std::min (0.0, detLead) * pixPerSec;
             const float cy = pitchY (drawPitch);
 
             // Tip on the playhead line, body trailing left — matches how the game
@@ -514,6 +544,37 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 #endif
 }
 
+// ─── The detection being heard ────────────────────────────────────────────────
+// Everything on the playhead line describes the audio the listener is hearing, which is
+// not always the newest thing analysed: with a live mic the singer's voice has already
+// made the round trip the calibration measures, so the newest detection *is* what they
+// hear; with playback the newest detection is calibration-wide ahead of their ears. The
+// lead is measured against the newest sample rather than the transport clock, so live-mic
+// mode returns exactly the newest entry (no jitter from where a hop fell inside a block).
+
+RBVocalSingAudioProcessorEditor::TrailSample
+RBVocalSingAudioProcessorEditor::heardDetection() const
+{
+    if (detHistoryCount == 0) return { 0.0, -1.0f };
+
+    const auto at = [this] (int stepsBack) -> const TrailSample&
+    {
+        return detHistory[(size_t) ((detHistoryHead - stepsBack + kDetHistorySize) % kDetHistorySize)];
+    };
+
+    const TrailSample& newest = at (1);
+    const double lead = latencyOffsetMs / 1000.0 - detectionOffsetSec();
+    if (lead <= 0.0) return newest;
+
+    const double target = newest.time - lead;
+    for (int i = 2; i <= detHistoryCount; ++i)
+        if (at (i).time <= target) return at (i);
+
+    // The window doesn't reach that far back — only right after playback starts, or with a
+    // large calibration and dropped hops. The oldest entry is the closest answer we have.
+    return at (detHistoryCount);
+}
+
 // ─── Sung-pass tracking (note hits + pitch trail) ─────────────────────────────
 // Called once per frame from onFrame(). Accumulates, per chart note, the spans of
 // playback time the singer was within the scoring tolerance (talkie = presence),
@@ -544,6 +605,16 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     const int hopN = audioProcessor.drainHopSamples (hopBuf, RBVocalSingAudioProcessor::kHopQueueCapacity);
     hopScratch.insert (hopScratch.end(), hopBuf, hopBuf + hopN);
 
+    // Feed the marker history here too — unconditionally, so it keeps rolling while the
+    // transport is stopped and while the Pitch Trail setting is off. Raw times, like the
+    // trail; heardDetection() applies the lead when it looks a sample up.
+    for (int i = 0; i < hopN; ++i)
+    {
+        detHistory[(size_t) detHistoryHead] = { hopBuf[i].time, hopBuf[i].midiFloat };
+        detHistoryHead = (detHistoryHead + 1) % kDetHistorySize;
+        if (detHistoryCount < kDetHistorySize) ++detHistoryCount;
+    }
+
     const auto& notes = audioProcessor.getChartNotes();
 
     // A chart reload is not a time discontinuity and must not wipe the review state
@@ -555,17 +626,18 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         remapNoteHitSpans();
     }
 
-    // Hop timestamps arrive from the audio thread as raw project time, while t/t0 and
-    // everything drawn are on the calibrated timeline. Scoring shifts each hop onto the
-    // calibrated timeline (hopT below), so sung input is judged against the notes the
-    // singer actually heard. The trail is stored *raw* instead and shifted by the same
-    // amount at draw — that keeps the take export on true project time and lets a
+    // Hop timestamps arrive from the audio thread as raw project time. Everything in this
+    // function — t, t0, hopT — is the *detection* timeline (detectionOffsetSec), which
+    // equals paint's drawing timeline only with a live mic: a singer's voice arrives late
+    // by the round trip the calibration measures and must be shifted back onto the chart,
+    // while playback audio is already in position. The trail is stored raw and shifted at
+    // draw instead, which keeps the take export on true project time and lets a
     // calibration change re-align an already-captured trail. (Found 2026-08-03: before
     // the split the trail was drawn latencyOffsetMs right of the playhead, and every
     // sub-interval below fell outside [t0, t] whenever calibration was non-zero.)
-    const double calibSec = latencyOffsetMs / 1000.0;
+    const double calibSec = detectionOffsetSec();
 
-    const double t  = cachedPlayTime - calibSec;  // matches paint()
+    const double t  = cachedPlayTime - calibSec;
     const double t0 = lastHitTrackTime;
     lastHitTrackTime = t;
 
@@ -765,6 +837,9 @@ void RBVocalSingAudioProcessorEditor::remapNoteHitSpans()
 
 // ─── Stats panel ──────────────────────────────────────────────────────────────
 
+// `t` is paint's drawn time: the pitch, note name, Hz and traffic light all describe the
+// audio being heard at the playhead line (heardDetection), so the notes they are scored
+// against are the ones drawn there. The time readout alone is the raw transport position.
 void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
                                                   juce::Rectangle<int> area,
                                                   double t)
@@ -775,8 +850,13 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     g.setColour (juce::Colour (0xff222233));
     g.drawHorizontalLine (area.getY(), (float) area.getX(), (float) area.getRight());
 
-    const int   note = audioProcessor.currentMidiNote  .load (std::memory_order_relaxed);
-    const float hz   = audioProcessor.currentFrequency .load (std::memory_order_relaxed);
+    // One detection drives the whole band, so the light can never disagree with the note
+    // name beside it. Hz is recomputed from the fractional pitch instead of carrying the
+    // frequency across the hop queue: it is the exact inverse of the processor's own
+    // conversion, so the displayed value is unchanged at the precision shown.
+    const float midiF = heardDetection().pitch;
+    const int   note  = midiF >= 0.0f ? juce::jlimit (0, 127, juce::roundToInt (midiF)) : -1;
+    const float hz    = midiF >= 0.0f ? 440.0f * std::pow (2.0f, (midiF - 69.0f) / 12.0f) : 0.0f;
 
     // Content is capped at kWindowW so it doesn't stretch with the window. The top
     // kEditRowH is reserved for the "Allow edits" toggle component (laid out in resized()),
@@ -794,7 +874,7 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
                                         totalMs % 1000);
     };
     // The readout is the real transport position (raw), so it matches REAPER's own time
-    // display; everything else in this band is scored against the calibrated t.
+    // display, and is unaffected by the calibration offset.
     juce::String timeStr = fmtTime (cachedPlayTime);
     const double endTime = audioProcessor.songEndTime;
     if (endTime > 0.0)
@@ -809,11 +889,10 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
 
     // Score against the closest active note of ANY part: green if the singer
     // matches any harmony line currently sounding. Scoring uses the fractional
-    // pitch (cents precision); `note` keeps
+    // pitch (cents precision); `note` above keeps
     // driving the note display below. When octave wrapping is on, an out-of-range
     // pitch is mapped to its in-range pitch-class equivalent first, carrying the
     // sub-semitone offset across the wrap (scoringPitchFor).
-    const float midiF = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
     const float scoringPitch = scoringPitchFor (midiF, octaveWrap,
                                                 audioProcessor.chartMinPitch,
                                                 audioProcessor.chartMaxPitch,
@@ -944,9 +1023,12 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
     const auto text = area.reduced (8, 0);
     g.setFont (juce::Font (12.0f, juce::Font::bold));
     g.setColour (juce::Colour (0xff556070));  // always faint
+    // The live-mic/playback mode only matters when there is an offset to apply, so it is
+    // appended when there is one and left off at 0 ms rather than shown as dead text.
     const juce::String calibStr = (latencyOffsetMs == 0)
                                       ? "0 ms"
-                                      : (latencyOffsetMs > 0 ? "+" : "") + juce::String (latencyOffsetMs) + " ms";
+                                      : (latencyOffsetMs > 0 ? "+" : "") + juce::String (latencyOffsetMs)
+                                            + (liveMicInput ? " ms live" : " ms playback");
     juce::String rateStr = juce::String (cachedPlayRate, 2);
     if (! audioProcessor.reaperApi.CSurf_OnPlayRateChange)
         rateStr += " [N/A]";

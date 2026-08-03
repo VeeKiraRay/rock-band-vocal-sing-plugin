@@ -220,7 +220,11 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   persist while stopped for review, cleared when the next pass starts via
   `hitResetPending` — armed by any time discontinuity *and* by every stopped→playing
   transition so the reset is independent of REAPER's cursor-on-stop preference,
-  fired on the next accumulating frame; chart reloads remap spans by note identity
+  fired on the next accumulating frame; while playing the gold is clipped at the
+  playhead line, since in playback mode the scoring window runs a calibration ahead of
+  the listener's ears and a note would otherwise light up while still approaching the
+  line (inert with a live mic, lifted when stopped — same rule as the trail);
+  chart reloads remap spans by note identity
   via `remapNoteHitSpans()` — tolerance-matched, since REAPER take rewrites drift
   the PPQ→time recompute by ULPs, and robust to transient empty reads — so only
   actually-edited notes lose their gold) and the
@@ -230,8 +234,11 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   fractional pitch per frame (`pitchTrail`, gap markers break silences, same
   new-pass lifecycle as the hit spans) and drawHighway strokes it as a faint white
   contour (`kPitchTrailColour`) behind the arrowhead, raw/unsnapped, octave-wrapped
-  per-sample at draw. Trail samples are stored on the raw project timeline and shifted
-  by the calibration at draw (see the two-timelines gotcha). Pitch range
+  per-sample at draw. Trail samples are stored on the raw project timeline and shifted by
+  `detectionOffsetSec()` at draw (see the three-timelines gotcha); while playing the
+  contour stops at the sample being heard (`heardDetection()`), so it never runs ahead of
+  the arrowhead — the clip lifts on stop, since a cursor snap-back would otherwise hide the
+  whole pass. Pitch range
   animates per Range-Shift section (smoothstep over the marker length); the per-frame
   geometry is cached (`lastHighwayArea`/`lastFMinP`/…) so mouse hit-testing matches the
   screen exactly.
@@ -255,11 +262,14 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   glyph scaling via AffineTransform (floor 0.5, then fitted-squash to 0.25 + ellipsis;
   no per-frame Font construction), Hybrid = cap at 0.8×width then push the rest. Off
   renders byte-identically to pre-feature (`_old/LYRIC_OVERLAP.md`).
-- **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics;
+- **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics
+  (the calib field appends ` live` / ` playback` when the offset is non-zero — at 0 ms the
+  mode cannot change anything, so it is left off);
   chart status string, overridden by an amber can't-keep-up warning when frames drop.
 - **Controls**: bottom bar (Vocal Mode, Lyric Mode, `<<`/Settings/`>>`) + `SettingsPanel`
   CallOutBox (Frame cap 20–60/uncapped default 60; REAPER priority off; Renderer
-  CPU/GL-session/GL-persist; Calibration −200..+500 ms; Note Speed 100–400 px/s; Lyrics
+  CPU/GL-session/GL-persist; Calibration −200..+500 ms; **Live-mic used** off — whether the
+  calibration also shifts detected pitch, see the round-trip gotcha; Note Speed 100–400 px/s; Lyrics
   Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
   Octave Wrapping on; Pitch Trail on; Pitch Tolerance ±25/50/75/100 cents default
@@ -267,7 +277,7 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   frameInterval, reaperPriority, octaveWrap, pitchTolCents, pitchTrail, latencyMs,
-  pixPerSec, lyricScale, squashGuard, lyricMode, renderer.
+  liveMic, pixPerSec, lyricScale, squashGuard, lyricMode, renderer.
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
@@ -387,10 +397,13 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   in-REAPER findings (stopped-only gating; lazy self-track query via the retained
   `reaperHost`; ASCII-only user-visible strings → Known gotchas). Strengthens the case
   for the "Minimum highway range" item below — same stem-guided-charting workflow.
-- **Calibration timeline split done** (2026-08-03) — the trail/scoring mismatch above,
-  then the correction: `pitchTrail` is stored raw and shifted at draw, so the take export
-  writes true project time and the stats readout matches REAPER's transport. Two adjacent
-  defects were found and deliberately left for later:
+- **Calibration timeline split done** (2026-08-03, 2-patch series) — the trail/scoring
+  mismatch above, then the correction: `pitchTrail` is stored raw and shifted at draw, so
+  the take export writes true project time and the stats readout matches REAPER's
+  transport. Follow-up patch added **Live-mic used** (`detectionOffsetSec()`), making the
+  detection-side shift conditional so offline review and stem charting are correct out of
+  the box — default off, since live-mic setup already has a documented checklist to add a
+  step to while offline review had none. Adjacent items deliberately left for later:
   - **Trail tails overhang by up to ~256 ms.** `pitchHoldFrames` (24 hops,
     `PluginProcessor.cpp`) holds `currentMidiFloat` at the last pitch after voicing stops
     and the hop queue publishes the held value, so the trail keeps extending and
@@ -400,9 +413,16 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
     the on-screen contour through consonants and interacts with the Mic gate, so it needs
     its own REAPER pass. Note onsets also run a few tens of ms late (≈32 ms window +
     median), which is inherent, not fixable by timestamping.
-  - **Optional "ignore Calibration for machine sources"** — an explicit toggle that treats
-    the offset as 0 for drawing and scoring (never for the export, already raw), if having
-    to zero the slider for offline review proves annoying in practice.
+  - **Pinned live marker done** (2026-08-03, third patch, after the user tested the
+    playback mode in REAPER) — everything on the playhead line now describes the audio
+    being *heard*, not the newest analysed: `heardDetection()` reads a 256-sample rolling
+    ring of recent hops (`detHistory`, independent of the Pitch Trail toggle and never
+    cleared) and returns the sample one *lead* back, where lead = `latencyOffsetMs / 1000 -
+    detectionOffsetSec()`. Anchoring the lead to the newest sample instead of to
+    `cachedPlayTime` keeps live-mic mode exactly on the newest entry (no jitter from where
+    a hop falls inside an audio block). The arrowhead pins to `phX` again, and the trail
+    clips to that sample while playing. Only a negative lead (negative Calibration *and*
+    playback mode) has no sample to pin to — the marker then follows the newest, as before.
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
   the note-hit spans: per-note coverage ratio is already accumulated in `noteHitSpans`).
 - **Note timing/length editing** — natural next step after pitch editing, but timing
@@ -482,31 +502,40 @@ fallback — were fixed and un-flagged in the 2026-07-17 patch series.)
 
 ## Known gotchas
 
-- **Two timelines exist — decide which one any new feature is on.** Raw project time
-  (`cachedPlayTime`, `currentPlaybackTime`, `HopSample::time`, chart `NoteInfo` times)
-  and the *calibrated* timeline `t = cachedPlayTime - latencyOffsetMs / 1000.0` that
-  the display is drawn against. The rule: **calibrated** for anything drawn and for
-  scoring sung input against chart notes; **raw** for anything written into the project
-  or reported as a project position (`SetEditCurPos`, `MIDI_SetNote`, the take export,
-  the stats time readout). Audio-thread data arrives raw and must be shifted where it is
-  consumed on the message thread. Check a new feature against the existing consumers:
-  paint (`drawHighway`/`drawStats`/`drawLyricStrip`) and `updateNoteHits()` scoring =
-  calibrated; `hitTestNote` = calibrated; click-to-seek = calibrated input producing a
-  raw project time (screen x maps to that note's own time, satisfying both halves of the
-  rule); `<<`/`>>` and arrow-key seeks = raw (relative ±5 s on the real transport);
-  `pitchTrail` = raw, shifted by `calibSec` in `drawHighway`; take export and the stats
-  time readout = raw. Bit us 2026-08-03: the trail stored raw hop times but was drawn
-  against calibrated `t`, so at +200 ms the contour drew 200 ms right of the playhead and
-  every scoring sub-interval fell outside `[t0, t]` — and the first fix over-corrected by
-  storing calibrated times, which leaked the offset into the exported MIDI.
-- **Calibration cancels a *human* round trip — machine sources read early.** The
-  asymmetry behind the timeline rule: the singer hears late and therefore sings late, and
-  `latencyOffsetMs` delays the visuals to match. A machine source — vocal stem, ReaSynth,
+- **Three timelines exist — decide which one any new feature is on.** Raw project time
+  (`cachedPlayTime`, `currentPlaybackTime`, `HopSample::time`, chart `NoteInfo` times);
+  the *drawing* timeline `t = cachedPlayTime - latencyOffsetMs / 1000.0`; and the
+  *detection* timeline `cachedPlayTime - detectionOffsetSec()`, which equals `t` only when
+  **Live-mic used** is on (see the next gotcha). The rule: **drawing `t`** for chart
+  geometry; **detection time** for anything that pairs detected pitch with chart notes;
+  **raw** for anything written into the project or reported as a project position
+  (`SetEditCurPos`, `MIDI_SetNote`, the take export, the stats time readout). Audio-thread
+  data arrives raw and must be shifted where it is consumed on the message thread. Check a
+  new feature against the existing consumers: chart geometry in
+  `drawHighway`/`drawLyricStrip` = drawing `t`; `updateNoteHits()` scoring = detection
+  time; the arrowhead, its visual-snap scan and the whole stats band (pitch, note name, Hz,
+  traffic light) = drawing `t`, with the *pitch* itself fetched through `heardDetection()`
+  so it is the sample belonging at `t` rather than the newest analysed; `hitTestNote` =
+  drawing `t`; click-to-seek = drawing `t` as input producing a raw project time (screen x
+  maps to that note's own time, satisfying both halves of the rule); `<<`/`>>` and
+  arrow-key seeks = raw (relative ±5 s on the real transport); `pitchTrail` = stored raw,
+  shifted by `detectionOffsetSec()` in `drawHighway`; take export and the stats time
+  readout = raw. Bit us 2026-08-03: the trail stored raw hop times but was drawn against
+  `t`, so at +200 ms the contour drew 200 ms right of the playhead and every scoring
+  sub-interval fell outside `[t0, t]` — and the first fix over-corrected by storing
+  calibrated times, which leaked the offset into the exported MIDI.
+- **Calibration cancels a *human* round trip, so the detection shift is conditional.** The
+  singer hears late and therefore sings late; `latencyOffsetMs` delays the visuals to match
+  *and* shifts the sung input back onto the chart. A machine source — vocal stem, ReaSynth,
   reviewing a recorded take — reaches `processBlock` at true project time with no round
-  trip to cancel, so at +200 ms its trail is drawn (and its gold awarded) 200 ms *early*
-  against the notes. Correct behaviour for the setting, and not auto-detectable: a mic and
-  a stem are the same float buffer. Documented in README instead — stem-guided charting
-  must run at 0 ms. The take export is immune (raw either way).
+  trip to cancel, so that second shift would place its trail (and its gold) `calib` early.
+  Which one applies is the **Live-mic used** setting (`liveMicInput`, default off), and
+  `detectionOffsetSec()` in PluginEditor.h is its single point of truth — `calib` when
+  ticked, 0 when not. The chart's own offset is **unconditional** in both modes: the user
+  hears through the same output latency either way, so the note at the playhead is always
+  the one in their ears. Not auto-detected on purpose: a mic and a stem are the same float
+  buffer, and `I_RECARM`/`I_RECMON` false-positives on the still-armed track you just
+  recorded the take on. The take export is immune (raw in both modes).
 - `DEF_CLASS_IID(IReaperHostApplication)` must appear in exactly **one** .cpp file.
   It is in `PluginProcessor.cpp`. Do not add it to any header.
 - `#define NOMINMAX` must precede any Windows headers to avoid `min`/`max` macro conflicts

@@ -212,6 +212,9 @@ public:
     std::atomic<int>    savedPitchTolCents   { 50 };    // GREAT window ± cents; CLOSE = 2×
     std::atomic<bool>   savedPitchTrail      { true };  // sung-pitch contour on the highway
     std::atomic<int>    savedLatencyOffsetMs { 0 };
+    std::atomic<bool>   savedLiveMicInput    { false }; // does the calibration offset apply
+                                                        // to detected pitch (live mic) or
+                                                        // only to the chart (playback)?
     std::atomic<float>  savedPixPerSec       { 200.0f };
     std::atomic<float>  savedLyricScale      { 1.0f };
     std::atomic<int>    savedSquashGuard     { 0 };   // 0=Off 1=Spacing 2=Auto-shrink 3=Hybrid

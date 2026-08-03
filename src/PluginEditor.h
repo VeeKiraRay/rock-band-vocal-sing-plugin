@@ -13,11 +13,20 @@ public:
     void resized ()                override;
 
 private:
+    // One sampled detection: {double time; float pitch}. Backs both the pitch trail and
+    // the marker history below; declared here because heardDetection() returns one.
+    using TrailSample = rbtake::TrailPoint;
+
     void onFrame         ();   // VBlank-driven: throttled REAPER polling + repaint
     void drawHighway     (juce::Graphics&, juce::Rectangle<int>, double playTime);
     // harmonyStrip=false → bottom strip (Main/HARM1 lyrics); true → top strip (HARM2+HARM3).
     void drawLyricStrip  (juce::Graphics&, juce::Rectangle<int>, double playTime, bool harmonyStrip);
     void drawStats       (juce::Graphics&, juce::Rectangle<int>, double playTime);
+    // The detection whose audio the listener is hearing right now: the newest one with a
+    // live mic (their voice has already made the round trip), latencyOffsetMs back for
+    // playback, whose audio is only now reaching them. Raw {time, pitch}; pitch < 0 =
+    // none/unvoiced. Body next to updateNoteHits, which fills the history it reads.
+    TrailSample heardDetection() const;
     // Accumulates per-note sung-within-tolerance spans and the pitch trail each
     // frame. Body in PluginEditorHighway.cpp next to the scoring helpers it shares
     // with the traffic light.
@@ -168,6 +177,12 @@ private:
 
     // Session-only calibration offset (ms) — subtracted from render time in paint().
     int    latencyOffsetMs { 0 };
+    // Does that offset apply to detected pitch as well as to the chart? A live singer's
+    // voice is timestamped only after the song has travelled out to their ears and back,
+    // which is the round trip latencyOffsetMs measures — so it must be shifted back onto
+    // the chart. Playback (a stem, a recorded take) never made that trip and is already
+    // at its true project time. See detectionOffsetSec().
+    bool   liveMicInput   { false };
     // Session-only scroll rate (px/s) — drives both highway and lyric strips together.
     float  pixPerSec       { 200.0f };
     // Lyric-strip scale (1.0 = 100%) — scales strip text and the strip heights
@@ -219,8 +234,17 @@ private:
     // raw project time (drawHighway applies the Calibration offset, so the take export
     // gets true project time); pitch < 0 is a gap marker that breaks the drawn contour.
     // Cleared on a new pass with the hit spans; survives chart reloads (references no notes).
-    using TrailSample = rbtake::TrailPoint;   // identical layout {double time; float pitch}
     std::vector<TrailSample> pitchTrail;
+
+    // Recent detections backing heardDetection(), so the playhead-line marker can show
+    // the audio being heard rather than the newest analysed. Deliberately independent of
+    // the Pitch Trail setting and of the pass lifecycle — a plain rolling window, never
+    // cleared. 256 samples is ~2.7 s at the ~94 Hz hop rate, ample for the +500 ms maximum
+    // Calibration even with dropped frames.
+    static constexpr int kDetHistorySize = 256;
+    std::array<TrailSample, kDetHistorySize> detHistory {};
+    int detHistoryHead  { 0 };   // next write slot
+    int detHistoryCount { 0 };   // entries written, saturating at kDetHistorySize
 
     // Reusable scratch buffer for draining audioProcessor's per-hop pitch queue
     // in updateNoteHits() — reused every frame to avoid per-frame allocation.
@@ -312,6 +336,11 @@ private:
     int lyricStripH() const { return juce::roundToInt (kLyricBaseH * lyricScale); }
     int windowH()     const { return kWindowBaseH - kLyricBaseH + lyricStripH(); }
     int windowHHarm() const { return windowH() + lyricStripH(); }
+
+    // Seconds to subtract from a detection's raw project time to place it on the chart —
+    // the single point of truth for the live-mic / playback split (see liveMicInput).
+    // The chart's own offset is unconditional; only detections are conditional.
+    double detectionOffsetSec() const { return liveMicInput ? latencyOffsetMs / 1000.0 : 0.0; }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RBVocalSingAudioProcessorEditor)
 };

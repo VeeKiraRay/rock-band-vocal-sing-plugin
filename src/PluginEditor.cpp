@@ -123,6 +123,8 @@ public:
         std::function<void(int)>   setRenderer;
         int                         initCalib          { 0 };
         std::function<void(int)>    setCalib;
+        bool                        initLiveMic        { false };
+        std::function<void(bool)>   setLiveMic;
         float                       initSpeed          { 200.0f };
         std::function<void(float)>  setSpeed;
         float                       initLyricScale     { 1.0f };
@@ -152,6 +154,7 @@ public:
         static const juce::String kTipPriority = "Skips frames when paint takes too long, keeping REAPER's UI responsive. Recommended at large window sizes.";
         static const juce::String kTipRenderer = "CPU: software renderer (default). OpenGL: GPU rendering, may help at large window sizes. 'session only' reverts on next load; 'persist' saves the choice.";
         static const juce::String kTipCalib    = "Shift note timing to compensate for audio output latency. Positive = notes appear later.";
+        static const juce::String kTipLiveMic  = "Tick when you sing into a mic: your voice reaches the plugin late by the same output latency Calibration compensates, so your detected pitch is shifted back onto the chart too. Leave it off when the plugin listens to playback (a vocal stem or a recorded take) - that audio is already at its true project time, and shifting it would draw the pitch trail early. No effect at 0 ms.";
         static const juce::String kTipSpeed    = "How fast notes scroll across the highway. Higher = notes spread further apart.";
         static const juce::String kTipLyricSize = "Size of the lyric-strip text. The strips (and the default window height) grow or shrink to match.";
         static const juce::String kTipSquash    = "What scrolling lyrics do when packed words would overlap: push them apart (Spacing), squeeze the text to fit (Auto-shrink), or squeeze a little then push the rest (Hybrid).";
@@ -217,6 +220,13 @@ public:
             this->cbs.setCalib ((int) calibSlider.getValue());
         };
         addAndMakeVisible (calibSlider);
+
+        setupLabel (liveMicLabel, "Live-mic used", kTipLiveMic);
+        setupToggle (liveMicToggle, this->cbs.initLiveMic, kTipLiveMic);
+        liveMicToggle.onClick = [this]
+        {
+            this->cbs.setLiveMic (liveMicToggle.getToggleState());
+        };
 
         setupLabel (speedLabel, "Note Speed", kTipSpeed);
         noteSpeedSlider.setSliderStyle (juce::Slider::IncDecButtons);
@@ -351,6 +361,7 @@ public:
         area.removeFromTop (kSecGap);
         layoutHdr (highwayHeader);
         layoutRow (calibLabel, calibSlider);
+        layoutRow (liveMicLabel, liveMicToggle, 24);
         layoutRow (speedLabel, noteSpeedSlider);
         layoutRow (lyricSizeLabel, lyricSizeSlider);
         layoutRow (squashLabel, squashCombo, 130);
@@ -379,11 +390,11 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (4) + SINGING (4), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (5) + SINGING (4), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (4)
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (5)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (4);
 
 private:
@@ -436,6 +447,8 @@ private:
 
     juce::Label         calibLabel;
     juce::Slider        calibSlider;
+    juce::Label         liveMicLabel;
+    juce::ToggleButton  liveMicToggle;
     juce::Label         speedLabel;
     juce::Slider        noteSpeedSlider;
     juce::Label         lyricSizeLabel;
@@ -610,6 +623,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         };
         cbs.initCalib          = latencyOffsetMs;
         cbs.setCalib           = [safe] (int v)    { if (safe) { safe->latencyOffsetMs = v; safe->audioProcessor.savedLatencyOffsetMs = v; safe->repaint(); } };
+        cbs.initLiveMic        = liveMicInput;
+        cbs.setLiveMic         = [safe] (bool v)   { if (safe) { safe->liveMicInput = v; safe->audioProcessor.savedLiveMicInput = v; safe->repaint(); } };
         cbs.initSpeed          = pixPerSec;
         cbs.setSpeed           = [safe] (float v)  { if (safe) { safe->pixPerSec = v; safe->audioProcessor.savedPixPerSec = v; safe->repaint(); } };
         cbs.initLyricScale     = lyricScale;
@@ -704,6 +719,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     pitchTolCents       = juce::jlimit (25, 100, audioProcessor.savedPitchTolCents.load());
     pitchTrailOn        = audioProcessor.savedPitchTrail;
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
+    liveMicInput        = audioProcessor.savedLiveMicInput;
     pixPerSec           = audioProcessor.savedPixPerSec;
     lyricScale          = audioProcessor.savedLyricScale;
     squashGuard         = (SquashMode) juce::jlimit (0, 3, audioProcessor.savedSquashGuard.load());

@@ -17,6 +17,14 @@ option(RBVS_BUILD_TESTS "Build unit tests" ON)
 # hits an undefined identifier and both targets stay in sync.
 option(RB_PAINT_PROFILE "Show per-section paint timings in the status bar" OFF)
 
+# Audio-thread diagnostics: appends detector cost (ms per detectPitch call), audio-thread
+# load (processBlock as a fraction of its deadline) and the achieved hop rate to the status
+# bar. Separate from RB_PAINT_PROFILE so the detector can be measured without paint
+# instrumentation perturbing the same status bar. Same 0/1 always-defined contract.
+# Measure in RELEASE ONLY - Debug's unoptimised FFT makes the numbers meaningless
+# (see the paint-profiling lesson in CLAUDE.md).
+option(RB_PITCH_PROFILE "Show pitch-detector timings in the status bar" OFF)
+
 if (RBVS_BUILD_TESTS)
     CPMAddPackage(
         NAME Catch2
@@ -45,6 +53,7 @@ target_sources(RBVocalSing
     PRIVATE
         src/PluginProcessor.cpp
         src/PitchDetection.cpp
+        src/NsdfPeak.cpp
         src/ChartLoader.cpp
         src/TakeExport.cpp
         src/PluginEditor.cpp
@@ -58,6 +67,7 @@ target_compile_definitions(RBVocalSing
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         RB_PAINT_PROFILE=$<BOOL:${RB_PAINT_PROFILE}>
+        RB_PITCH_PROFILE=$<BOOL:${RB_PITCH_PROFILE}>
 )
 
 target_link_libraries(RBVocalSing
@@ -81,6 +91,7 @@ if (RBVS_BUILD_TESTS)
         PRIVATE
             src/PluginProcessor.cpp
             src/PitchDetection.cpp
+            src/NsdfPeak.cpp
             src/ChartLoader.cpp
             src/TakeExport.cpp
             src/PluginEditor.cpp
@@ -88,6 +99,7 @@ if (RBVS_BUILD_TESTS)
             src/PluginEditorLyrics.cpp
             tests/TestMain.cpp
             tests/PitchDetectionTests.cpp
+            tests/NsdfPeakTests.cpp
             tests/ChartLoaderTests.cpp
             tests/StateTests.cpp
             tests/TakeExportTests.cpp
@@ -99,6 +111,7 @@ if (RBVS_BUILD_TESTS)
             JUCE_USE_CURL=0
             JUCE_VST3_CAN_REPLACE_VST2=0
             RB_PAINT_PROFILE=$<BOOL:${RB_PAINT_PROFILE}>
+            RB_PITCH_PROFILE=$<BOOL:${RB_PITCH_PROFILE}>
     )
 
     target_include_directories(RBVocalSingTests

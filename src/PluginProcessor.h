@@ -163,6 +163,37 @@ public:
     std::atomic<float>  currentClarity      { 0.0f };
     std::atomic<double> currentPlaybackTime { 0.0 };  // fallback when API unavailable
 
+    // One entry per audio-thread hop estimate (~every 16 ms). Queued so the UI
+    // thread can see every estimate instead of point-sampling the latest atomics
+    // once per frame — a hop-level detection that gets superseded (next hop, hold
+    // decay, silence) before the next UI frame reads the atomics was previously
+    // invisible to note-hit tracking and the take-export pitch trail, especially
+    // for notes shorter than one UI frame interval (see _upcoming/SHORT_NOTE_HIT_TRACKING.md).
+    struct HopSample { double time; float midiFloat; bool voiced; };
+    static constexpr int kHopQueueCapacity = 128;  // ~2s of hops @ ~16ms — UI-stall headroom
+
+    // Message thread only. Drains up to maxCount queued hop samples (oldest first)
+    // into dest; returns the count actually read.
+    int drainHopSamples (HopSample* dest, int maxCount) noexcept;
+
+    // ── Audio-thread cost diagnostics (RB_PITCH_PROFILE builds) ───────────────
+    // Written on the audio thread, read by drawStatusBar. Members exist under both
+    // flag values so the class layout never depends on the macro (same convention as
+    // the editor's paint EMAs); only the writes and the readout are compiled out.
+    //
+    // profDetectMs   — EMA of one detectPitch() call in ms. The number that moves if
+    //                  the FFT size, window or internal rate change.
+    // profBlockLoad  — EMA of processBlock's duration as a fraction of its deadline
+    //                  (numSamples / hostSampleRate). This is the audio-thread load:
+    //                  it includes the per-host-sample front-end filters, which no
+    //                  decimation change affects.
+    // profDetectCount— monotonic detection counter; the editor differentiates it to
+    //                  show the achieved hop rate (expected ~62/s today). Confirms the
+    //                  cadence half of any window/hop retune actually landed.
+    std::atomic<double>   profDetectMs    { 0.0 };
+    std::atomic<double>   profBlockLoad   { 0.0 };
+    std::atomic<uint32_t> profDetectCount { 0 };
+
     // ── UI thread -> audio thread ─────────────────────────────────────────────
     std::atomic<float> gateThreshold  { 0.01f };
     std::atomic<bool>  audioAboveGate { false };
@@ -202,21 +233,34 @@ private:
     float detectPitchMPM             (const float*, int);
 
     // ── Pitch-detection front end ─────────────────────────────────────────────
-    // Detection runs at a fixed ~16 kHz internal rate: processBlock conditions the
-    // input (70 Hz high-pass against rumble/plosives, 6 kHz low-pass anti-alias),
-    // keeps every decimFactor-th sample into a ring of the last kPitchWindow
-    // samples, and analyses the ring every kPitchHop new samples — overlapping
-    // windows, one estimate every ~16 ms (~62/s). All window/lag maths uses
-    // detectRate, never the host rate, so the constants below hold at every host
-    // rate by construction. kPitchWindow = 768 internal samples ≈ 48 ms at 16 kHz.
-    // kMaxLagBuf must exceed the largest lag, detectRate / 80 Hz; the worst case is
-    // a host rate just under 24 kHz (decimFactor 1 → lag ≈ 298), hence 320.
-    // kPitchWindow ≥ 2 × maxLag holds everywhere, keeping the detectors'
-    // autocorrelation guards satisfied.
+    // Detection runs at a fixed ~24 kHz internal rate: processBlock conditions the
+    // input (high-pass at the band floor against rumble/plosives, 6 kHz low-pass
+    // anti-alias), keeps every decimFactor-th sample into a ring of the last
+    // kPitchWindow samples, and analyses the ring every kPitchHop new samples —
+    // overlapping windows, one estimate every ~11 ms (~94/s). All window/lag maths
+    // uses detectRate, never the host rate, so the constants below hold at every host
+    // rate by construction. kPitchWindow = 768 internal samples ≈ 32 ms at 24 kHz.
+    //
+    // The rate was 16 kHz until 2026-08-03. Measured at 24 kHz (sweeps in
+    // tests/NsdfPeakTests.cpp, tabulated in _upcoming/PITCH_DETECTION_FINDINGS.md):
+    // ~14% fewer dropouts on noisy input at equal accuracy, high-range (MIDI 72-84)
+    // error 3.6 -> 1.5 cents, and — because the window is a fixed *sample count* — the
+    // analysis window shortens 48 -> 32 ms, which is SHORT_NOTE_HIT_TRACKING §1's
+    // short-note improvement arriving for free. 24 kHz is also the ceiling: integer
+    // decimation from a 48 kHz host reaches only 48000/24000/16000, and a higher
+    // internal rate would push kPitchWindow + maxLag past kFftSize.
+    //
+    // kMaxLagBuf must exceed the largest lag, detectRate / rbpitch::kMinFreqHz (60 Hz);
+    // the worst case is a host rate just under 36 kHz (decimFactor 1 → lag ≈ 599),
+    // hence 640. Note kPitchWindow ≥ 2 × maxLag does not hold there — the correlation
+    // width only has to be a fraction of the lag range, not exceed it (measured down to
+    // 0.4× with no loss, PITCH_DETECTION_FINDINGS.md §7), so
+    // detectPitchAutocorrelation's guard was relaxed to match YIN's. Only hosts in the
+    // 34-36 kHz band go below that measured 0.4 ratio, and none are in common use.
     static constexpr int kPitchWindow     = 768;
     static constexpr int kPitchHop        = 256;  // 3 hops per window
-    static constexpr int kPitchHoldCycles = 16;   // ≈ 260 ms of hold at the ~16 ms hop cadence
-    static constexpr int kMaxLagBuf       = 320;
+    static constexpr int kPitchHoldCycles = 24;   // ≈ 260 ms of hold at the ~11 ms hop cadence
+    static constexpr int kMaxLagBuf       = 640;
 
     // Frames whose NSDF peak is below this are unvoiced (breath, consonants, noise):
     // they feed the hold decay instead of publishing a garbage pitch.
@@ -246,7 +290,9 @@ private:
     static void setBiquadLP (Biquad&, double sampleRate, double freq);
     static void setBiquadHP (Biquad&, double sampleRate, double freq);
 
-    double detectRate  { 16000.0 };  // internal detection rate = host rate / decimFactor
+    double detectRate     { 16000.0 };  // internal detection rate = host rate / decimFactor
+    double hostSampleRate { 48000.0 };  // set in prepareToPlay; used for hop timestamping
+                                         // (getSampleRate() isn't reliably set outside a real host)
     int    decimFactor { 3 };
     int    decimPhase  { 0 };
     Biquad hpFilter;                 // 70 Hz high-pass (rumble / plosive rejection)
@@ -268,6 +314,14 @@ private:
     // Reset on every unvoiced frame so a fresh onset publishes immediately.
     float medianHist[3] = {};
     int   medianCount { 0 };
+
+    // SPSC queue backing drainHopSamples() above — written here (audio thread),
+    // drained on the message thread. Drop-newest on overflow: the fifo only fills
+    // if the UI thread stalls for ~2s+, at which point a dropped sample is the
+    // least of the problems.
+    juce::AbstractFifo hopFifo { kHopQueueCapacity };
+    std::array<HopSample, kHopQueueCapacity> hopBuffer;
+    void pushHopSample (double time, float midiFloat, bool voiced) noexcept;
 
     // Constructed once with the processor (allocation happens off the audio thread);
     // fftScratch is the in-place real-FFT workspace (2 × kFftSize floats).

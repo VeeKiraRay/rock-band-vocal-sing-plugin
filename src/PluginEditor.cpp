@@ -1083,6 +1083,26 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         displayFps     = (achievable > 1.0e-6) ? (1.0 / achievable) : 0.0;
     }
 
+    // Detector hop rate: differentiate the processor's monotonic counter over ~1 s.
+    // Unsigned wraparound subtracts correctly, so no overflow handling is needed.
+#if RB_PITCH_PROFILE
+    {
+        const double since = (now - lastHopRateTicks) / ticksPerSec;
+        if (lastHopRateTicks == 0)
+        {
+            lastHopRateTicks = now;
+            lastHopCountSnap = audioProcessor.profDetectCount.load (std::memory_order_relaxed);
+        }
+        else if (since >= 1.0)
+        {
+            const uint32_t nowCount = audioProcessor.profDetectCount.load (std::memory_order_relaxed);
+            displayHopsPerSec = (double) (uint32_t) (nowCount - lastHopCountSnap) / since;
+            lastHopCountSnap  = nowCount;
+            lastHopRateTicks  = now;
+        }
+    }
+#endif
+
     const bool apiReady = audioProcessor.reaperApi.isLoaded();
 
     if (apiReady)

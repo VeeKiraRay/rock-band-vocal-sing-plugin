@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "PluginProcessor.h"
+#include "NsdfPeak.h"
 #include <cmath>
 #include <algorithm>
 
@@ -43,10 +44,12 @@ float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSampl
 
 float RBVocalSingAudioProcessor::detectPitchAutocorrelation (const float* samples, int numSamples)
 {
-    const int minLag = (int) (detectRate / 1000.0);
-    const int maxLag = std::min ((int) (detectRate / 80.0), kMaxLagBuf - 1);
+    const auto [minLag, maxLag] = rbpitch::lagBounds (detectRate, kMaxLagBuf);
 
-    if (numSamples < maxLag * 2) return 0.0f;
+    // Only needs a non-empty correlation width — requiring numSamples ≥ 2 × maxLag was
+    // over-strict and silently disabled this fallback once the lag range widened to
+    // 60 Hz (_upcoming/PITCH_DETECTION_FINDINGS.md §7 measured 0.4× as lossless).
+    if (numSamples <= maxLag) return 0.0f;
 
     float bestCorr = -1.0f;
     int   bestLag  = minLag;
@@ -58,6 +61,13 @@ float RBVocalSingAudioProcessor::detectPitchAutocorrelation (const float* sample
         for (int n = 0; n < limit; ++n)
             corr += samples[n] * samples[n + lag];
 
+        // Mean, not sum: the overlap shrinks as the lag grows, so a raw sum falls off
+        // with lag for reasons that have nothing to do with periodicity and biases the
+        // search toward short lags — the same defect fixed-width summation addresses in
+        // YIN (_upcoming/PITCH_DETECTION_FINDINGS.md §5). Latent until the scanned band
+        // widened; before that, minLag happened to sit past the crossover.
+        corr /= (float) limit;
+
         if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
     }
 
@@ -68,9 +78,8 @@ float RBVocalSingAudioProcessor::detectPitchAutocorrelation (const float* sample
 
 float RBVocalSingAudioProcessor::detectPitchYIN (const float* samples, int numSamples)
 {
-    const int minLag = (int) (detectRate / 1000.0);
-    const int maxLag = std::min ((int) (detectRate / 80.0), kMaxLagBuf - 1);
-    const int W      = numSamples - maxLag;
+    const auto [minLag, maxLag] = rbpitch::lagBounds (detectRate, kMaxLagBuf);
+    const int  W                = numSamples - maxLag;
 
     if (W <= 0) return 0.0f;
 
@@ -124,8 +133,7 @@ float RBVocalSingAudioProcessor::detectPitchYIN (const float* samples, int numSa
 
 float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSamples)
 {
-    const int minLag = (int) (detectRate / 1000.0);
-    const int maxLag = std::min ((int) (detectRate / 80.0), kMaxLagBuf - 1);
+    const auto [minLag, maxLag] = rbpitch::lagBounds (detectRate, kMaxLagBuf);
 
     // nsdf(τ) = 2·acf(τ) / m(τ), same values as the direct O(N × maxLag) loop this
     // replaced — only the computation route changed. acf(τ) for all lags at once is
@@ -158,56 +166,15 @@ float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSa
         nsdf[tau] = (m > 0.0f) ? 2.0f * fftScratch[tau] / m : 0.0f;
     }
 
-    const float globalMax    = *std::max_element (nsdf + minLag, nsdf + maxLag + 1);
-    const float keyThreshold = 0.93f * globalMax;
+    // Peak selection, boundary rejection, the clarity gate and parabolic interpolation
+    // all live in rbpitch::findNsdfPeak (src/NsdfPeak.h) — pure, so the unit tests drive
+    // them on hand-built NSDF tables instead of hoping a synthesised signal hits each
+    // path. Clarity is published even when the frame is rejected for being unvoiced.
+    const auto peak = rbpitch::findNsdfPeak (nsdf, { minLag, maxLag, 0.93f, kClarityThreshold });
+    lastDetectClarity = peak.clarity;
 
-    int   bestTau  = -1;
-    bool  inPos    = false;
-    float localMax = 0.0f;
-    int   localTau = minLag;
-
-    for (int tau = minLag; tau <= maxLag; ++tau)
-    {
-        if (nsdf[tau] > 0.0f)
-        {
-            if (!inPos || nsdf[tau] > localMax) { localMax = nsdf[tau]; localTau = tau; }
-            inPos = true;
-        }
-        else if (inPos)
-        {
-            if (localMax >= keyThreshold) { bestTau = localTau; break; }
-            inPos    = false;
-            localMax = 0.0f;
-        }
-    }
-
-    if (bestTau < 0 && inPos && localMax >= keyThreshold)
-        bestTau = localTau;
-
-    if (bestTau < 0) return 0.0f;
-
-    // A peak sitting on a scan boundary is never a trustworthy pitch — transients
-    // (e.g. the front-end high-pass ringing after an abrupt signal stop) pin the
-    // detection at exactly minLag or maxLag. Reject rather than publish the cap.
-    if (bestTau <= minLag || bestTau >= maxLag)
+    if (peak.tau <= 0.0f)
         return 0.0f;
 
-    // The chosen NSDF peak height is a 0–1 voicing confidence. Breath, consonants
-    // and noise pass the RMS energy gate but correlate poorly — treat those frames
-    // as unvoiced (they feed the hold decay in processBlock, like silence).
-    lastDetectClarity = std::min (localMax, 1.0f);
-    if (lastDetectClarity < kClarityThreshold)
-        return 0.0f;
-
-    float betterTau = (float) bestTau;
-    {
-        const float s0    = nsdf[bestTau - 1];
-        const float s1    = nsdf[bestTau];
-        const float s2    = nsdf[bestTau + 1];
-        const float denom = 2.0f * s1 - s2 - s0;
-        if (std::abs (denom) > 1e-6f)
-            betterTau = (float) bestTau + (s2 - s0) / (2.0f * denom);
-    }
-
-    return (float) detectRate / betterTau;
+    return (float) detectRate / peak.tau;
 }

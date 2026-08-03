@@ -8,10 +8,10 @@
 namespace
 {
     // Feeds numBlocks blocks of blockSize samples of a continuous-phase sine through
-    // processBlock. Detection analyses a 768-sample window of the ~16 kHz decimated
+    // processBlock. Detection analyses a 768-sample window of the ~24 kHz decimated
     // stream every 256-sample hop, and decimFactor scales with the host rate — so
-    // the default block count scales too: 9 blocks of 512 samples per 48 kHz = 1536
-    // internal samples = the initial window fill plus exactly three hops, so
+    // the default block count scales too: 9 blocks of 512 samples per 48 kHz = 2304
+    // internal samples = the initial window fill plus exactly six hops, so
     // follow-up feeds (silence, a new tone) start on a hop boundary.
     void feedSine (RBVocalSingAudioProcessor& proc, double sampleRate, float freqHz,
                    float amplitude, int blockSize = 512, int numBlocks = -1)
@@ -43,6 +43,55 @@ namespace
         juce::AudioBuffer<float> buffer (2, blockSize);
         buffer.clear();
         return buffer;
+    }
+
+    // A bare AudioProcessor under test has no host-supplied play head, so
+    // currentPlaybackTime (and therefore each HopSample's timestamp) never
+    // advances — every processBlock call would report the same frozen time. This
+    // fake play head advances in step with fed audio so hop-queue tests see
+    // realistic, monotonically increasing timestamps across block boundaries.
+    struct FakePlayHead : public juce::AudioPlayHead
+    {
+        double         sampleRate     { 48000.0 };
+        juce::int64    samplesElapsed { 0 };
+
+        juce::Optional<PositionInfo> getPosition() const override
+        {
+            PositionInfo info;
+            info.setTimeInSeconds ((double) samplesElapsed / sampleRate);
+            return info;
+        }
+    };
+
+    // Like feedSine, but attaches a FakePlayHead that advances with the fed audio.
+    void feedSineWithPlayhead (RBVocalSingAudioProcessor& proc, FakePlayHead& playHead,
+                                double sampleRate, float freqHz, float amplitude,
+                                int blockSize = 512, int numBlocks = -1)
+    {
+        if (numBlocks < 0)
+            numBlocks = 9 * std::max (1, (int) (sampleRate / 48000.0));
+
+        proc.prepareToPlay (sampleRate, blockSize);
+        playHead.sampleRate = sampleRate;
+        proc.setPlayHead (&playHead);
+
+        juce::MidiBuffer midi;
+        int sampleIndex = 0;
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (2, blockSize);
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const float sample = amplitude * std::sin (2.0f * juce::MathConstants<float>::pi
+                                                             * freqHz * (float) sampleIndex / (float) sampleRate);
+                buffer.setSample (0, i, sample);
+                buffer.setSample (1, i, sample);
+                ++sampleIndex;
+            }
+            proc.processBlock (buffer, midi);
+            playHead.samplesElapsed += blockSize;
+        }
     }
 }
 
@@ -81,17 +130,31 @@ TEST_CASE ("pitch: 440 Hz sine at 44.1 kHz still detects MIDI 69 (sample-rate in
     REQUIRE (proc.currentMidiNote.load() == 69);
 }
 
+TEST_CASE ("pitch: 32 kHz host runs undecimated and still detects MIDI 57", "[pitch]")
+{
+    // Newly reachable since the internal rate moved to 24 kHz: lround(32000/24000) = 1,
+    // so a 32 kHz host is the decimFactor == 1 path — detectRate 32000, maxLag 533.
+    // That is the case kMaxLagBuf (640) and kFftSize (768 + 533 = 1301) are sized
+    // against, and nothing else in the suite exercises it. Under the old 16 kHz target
+    // this rate decimated by 2 and never hit the undecimated path at all.
+    RBVocalSingAudioProcessor proc;
+    feedSine (proc, 32000.0, 220.0f, 0.5f);
+
+    REQUIRE (proc.currentMidiNote.load() == 57);
+    REQUIRE (proc.currentFrequency.load() == Catch::Approx (220.0f).epsilon (0.01));
+}
+
 TEST_CASE ("pitch: overlapping windows re-estimate every hop during a glide", "[pitch]")
 {
     RBVocalSingAudioProcessor proc;
     feedSine (proc, 48000.0, 440.0f, 0.5f);   // ends exactly on a hop boundary
     REQUIRE (proc.currentMidiNote.load() == 69);
 
-    // One hop = 256 internal samples × 3 decimation = 768 host samples (~16 ms).
+    // One hop = 256 internal samples × 2 decimation = 512 host samples (~11 ms).
     // Glide 440 → 494 Hz with continuous phase over 10 hops and count how many hops
     // publish a fresh estimate: the overlapping engine re-analyses every hop, so
     // nearly all of them must update — a non-overlapping 768-sample window could
-    // only have produced ~3 estimates over the same 7680 host samples. (A hard
+    // only have produced ~5 estimates over the same 7680 host samples. (A hard
     // tone *switch* is deliberately not asserted here: a window mixing two tones
     // legitimately correlates best at a near-common period, so MPM's output on the
     // transition frames is ambiguous by nature.)
@@ -200,28 +263,36 @@ TEST_CASE ("pitch: hold-decay keeps the note through kPitchHoldCycles then reset
     }
     REQUIRE (proc.currentMidiNote.load() == 69);
 
-    // One hop = 256 internal samples × 3 (decimation at 48 kHz) = 768 host samples.
-    // The first two silent detections still see sine in the overlapping window (a
-    // tone takes a full window, 3 hops, to leave) and re-arm the hold; pure-silence
-    // detections start at the 3rd. kPitchHoldCycles = 16 of those are tolerated, so
-    // the note survives through silent block 28; the 19th silent detection — the
-    // 17th pure-silence one, at host offset ~14592 during block 29 — clears it.
-    for (int block = 1; block <= 28; ++block)
+    // Feed silence until the hold expires, then assert how long it lasted in *real
+    // time*. kPitchHoldCycles is specified as ≈260 ms, not as a hop count, and the hop
+    // cadence moves whenever detectRate does — so asserting milliseconds keeps this
+    // test meaningful across internal-rate changes instead of needing its arithmetic
+    // re-derived each time (it did, twice, before this was rewritten).
+    //
+    // Expect ~288 ms: kPitchHoldCycles hops of hold, plus the ~3 hops it takes the tone
+    // to leave the overlapping window (those windows still detect and re-arm the hold).
+    // The lower bound is set to catch kPitchHoldCycles not being rescaled alongside a
+    // rate change, which would land near 200 ms.
+    int  silentBlocks  = 0;
+    bool heldAtHalfway = false;
+
+    while (proc.currentMidiNote.load() != -1 && silentBlocks < 200)
     {
         auto silence = silentBlock (512);
         proc.processBlock (silence, midi);
+        ++silentBlocks;
 
-        if (block % 4 == 0)
-            REQUIRE (proc.currentMidiNote.load() == 69);
+        if (silentBlocks == 12)   // ~128 ms in, comfortably inside the hold
+            heldAtHalfway = (proc.currentMidiNote.load() == 69);
     }
 
-    for (int block = 0; block < 2; ++block)
-    {
-        auto silence = silentBlock (512);
-        proc.processBlock (silence, midi);
-    }
+    const double heldMs = silentBlocks * 512.0 / 48000.0 * 1000.0;
+    INFO ("cleared after " << silentBlocks << " silent blocks = " << heldMs << " ms");
 
-    REQUIRE (proc.currentMidiNote.load() == -1);
+    REQUIRE (silentBlocks < 200);   // it must actually clear, not hold forever
+    REQUIRE (heldAtHalfway);
+    REQUIRE (heldMs > 240.0);
+    REQUIRE (heldMs < 360.0);
     REQUIRE (proc.currentMidiFloat.load() == -1.0f);
 }
 
@@ -230,16 +301,15 @@ TEST_CASE ("pitch: prepareToPlay clears a stale partial accumulation (CODE_REVIE
     RBVocalSingAudioProcessor proc;
 
     // Leave 512 decimated samples of a 110 Hz sine sitting in the accumulator
-    // (3 blocks × 512 host ÷ 3 decimation) — under the 768-sample window, so no
+    // (2 blocks × 512 host ÷ 2 decimation) — under the 768-sample window, so no
     // detection fires and a stale fill would survive.
-    feedSine (proc, 48000.0, 110.0f, 0.5f, 512, 3);
+    feedSine (proc, 48000.0, 110.0f, 0.5f, 512, 2);
     REQUIRE (proc.currentMidiNote.load() == -1);
 
     // Restart (feedSine re-runs prepareToPlay) and feed just past one window's worth
-    // of 440 Hz (768 × 3 = 2304 host samples → 5 blocks). Without the reset the only
-    // detection window would be two-thirds stale 110 Hz samples and misreport the
-    // pitch.
-    feedSine (proc, 48000.0, 440.0f, 0.5f, 512, 5);
+    // of 440 Hz (768 × 2 = 1536 host samples → 4 blocks). Without the reset the first
+    // detection window would be part stale 110 Hz samples and misreport the pitch.
+    feedSine (proc, 48000.0, 440.0f, 0.5f, 512, 4);
 
     REQUIRE (proc.currentMidiNote.load() == 69);
     REQUIRE (proc.currentFrequency.load() == Catch::Approx (440.0f).epsilon (0.01));
@@ -251,11 +321,12 @@ TEST_CASE ("pitch: 192 kHz, 110 Hz sine detects MIDI 45 (CODE_REVIEW.md 1.2)", "
     proc.pitchMethod.store (0);   // Autocorrelation — the fallback whose guard this covers
     feedSine (proc, 192000.0, 110.0f, 0.5f);
 
-    // Detection runs on the fixed ~16 kHz decimated stream (192 kHz ÷ 12), so the
-    // Autocorrelation detector's `numSamples < maxLag * 2` guard holds at any host
-    // rate by construction. The 2% frequency tolerance reflects this fallback's
-    // integer-lag resolution (~0.7% per lag step at 110 Hz, ±1 lag of bias) — the
-    // rounded MIDI note is the regression guard here.
+    // Detection runs on the fixed ~24 kHz decimated stream (192 kHz ÷ 8), so this
+    // fallback's window guard holds at any host rate by construction. The 2% frequency
+    // tolerance reflects its integer-lag resolution (~0.7% per lag step at 110 Hz, ±1 lag
+    // of bias) — the rounded MIDI note is the regression guard here. It also covers the
+    // mean-vs-sum normalisation: without it the shrinking overlap biases this detector
+    // toward short lags and it pins on minLag (MIDI 87).
     REQUIRE (proc.currentMidiNote.load() == 45);
     REQUIRE (proc.currentFrequency.load() == Catch::Approx (110.0f).epsilon (0.02));
 }
@@ -266,8 +337,86 @@ TEST_CASE ("pitch: 192 kHz, 110 Hz sine with MPM (production algorithm) detects 
     proc.pitchMethod.store (2);   // MPM — the algorithm the editor fixes at startup
     feedSine (proc, 192000.0, 110.0f, 0.5f);
 
-    // At the fixed ~16 kHz internal rate the 80 Hz floor needs lag ≤ 200, well inside
+    // At the fixed ~24 kHz internal rate the 60 Hz floor needs lag ≤ 400, well inside
     // kMaxLagBuf at every host rate — MPM's clamp can't raise the detection floor.
     REQUIRE (proc.currentMidiNote.load() == 45);
     REQUIRE (proc.currentFrequency.load() == Catch::Approx (110.0f).epsilon (0.01));
+}
+
+// ─── Hop-sample queue (bug #3 fix, see _upcoming/SHORT_NOTE_HIT_TRACKING.md) ────
+// The audio thread queues one HopSample per detection hop instead of only ever
+// publishing the latest atomics, so the UI thread can see every hop-level
+// estimate instead of point-sampling once per frame.
+
+TEST_CASE ("hop queue: drainHopSamples returns one entry per hop, strictly time-ascending", "[pitch][hopqueue]")
+{
+    RBVocalSingAudioProcessor proc;
+    FakePlayHead playHead;
+    feedSineWithPlayhead (proc, playHead, 48000.0, 440.0f, 0.5f);   // ends on a hop boundary (see feedSine)
+
+    RBVocalSingAudioProcessor::HopSample buf[RBVocalSingAudioProcessor::kHopQueueCapacity];
+    const int n = proc.drainHopSamples (buf, RBVocalSingAudioProcessor::kHopQueueCapacity);
+
+    REQUIRE (n > 0);
+    for (int i = 1; i < n; ++i)
+        REQUIRE (buf[i].time > buf[i - 1].time);
+
+    // The window has fully settled on the tone by the last hop.
+    REQUIRE (buf[n - 1].voiced);
+    REQUIRE (buf[n - 1].midiFloat == Catch::Approx (69.0f).margin (0.5f));
+}
+
+TEST_CASE ("hop queue: a partial drain leaves the remaining samples for the next call", "[pitch][hopqueue]")
+{
+    RBVocalSingAudioProcessor proc;
+    FakePlayHead playHead;
+    feedSineWithPlayhead (proc, playHead, 48000.0, 440.0f, 0.5f);
+
+    RBVocalSingAudioProcessor::HopSample first[1];
+    const int n1 = proc.drainHopSamples (first, 1);
+    REQUIRE (n1 == 1);
+
+    RBVocalSingAudioProcessor::HopSample rest[RBVocalSingAudioProcessor::kHopQueueCapacity];
+    const int n2 = proc.drainHopSamples (rest, RBVocalSingAudioProcessor::kHopQueueCapacity);
+    REQUIRE (n2 > 0);
+    REQUIRE (rest[0].time > first[0].time);   // continues in time after the first entry
+}
+
+TEST_CASE ("hop queue: overflow drops newest without corrupting the drain (UI-stall case)", "[pitch][hopqueue]")
+{
+    RBVocalSingAudioProcessor proc;
+    FakePlayHead playHead;
+    playHead.sampleRate = 48000.0;
+    proc.prepareToPlay (48000.0, 512);
+    proc.setPlayHead (&playHead);
+    juce::MidiBuffer midi;
+
+    // Comfortably more than kHopQueueCapacity hops' worth of audio, never drained in
+    // between — simulates a stalled UI thread. Must not crash or corrupt the queue.
+    int sampleIndex = 0;
+    for (int b = 0; b < 200; ++b)
+    {
+        juce::AudioBuffer<float> buffer (2, 512);
+        for (int i = 0; i < 512; ++i)
+        {
+            const float s = 0.5f * std::sin (2.0f * juce::MathConstants<float>::pi
+                                              * 440.0f * (float) sampleIndex / 48000.0f);
+            buffer.setSample (0, i, s);
+            buffer.setSample (1, i, s);
+            ++sampleIndex;
+        }
+        proc.processBlock (buffer, midi);
+        playHead.samplesElapsed += 512;
+    }
+
+    // AbstractFifo reserves one slot to disambiguate full from empty, so the usable
+    // capacity is one less than kHopQueueCapacity — assert a tight bound (not the
+    // exact number) so this doesn't over-specify that implementation detail.
+    RBVocalSingAudioProcessor::HopSample buf[RBVocalSingAudioProcessor::kHopQueueCapacity];
+    const int n = proc.drainHopSamples (buf, RBVocalSingAudioProcessor::kHopQueueCapacity);
+
+    REQUIRE (n > RBVocalSingAudioProcessor::kHopQueueCapacity - 4);
+    REQUIRE (n <= RBVocalSingAudioProcessor::kHopQueueCapacity);
+    for (int i = 1; i < n; ++i)
+        REQUIRE (buf[i].time > buf[i - 1].time);
 }

@@ -56,7 +56,7 @@ Open **Options → Preferences → Device** and set **Input device** to your mic
 1. Create a **new, empty audio track**. The plugin pitch-detects everything on its track, so for pure mic input the track should have **no audio or MIDI items** on it.
 2. Click the **input selector** in the track header (the small dropdown below the record-arm button) and choose **Input: Mono → Input 1**. This selects the first channel of the input device you set above — for a single USB mic that is the mic itself.
 
-![Reaper preferences](assets/reaper_track.jpg)
+![Reaper track](assets/reaper_track.jpg)
 
 #### Step 3 — Enable monitoring and add the plugin
 

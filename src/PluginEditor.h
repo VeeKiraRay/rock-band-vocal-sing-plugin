@@ -221,6 +221,15 @@ private:
     using TrailSample = rbtake::TrailPoint;   // identical layout {double time; float pitch}
     std::vector<TrailSample> pitchTrail;
 
+    // Reusable scratch buffer for draining audioProcessor's per-hop pitch queue
+    // in updateNoteHits() — reused every frame to avoid per-frame allocation.
+    std::vector<RBVocalSingAudioProcessor::HopSample> hopScratch;
+    // Pitch/voicing "in effect" at the end of the last processed hop — carries the
+    // held value across frame boundaries so a frame with no new hops (UI faster
+    // than the ~16ms hop cadence) still scores against the right ongoing pitch.
+    float lastHopMidiF  { -1.0f };
+    bool  lastHopVoiced { false };
+
     // Transient message-bar flash (take-export feedback). Drawn by drawMessageBar with
     // priority over chartStatus until flashUntil (seconds, Time::getMillisecondCounterHiRes
     // clock) — chartStatus alone would be overwritten ~50 ms later by the post-export
@@ -277,6 +286,12 @@ private:
     // Perf signals computed in onFrame(), shown by drawStatusBar().
     bool   framesDropping { false };
     double displayFps     { 0.0 };
+    // Achieved detector hop rate (detections/s), differentiated from the processor's
+    // monotonic profDetectCount over a ~1 s window in onFrame(). Shown only in
+    // RB_PITCH_PROFILE builds; members exist unconditionally (see the paint EMAs).
+    double        displayHopsPerSec { 0.0 };
+    uint32_t      lastHopCountSnap  { 0 };
+    juce::int64   lastHopRateTicks  { 0 };
 
     static constexpr int   kWindowW   = 600;
     static constexpr int   kControlsH = 40;   // 1 row: three equal thirds

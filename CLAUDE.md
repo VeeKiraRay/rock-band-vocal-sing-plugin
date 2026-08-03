@@ -185,16 +185,25 @@ note-pitch editor's `MIDI_SetNote` write-back.
 
 Details live in the code; this is the map of what exists and its non-obvious decisions.
 
-- **Pitch detection** (`PitchDetection.cpp` + the front end in `processBlock`): MPM
-  fixed as the algorithm (processor default `pitchMethod = 2`; Autocorrelation and
-  YIN remain code-level fallbacks). Engine v2 pipeline (2026-07-19): 70 Hz high-pass
-  + 2× 6 kHz low-pass → integer decimation to a fixed ~16 kHz internal rate
-  (`detectRate` — all window/lag maths is host-rate-independent by construction, so
-  high sample rates need no buffer scaling) → 768-sample window analysed every
-  256-sample hop (~62 estimates/s) → RMS gate (`gateThreshold`) → FFT NSDF
-  (`juce::dsp::FFT`, 2048-point) with boundary-lag rejection and a clarity gate
-  (NSDF peak < 0.80 = unvoiced; published as `currentClarity`) → 3-tap median →
-  16-hop (~260 ms) hold decay. Design rationale in `_old/ENGINE_V2.md`.
+- **Pitch detection** (`PitchDetection.cpp` + `NsdfPeak.cpp` + the front end in
+  `processBlock`): MPM fixed as the algorithm (processor default `pitchMethod = 2`;
+  Autocorrelation and YIN remain code-level fallbacks). Pipeline: high-pass at the
+  band floor + 2× 6 kHz low-pass → integer decimation to a fixed **~24 kHz** internal
+  rate (`detectRate` — all window/lag maths is host-rate-independent by construction,
+  so high sample rates need no buffer scaling) → 768-sample window (~32 ms) analysed
+  every 256-sample hop (**~94 estimates/s**) → RMS gate (`gateThreshold`) → FFT NSDF
+  (`juce::dsp::FFT`, 2048-point) → `rbpitch::findNsdfPeak` (zero-lag-lobe skip, key
+  maximum, boundary-lag rejection, clarity gate at NSDF peak < 0.80 = unvoiced,
+  parabolic interpolation) → 3-tap median → 24-hop (~260 ms) hold decay.
+  - The searched band is **60–1200 Hz** (`rbpitch::kMinFreqHz`/`kMaxFreqHz`), sized
+    around the RB vocal range MIDI 36–84 with ~6% headroom — boundary rejection
+    discards a peak landing *on* a bound, so a tight bound rejects real content.
+  - `NsdfPeak.h/.cpp` is pure and JUCE-free so the peak-picking decisions are unit
+    tested on hand-built NSDF tables (`tests/NsdfPeakTests.cpp`), including hidden
+    `[.sweep]` accuracy sweeps across analysis rates and window lengths.
+  - Design rationale: `_old/ENGINE_V2.md` (original v2),
+    `_upcoming/PITCH_DETECTION_FINDINGS.md` (2026-08 range fix + 24 kHz move, with
+    the measurements behind both).
 - **Chart loading**: REAPER path (auto-reload on `GetProjectStateChangeCount` change) and
   `.mid` fallback, per the host-support table above.
 - **Highway** (`drawHighway`): horizontal scroll (`pixPerSec`, default 200 px/s), playhead
@@ -351,12 +360,25 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   pitch (`currentMidiFloat`), cents traffic light + Pitch Tolerance setting, visual
   snap, note-hit highlighting, and the b4 pitch trail (Pitch Trail toggle, default
   on).
-- **Engine v2 done** (2026-07-19, 5-patch series) — decimating front end (fixed
-  ~16 kHz internal rate, 70 Hz HP + 6 kHz LP), FFT NSDF, 256-hop overlapping
-  windows, clarity gate + boundary-lag rejection, 3-tap median. Closes
-  PITCH_DETECTION_IMPROVEMENT.md (both docs now in `_old/`). The `currentClarity`
-  atomic is published but not yet consumed by the UI (candidate: dim the arrowhead
-  when uncertain).
+- **Engine v2 done** (2026-07-19, 5-patch series) — decimating front end, FFT NSDF,
+  256-hop overlapping windows, clarity gate + boundary-lag rejection, 3-tap median.
+  Closes PITCH_DETECTION_IMPROVEMENT.md (both docs now in `_old/`). The
+  `currentClarity` atomic is published but not yet consumed by the UI (candidate: dim
+  the arrowhead when uncertain).
+- **Detection range fix + 24 kHz move done** (2026-08-03, 3-patch series) — driven by
+  measurements ported from the sibling Lua tool
+  (`_upcoming/PITCH_DETECTION_FINDINGS.md`). Extracted `NsdfPeak.h/.cpp` (pure,
+  unit-testable) → widened the band to 60–1200 Hz with a zero-lag-lobe skip, fixing a
+  live defect where the detector covered only MIDI 40–82 against an RB vocal range of
+  36–84 (MIDI 36–39 and 83–84 produced *no detection at all*) → moved the internal
+  rate 16 → 24 kHz. Verified note-by-note in REAPER. Two things the plan got wrong and
+  measurement caught: raising the analysis window would have been a 3× CPU regression
+  for nothing, and `detectPitchAutocorrelation` had an unnormalised shrinking-window
+  bias that only surfaced once the band widened. **Still open**: behaviour at the range
+  extremes on a real voice (only synthetic tones so far — transposing a stem is the
+  suggested substitute), and inter-word trail spikes on AI-separated stems (finding 2:
+  a clarity gate cannot reject quiet-but-periodic bleed; the Mic gate is the only
+  control that can).
 - **Save take as MIDI done** (2026-07-19/20, 4-patch series, user-requested) — see the
   Implemented features bullet; `_old/TAKE_EXPORT.md` records the design and the
   in-REAPER findings (stopped-only gating; lazy self-track query via the retained

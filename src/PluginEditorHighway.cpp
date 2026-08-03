@@ -516,9 +516,28 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 // the sung fractional pitch to the pass's pitch trail. Both clear together when the
 // next pass starts (hitResetPending); chart reloads remap the spans by note identity
 // (remapNoteHitSpans) and leave the trail untouched.
+//
+// Scores at hop resolution (~16 ms, the audio thread's detection cadence) rather
+// than once per UI frame: the audio thread queues one HopSample per hop (voiced,
+// held, or silent), drained here every call. A UI frame can span several hops —
+// point-sampling only the latest atomic made hop-level detections invisible
+// whenever they were superseded before the next UI frame happened to read them,
+// which could hide notes shorter than one frame interval entirely (see
+// _upcoming/SHORT_NOTE_HIT_TRACKING.md, bug #3). lastHopMidiF/lastHopVoiced carry
+// the pitch "in effect" at the end of one frame into the start of the next, so the
+// [t0, t] window is reconstructed as a sequence of hop-bounded sub-intervals
+// instead of one instantaneous sample.
 
 void RBVocalSingAudioProcessorEditor::updateNoteHits()
 {
+    // Drain the audio thread's hop queue unconditionally, before any early return
+    // below, so it never overflows while stopped (hops keep arriving whenever
+    // input monitoring feeds the audio thread even when the transport isn't playing).
+    hopScratch.clear();
+    RBVocalSingAudioProcessor::HopSample hopBuf[RBVocalSingAudioProcessor::kHopQueueCapacity];
+    const int hopN = audioProcessor.drainHopSamples (hopBuf, RBVocalSingAudioProcessor::kHopQueueCapacity);
+    hopScratch.insert (hopScratch.end(), hopBuf, hopBuf + hopN);
+
     const auto& notes = audioProcessor.getChartNotes();
 
     // A chart reload is not a time discontinuity and must not wipe the review state
@@ -562,20 +581,8 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         for (auto& spans : noteHitSpans)
             spans.clear();
         pitchTrail.clear();
-    }
-
-    const bool  voiced = audioProcessor.audioAboveGate.load (std::memory_order_relaxed);
-    const float midiF  = audioProcessor.currentMidiFloat.load (std::memory_order_relaxed);
-
-    // Trail capture (skipped when the Pitch Trail setting is off): one sample per
-    // accumulating frame; an unvoiced stretch adds a single gap marker so the drawn
-    // contour breaks across silences.
-    if (pitchTrailOn)
-    {
-        if (midiF >= 0.0f)
-            pitchTrail.push_back ({ t, midiF });
-        else if (! pitchTrail.empty() && pitchTrail.back().pitch >= 0.0f)
-            pitchTrail.push_back ({ t, -1.0f });
+        lastHopMidiF  = -1.0f;
+        lastHopVoiced = false;
     }
 
     // Degenerate-session guard (~25 min of continuous singing at 60 fps) — drop the
@@ -583,44 +590,93 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     if (pitchTrail.size() > 100000)
         pitchTrail.erase (pitchTrail.begin(),
                           pitchTrail.begin() + (std::ptrdiff_t) (pitchTrail.size() / 2));
-    const float scoringPitch = scoringPitchFor (midiF, octaveWrap,
-                                                audioProcessor.chartMinPitch,
-                                                audioProcessor.chartMaxPitch,
-                                                audioProcessor.getPitchClassCandidates());
 
-    // Same windowed scan as the traffic light, but over [t0, t] instead of an instant.
-    auto it = std::lower_bound (notes.begin(), notes.end(), t0 - kNoteLookback,
+    // Look-back once for the whole frame — note times don't change mid-frame, so
+    // every hop-bounded sub-interval below reuses this same starting point.
+    auto itStart = std::lower_bound (notes.begin(), notes.end(), t0 - kNoteLookback,
         [] (const NoteInfo& n, double v) { return n.startTime < v; });
-    while (it != notes.begin())
+    while (itStart != notes.begin())
     {
-        const auto prev = std::prev (it);
+        const auto prev = std::prev (itStart);
         if (prev->endTime <= t0) break;
-        it = prev;
+        itStart = prev;
     }
 
-    for (; it != notes.end(); ++it)
+    // Scores one [segStart, segEnd) sub-interval — same windowed scan as the
+    // traffic light, but per hop-bounded slice instead of the whole [t0, t] frame.
+    auto scoreSegment = [&] (double segStart, double segEnd, bool segVoiced, float segMidiF)
     {
-        const auto& n = *it;
-        if (n.startTime > t) break;
-        if (n.endTime <= t0) continue;
+        if (segEnd <= segStart) return;
 
-        const bool hit = n.isTalkie
-                             ? voiced
-                             : (scoringPitch >= 0.0f
-                                && std::abs (scoringPitch - (float) n.pitch) * 100.0f
-                                       <= (float) pitchTolCents);
-        if (! hit) continue;
+        const float scoringPitch = scoringPitchFor (segMidiF, octaveWrap,
+                                                    audioProcessor.chartMinPitch,
+                                                    audioProcessor.chartMaxPitch,
+                                                    audioProcessor.getPitchClassCandidates());
 
-        const double s = std::max (t0, n.startTime);
-        const double e = std::min (t,  n.endTime);
-        if (e <= s) continue;
+        for (auto it = itStart; it != notes.end(); ++it)
+        {
+            const auto& n = *it;
+            if (n.startTime > segEnd) break;
+            if (n.endTime <= segStart) continue;
 
-        auto& spans = noteHitSpans[(size_t) (it - notes.begin())];
-        if (! spans.empty() && s <= spans.back().second + 1e-3)
-            spans.back().second = std::max (spans.back().second, e);
-        else
-            spans.emplace_back (s, e);
+            const bool hit = n.isTalkie
+                                 ? segVoiced
+                                 : (scoringPitch >= 0.0f
+                                    && std::abs (scoringPitch - (float) n.pitch) * 100.0f
+                                           <= (float) pitchTolCents);
+            if (! hit) continue;
+
+            const double s = std::max (segStart, n.startTime);
+            const double e = std::min (segEnd,   n.endTime);
+            if (e <= s) continue;
+
+            auto& spans = noteHitSpans[(size_t) (it - notes.begin())];
+            if (! spans.empty() && s <= spans.back().second + 1e-3)
+                spans.back().second = std::max (spans.back().second, e);
+            else
+                spans.emplace_back (s, e);
+        }
+    };
+
+    double segStart  = t0;
+    float  segMidiF  = lastHopMidiF;
+    bool   segVoiced = lastHopVoiced;
+
+    for (const auto& hop : hopScratch)
+    {
+        if (hop.time <= t0)
+        {
+            // Stale relative to this frame's window (already accounted for by a
+            // previous frame) — just fold it into the carried starting state.
+            segMidiF  = hop.midiFloat;
+            segVoiced = hop.voiced;
+            continue;
+        }
+
+        // Trail capture (skipped when the Pitch Trail setting is off): one sample
+        // per hop instead of per frame; an unvoiced hop after voiced ones adds a
+        // single gap marker so the drawn contour breaks across silences.
+        if (pitchTrailOn)
+        {
+            if (hop.midiFloat >= 0.0f)
+                pitchTrail.push_back ({ hop.time, hop.midiFloat });
+            else if (! pitchTrail.empty() && pitchTrail.back().pitch >= 0.0f)
+                pitchTrail.push_back ({ hop.time, -1.0f });
+        }
+
+        scoreSegment (segStart, std::min (hop.time, t), segVoiced, segMidiF);
+
+        segStart  = hop.time;
+        segMidiF  = hop.midiFloat;
+        segVoiced = hop.voiced;
     }
+
+    // Tail: the most recent hop's value (or the carried-over value, if no hops
+    // arrived this frame) still holds through to this frame's t.
+    scoreSegment (segStart, t, segVoiced, segMidiF);
+
+    lastHopMidiF  = segMidiF;
+    lastHopVoiced = segVoiced;
 }
 
 // Re-aligns noteHitSpans to a freshly reloaded chart. Both the old identity snapshot
@@ -878,6 +934,16 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
                               + "   |   renderer: " + (glContext.isAttached() ? "GPU" : "CPU")
                               + "   |   calib: " + calibStr
                               + "   |   rate: " + rateStr;
+
+#if RB_PITCH_PROFILE
+    // Audio-thread cost (see the profDetect* comment in PluginProcessor.h): cost of one
+    // detectPitch call, processBlock's share of its deadline, and the achieved hop rate.
+    // det × hops/1000 is the detector's own share of a core; load is the whole audio
+    // thread including the host-rate front-end filters.
+    status << "   |   det:"  << juce::String (audioProcessor.profDetectMs.load(), 3) << " ms"
+           << "  load:"      << juce::String (audioProcessor.profBlockLoad.load() * 100.0, 2) << "%"
+           << "  hops:"      << juce::String (displayHopsPerSec, 1) << "/s";
+#endif
 
 #if RB_PAINT_PROFILE
     // Per-section paint EMAs (see paint()), the drawHighway sub-split (bg/bar/txt/ov,

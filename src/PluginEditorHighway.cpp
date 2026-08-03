@@ -392,14 +392,20 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     // wrapping off, out-of-range samples break the contour like gap markers do.
     if (pitchTrailOn && ! pitchTrail.empty())
     {
-        auto trailIt = std::lower_bound (pitchTrail.begin(), pitchTrail.end(), visibleLeft,
+        // Samples are stored on the raw project timeline (see updateNoteHits) and shifted
+        // onto the calibrated one here — so the window bounds move the opposite way from
+        // the sample times.
+        const double calibSec = latencyOffsetMs / 1000.0;
+
+        auto trailIt = std::lower_bound (pitchTrail.begin(), pitchTrail.end(),
+                                         visibleLeft + calibSec,
             [] (const TrailSample& s, double v) { return s.time < v; });
 
         juce::Path trail;
         bool open = false;
         for (; trailIt != pitchTrail.end(); ++trailIt)
         {
-            if (trailIt->time > rightTime) break;
+            if (trailIt->time > rightTime + calibSec) break;
             if (trailIt->pitch < 0.0f) { open = false; continue; }
 
             const int  rounded = juce::jlimit (0, 127, juce::roundToInt (trailIt->pitch));
@@ -411,7 +417,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                                                               audioProcessor.getPitchClassCandidates())
                                       + (trailIt->pitch - (float) rounded);
 
-            const float x = phX + (float) (trailIt->time - t) * pixPerSec;
+            const float x = phX + (float) (trailIt->time - calibSec - t) * pixPerSec;
             const float y = pitchY (p);
             if (open) trail.lineTo (x, y);
             else      { trail.startNewSubPath (x, y); open = true; }
@@ -549,7 +555,17 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         remapNoteHitSpans();
     }
 
-    const double t  = cachedPlayTime - (latencyOffsetMs / 1000.0);  // matches paint()
+    // Hop timestamps arrive from the audio thread as raw project time, while t/t0 and
+    // everything drawn are on the calibrated timeline. Scoring shifts each hop onto the
+    // calibrated timeline (hopT below), so sung input is judged against the notes the
+    // singer actually heard. The trail is stored *raw* instead and shifted by the same
+    // amount at draw — that keeps the take export on true project time and lets a
+    // calibration change re-align an already-captured trail. (Found 2026-08-03: before
+    // the split the trail was drawn latencyOffsetMs right of the playhead, and every
+    // sub-interval below fell outside [t0, t] whenever calibration was non-zero.)
+    const double calibSec = latencyOffsetMs / 1000.0;
+
+    const double t  = cachedPlayTime - calibSec;  // matches paint()
     const double t0 = lastHitTrackTime;
     lastHitTrackTime = t;
 
@@ -644,7 +660,9 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
 
     for (const auto& hop : hopScratch)
     {
-        if (hop.time <= t0)
+        const double hopT = hop.time - calibSec;
+
+        if (hopT <= t0)
         {
             // Stale relative to this frame's window (already accounted for by a
             // previous frame) — just fold it into the carried starting state.
@@ -655,7 +673,9 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
 
         // Trail capture (skipped when the Pitch Trail setting is off): one sample
         // per hop instead of per frame; an unvoiced hop after voiced ones adds a
-        // single gap marker so the drawn contour breaks across silences.
+        // single gap marker so the drawn contour breaks across silences. Stored at
+        // the raw hop time — drawHighway applies calibSec, and the take export wants
+        // true project time so its MIDI lines up with the audio waveform.
         if (pitchTrailOn)
         {
             if (hop.midiFloat >= 0.0f)
@@ -664,9 +684,9 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
                 pitchTrail.push_back ({ hop.time, -1.0f });
         }
 
-        scoreSegment (segStart, std::min (hop.time, t), segVoiced, segMidiF);
+        scoreSegment (segStart, std::min (hopT, t), segVoiced, segMidiF);
 
-        segStart  = hop.time;
+        segStart  = hopT;
         segMidiF  = hop.midiFloat;
         segVoiced = hop.voiced;
     }
@@ -773,7 +793,9 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
                                         (totalMs % 60000) / 1000,
                                         totalMs % 1000);
     };
-    juce::String timeStr = fmtTime (t);
+    // The readout is the real transport position (raw), so it matches REAPER's own time
+    // display; everything else in this band is scored against the calibrated t.
+    juce::String timeStr = fmtTime (cachedPlayTime);
     const double endTime = audioProcessor.songEndTime;
     if (endTime > 0.0)
         timeStr += " / " + fmtTime (endTime);

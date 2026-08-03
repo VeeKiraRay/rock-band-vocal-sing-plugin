@@ -105,7 +105,7 @@ From top to bottom:
 | **Note highway**        | The scrolling chart. Notes move right-to-left; the playhead is fixed at 30% from the left. A white arrowhead marks your live detected pitch.                   |
 | **Bottom lyric strip**  | The Main (HARM1 / Solo) lyrics, below the highway.                                                                                                             |
 | **Allow edits / Save take** | A row above the stats panel. **Allow edits** lets you drag notes on the highway to change their pitch; **Save take** writes the sung pitch trail to a new MIDI track (both REAPER only — see [Editing note pitches](#editing-note-pitches) and [Saving a take as MIDI](#saving-a-take-as-midi)). |
-| **Stats panel**         | Current time, your live pitch (note name, MIDI number, Hz), and the traffic light.                                                                             |
+| **Stats panel**         | The project time from REAPER's transport, your live pitch (note name, MIDI number, Hz), and the traffic light.                                                 |
 | **Status bar**          | Faint diagnostics: `N fps \| REAPER priority: on/off \| renderer: CPU/GPU \| calib: X ms`.                                                                     |
 | **Message bar**         | The chart status (e.g. "Loaded N notes from …"). Turns into an amber ⚠ warning if frames start dropping.                                                       |
 | **Control bar**         | Vocal Mode, Lyric Mode, transport buttons, and the **Settings** button — see [Controls](#controls).                                                            |
@@ -163,7 +163,7 @@ Click **Settings** to open these. All of them are saved in the plugin's state, s
 | **Frame cap**       | 60 fps           | Caps the render rate: 20 / 30 / 50 / 60 fps or Uncapped.                                                                                                             |
 | **REAPER priority** | off              | When on, the plugin yields render time so REAPER's UI stays responsive under load (it auto-skips frames). When off, it renders as fast as the Frame cap allows.      |
 | **Renderer**        | CPU (software)   | How the highway is drawn: **CPU (software)** (default), **OpenGL - session only** (GPU, reverts to CPU next load), or **OpenGL - persist** (GPU, remembered). The status bar shows `renderer: GPU` / `CPU`. OpenGL is experimental — see [Troubleshooting](#troubleshooting). |
-| **Calibration**     | 0 ms             | Shifts the rendered time (−200…+500 ms, ±20 ms steps) so the highway and scoring line up with your audio output latency. Positive = notes appear later.             |
+| **Calibration**     | 0 ms             | Shifts the rendered time (−200…+500 ms, ±20 ms steps) so the highway and scoring line up with your audio output latency. Positive = notes appear later. Affects the highway and scoring only — the time readout and exported MIDI always use true project time. |
 | **Note Speed**      | 200 px/s         | Scroll rate (100–400 px/s, 25 px steps). Higher = faster, notes more spread out; lower = slower, words pack tighter. Highway and lyrics always share this rate.      |
 | **Lyrics Size**     | 100 %            | Scales the lyric-strip text (50–200%, 10% steps). The strips — and the window — grow or shrink to match, so the highway keeps its height. Highway note labels are unaffected. |
 | **Squash Guard**    | Off              | What scrolling lyrics do when packed words would overlap: **Spacing** pushes them apart (they glide back as room opens), **Auto-shrink** scales them down (to half size, then condenses), **Hybrid** shrinks a little (≤20%) and pushes the rest. Scrolling mode only — Static lays out whole phrases and never overlaps. |
@@ -216,21 +216,22 @@ What gets written follows the trail on screen, cleaned up for charting:
 - Pitches snap to whole semitones, and vibrato or wobble around a note stays one note.
 - Blips shorter than ~120 ms (detection spikes, hard consonants) are dropped, and brief unvoiced gaps inside a held note are bridged.
 - Notes that would butt against each other get a small gap, so they read as separate notes in the MIDI editor.
+- Times are true project time, whatever **Calibration** is set to, so the notes line up with the source audio and the chart stays neutral about monitoring latency. Onsets do run a few tens of ms late against the waveform (the detector analyses a ~32 ms window before it can report), so nudge the item left if you need frame-tight alignment. A take sung into a **mic** is later still, by your rig's own round-trip latency; a take read from a **stem** is not.
 
 The button is greyed out while playing, when no take is on screen yet, outside REAPER, and in REAPER versions without the write API. Each save makes a fresh timestamped track — sing, save, tweak, sing again, and keep whichever take reads best.
 
-**Charting from a stem:** put the plugin on a track with the real singer's vocal stem (see "Review takes offline" in [Tips](#tips)), play it through, stop, and save — the exported notes are a draft chart of the actual melody, ready to refine with [note edits](#editing-note-pitches).
+**Charting from a stem:** put the plugin on a track with the real singer's vocal stem (see "Review takes offline" in [Tips](#tips)), play it through, stop, and save — the exported notes are a draft chart of the actual melody, ready to refine with [note edits](#editing-note-pitches). Chart with **Calibration at 0 ms**: the export is written at true project time either way, but a leftover offset draws the trail (and awards the gold) early against the notes, so what you see while working will not match what you save.
 
 ---
 
 ## Tips
 
 - **Monitoring, not record-arm.** The single most common setup mistake — enable the speaker (input monitor) icon on the plugin's track, or the plugin hears silence.
-- **Calibrate once for your rig.** If you are consistently singing "ahead of" or "behind" the highway, nudge **Calibration** until the traffic light goes green when you are actually on pitch. Positive values push the notes later to compensate for output latency.
+- **Calibrate once for your rig.** If you are consistently singing "ahead of" or "behind" the highway, nudge **Calibration** until the traffic light goes green when you are actually on pitch. Positive values push the notes later to compensate for output latency. It is a display and scoring offset only — it never moves the time readout or the MIDI that **Save take** writes. Set it back to 0 ms when you are not singing live (see the next tip).
 - **Use Note Speed for readability.** If too many notes are crammed on screen, raise Note Speed to spread them out; if words scroll by too fast to read, lower it.
 - **Slow down hard passages.** Press the Down arrow to drop REAPER's play rate (e.g. to 0.5×) and sing a tricky run at half speed; Up arrow brings it back. The highway and lyrics stay in sync at any rate.
 - **Fix a wrong pitch on the spot.** Spot a note that should be a tone higher? Tick **Allow edits** and drag it — no need to switch to REAPER's MIDI editor. Untick it again before you sing so you can't drag by accident.
-- **Review takes offline.** Drop the plugin on a track that already has a recorded vocal item, then play it back — you get the same highway and traffic light without singing live.
+- **Review takes offline.** Drop the plugin on a track that already has a recorded vocal item, then play it back — you get the same highway and traffic light without singing live. **Set Calibration to 0 ms first:** it compensates the round trip of live singing, and recorded audio has none, so a leftover +200 ms draws the pitch trail 200 ms early (40 px at the default Note Speed) and can make an accurate take look wrong.
 - **Harmonies grows the window.** Switching to Harmonies adds the top lyric strip and widens the pitch range to span all three parts, so nothing clips off the top or bottom.
 - **Keep it open while authoring.** Inside REAPER the chart reloads on every edit/undo/tempo change, so the highway always reflects the current state of your MIDI.
 
@@ -249,6 +250,9 @@ REAPER scans audio devices on startup and does not automatically detect hardware
 
 **The traffic light never goes green even when I am on pitch.**
 You are likely fighting output latency — your voice reaches the highway slightly after the notes. Adjust **Calibration** (positive values shift notes later) until green lines up with being on the note.
+
+**Playing back a recorded take or a stem, the pitch trail sits before the notes.**
+The mirror of the problem above: **Calibration** compensates the round trip of *live* singing (you hear late, so you sing late). Recorded or stem audio reaches the plugin at its true project time with no round trip to cancel, so the setting shifts it early instead — at +200 ms the trail and the gold land 200 ms ahead of the notes. Set Calibration to 0 ms for offline review, and back to your rig's value before singing live. The status bar always shows the value in use as `calib: X ms`. Saved takes are unaffected either way — they are always written at true project time.
 
 **REAPER feels laggy or stops redrawing while the plugin is open.**
 Enable **REAPER priority** so the plugin yields the shared UI thread, or lower the **Frame cap**, or make the plugin window smaller (paint cost scales with visible area). The message bar warns with an amber ⚠ when frames are being dropped.

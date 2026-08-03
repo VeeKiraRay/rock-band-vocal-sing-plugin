@@ -230,7 +230,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   fractional pitch per frame (`pitchTrail`, gap markers break silences, same
   new-pass lifecycle as the hit spans) and drawHighway strokes it as a faint white
   contour (`kPitchTrailColour`) behind the arrowhead, raw/unsnapped, octave-wrapped
-  per-sample at draw. Pitch range
+  per-sample at draw. Trail samples are stored on the raw project timeline and shifted
+  by the calibration at draw (see the two-timelines gotcha). Pitch range
   animates per Range-Shift section (smoothstep over the marker length); the per-frame
   geometry is cached (`lastHighwayArea`/`lastFMinP`/…) so mouse hit-testing matches the
   screen exactly.
@@ -289,8 +290,10 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   fallback = end of project), all inside one undo block, then forces a clean reload.
   Feedback via a ~4 s amber message-bar flash (`flashMessage`/`flashUntil`) that
   outranks chartStatus *and* the frame-drop warning, and participates in the
-  idle-repaint gate so it appears/expires while the transport is idle. Design +
-  findings: `_old/TAKE_EXPORT.md`.
+  idle-repaint gate so it appears/expires while the transport is idle. Notes are written
+  at **raw project time regardless of Calibration** (2026-08-03) — the chart has to line
+  up with the audio waveform and stay neutral about the monitoring latency of this rig or
+  the target console. Design + findings: `_old/TAKE_EXPORT.md`.
 
 ---
 
@@ -384,6 +387,22 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   in-REAPER findings (stopped-only gating; lazy self-track query via the retained
   `reaperHost`; ASCII-only user-visible strings → Known gotchas). Strengthens the case
   for the "Minimum highway range" item below — same stem-guided-charting workflow.
+- **Calibration timeline split done** (2026-08-03) — the trail/scoring mismatch above,
+  then the correction: `pitchTrail` is stored raw and shifted at draw, so the take export
+  writes true project time and the stats readout matches REAPER's transport. Two adjacent
+  defects were found and deliberately left for later:
+  - **Trail tails overhang by up to ~256 ms.** `pitchHoldFrames` (24 hops,
+    `PluginProcessor.cpp`) holds `currentMidiFloat` at the last pitch after voicing stops
+    and the hop queue publishes the held value, so the trail keeps extending and
+    `segmentPitchTrail` can't tell it from real voicing — exported notes run long.
+    `HopSample::voiced` is already published and ignored at the trail push
+    (`PluginEditorHighway.cpp`); gating on it is the likely one-line fix, but it shortens
+    the on-screen contour through consonants and interacts with the Mic gate, so it needs
+    its own REAPER pass. Note onsets also run a few tens of ms late (≈32 ms window +
+    median), which is inherent, not fixable by timestamping.
+  - **Optional "ignore Calibration for machine sources"** — an explicit toggle that treats
+    the offset as 0 for drawing and scoring (never for the export, already raw), if having
+    to zero the slider for offline review proves annoying in practice.
 - **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
   the note-hit spans: per-note coverage ratio is already accumulated in `noteHitSpans`).
 - **Note timing/length editing** — natural next step after pitch editing, but timing
@@ -463,6 +482,31 @@ fallback — were fixed and un-flagged in the 2026-07-17 patch series.)
 
 ## Known gotchas
 
+- **Two timelines exist — decide which one any new feature is on.** Raw project time
+  (`cachedPlayTime`, `currentPlaybackTime`, `HopSample::time`, chart `NoteInfo` times)
+  and the *calibrated* timeline `t = cachedPlayTime - latencyOffsetMs / 1000.0` that
+  the display is drawn against. The rule: **calibrated** for anything drawn and for
+  scoring sung input against chart notes; **raw** for anything written into the project
+  or reported as a project position (`SetEditCurPos`, `MIDI_SetNote`, the take export,
+  the stats time readout). Audio-thread data arrives raw and must be shifted where it is
+  consumed on the message thread. Check a new feature against the existing consumers:
+  paint (`drawHighway`/`drawStats`/`drawLyricStrip`) and `updateNoteHits()` scoring =
+  calibrated; `hitTestNote` = calibrated; click-to-seek = calibrated input producing a
+  raw project time (screen x maps to that note's own time, satisfying both halves of the
+  rule); `<<`/`>>` and arrow-key seeks = raw (relative ±5 s on the real transport);
+  `pitchTrail` = raw, shifted by `calibSec` in `drawHighway`; take export and the stats
+  time readout = raw. Bit us 2026-08-03: the trail stored raw hop times but was drawn
+  against calibrated `t`, so at +200 ms the contour drew 200 ms right of the playhead and
+  every scoring sub-interval fell outside `[t0, t]` — and the first fix over-corrected by
+  storing calibrated times, which leaked the offset into the exported MIDI.
+- **Calibration cancels a *human* round trip — machine sources read early.** The
+  asymmetry behind the timeline rule: the singer hears late and therefore sings late, and
+  `latencyOffsetMs` delays the visuals to match. A machine source — vocal stem, ReaSynth,
+  reviewing a recorded take — reaches `processBlock` at true project time with no round
+  trip to cancel, so at +200 ms its trail is drawn (and its gold awarded) 200 ms *early*
+  against the notes. Correct behaviour for the setting, and not auto-detectable: a mic and
+  a stem are the same float buffer. Documented in README instead — stem-guided charting
+  must run at 0 ms. The take export is immune (raw either way).
 - `DEF_CLASS_IID(IReaperHostApplication)` must appear in exactly **one** .cpp file.
   It is in `PluginProcessor.cpp`. Do not add it to any header.
 - `#define NOMINMAX` must precede any Windows headers to avoid `min`/`max` macro conflicts

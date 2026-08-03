@@ -914,6 +914,9 @@ void RBVocalSingAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
 // TAKE_EXPORT.md. Message thread (button handler) — REAPER calls are safe here.
 // The trail is frozen: enablement requires a stopped transport, and updateNoteHits()
 // stops appending the moment playback stops.
+// Trail samples are raw project time, so the export deliberately ignores Calibration:
+// the notes line up with the audio waveform, and a chart built from them is neutral
+// about whatever monitoring latency this rig (or the target console) happens to have.
 
 void RBVocalSingAudioProcessorEditor::saveCurrentTake()
 {

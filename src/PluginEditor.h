@@ -213,11 +213,12 @@ private:
     // chart read doesn't permanently lose the gold. See remapNoteHitSpans().
     std::vector<std::vector<std::pair<double, double>>> parkedHitSpans;
 
-    // Pitch trail: the sung fractional pitch of the current pass, one sample per
-    // accumulating frame, time-ascending. Raw (unsnapped, unwrapped) pitch — octave
-    // wrapping is applied per-sample at draw so the toggle and section transitions
-    // apply live; pitch < 0 is a gap marker that breaks the drawn contour. Cleared on
-    // a new pass with the hit spans; survives chart reloads (references no notes).
+    // Pitch trail: the sung fractional pitch of the current pass, one sample per hop,
+    // time-ascending. Raw in both axes — unsnapped/unwrapped pitch (octave wrapping is
+    // applied per-sample at draw so the toggle and section transitions apply live) and
+    // raw project time (drawHighway applies the Calibration offset, so the take export
+    // gets true project time); pitch < 0 is a gap marker that breaks the drawn contour.
+    // Cleared on a new pass with the hit spans; survives chart reloads (references no notes).
     using TrailSample = rbtake::TrailPoint;   // identical layout {double time; float pitch}
     std::vector<TrailSample> pitchTrail;
 

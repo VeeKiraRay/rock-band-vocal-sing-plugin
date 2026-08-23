@@ -11,8 +11,9 @@ usage) — keep it in sync when behaviour changes.
 
 ## Reference documents (read before starting related tasks)
 
-Local-only working docs (both directories are gitignored): `_upcoming/` holds planned
-work, `_old/` holds completed phases kept for their design rationale.
+Local-only and gitignored: `_upcoming/` holds planned work, `_old/` holds completed phases
+kept for their design rationale, and `_dev_tools/` holds standalone triage scripts (plus
+any `.mid` dropped in for inspection) — see the Dev tools section below.
 
 | Document | Contents |
 | --- | --- |
@@ -25,8 +26,10 @@ work, `_old/` holds completed phases kept for their design rationale.
 | [_old/LYRIC_OVERLAP.md](_old/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 | [_old/TAKE_EXPORT.md](_old/TAKE_EXPORT.md) | **Implemented 2026-07-19/20** (4-patch series) — "Save take": pitch trail → semitone MIDI notes on a new timestamped track below the plugin's track. Doc kept for design rationale + segmentation constants + the in-REAPER findings (stopped-only gating, lazy self-track query, ASCII strings) |
+| [_upcoming/CHART_REVIEW_FINDINGS.md](_upcoming/CHART_REVIEW_FINDINGS.md) | **Open** (2026-08-23) — two findings from reviewing *other people's* charts, both root-caused, neither fixed: RB stores vocal lyrics as **type 1** text events while the loader accepts type 5 only (proven against a real export; needs bracket filtering alongside), and pitch 1 (lyric shift) parsed as a singable note |
 
-All listed phases are complete — next work comes from the Backlog section below.
+Every `_old/` phase is complete; open work is the `_upcoming/` docs plus the Backlog
+section below.
 
 ---
 
@@ -148,10 +151,14 @@ note-pitch editor's `MIDI_SetNote` write-back.
 
 - Lyrics: type-5 MIDI text events matched to the nearest note-on within 50 ms. The
   talkie/hidden flags classify the lyric's whole trailing suffix run (`LyricText.h`),
-  so `"word#$"` is both.
+  so `"word#$"` is both. **Type 5 only is a known defect** — real RB exports use type-1
+  text events and load with zero lyrics (`_upcoming/CHART_REVIEW_FINDINGS.md` §1).
 - Marker pitches (named constants in `PluginProcessor.h`): `kRangeShiftPitch` 0 =
   Range Shift section boundary, `kPhraseMarkerPitch` 105 = phrase, `kOverdrivePitch`
   116 = overdrive, ≥ `kFirstReservedPitch` 96 = reserved (all excluded from `chartNotes`).
+  **Pitch 1 = RB3 lyric shift is a marker too and is *not* currently filtered** — it loads
+  as a singable note and drags the highway range to C-1 (`_upcoming/CHART_REVIEW_FINDINGS.md`
+  §2). The list above is the set of *handled* markers, not the set that exists.
 - Pitch range (`chartMinPitch`/`chartMaxPitch`) = loaded note min/max ± 2 semitones.
 - `songEndTime` from an `[end]` text event on an EVENTS track, else the latest note end.
 - Muted MIDI notes are **deliberately not treated specially** — they draw and score like
@@ -195,6 +202,9 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   (`juce::dsp::FFT`, 2048-point) → `rbpitch::findNsdfPeak` (zero-lag-lobe skip, key
   maximum, boundary-lag rejection, clarity gate at NSDF peak < 0.80 = unvoiced,
   parabolic interpolation) → 3-tap median → 24-hop (~260 ms) hold decay.
+  - Each `HopSample` is timestamped at its window's **centre**, not at the sample that
+    triggered it — see the 2026-08-08 backlog entry for the measured latency figures and
+    for the mid-phrase asymmetry that timestamping deliberately does *not* correct.
   - The searched band is **60–1200 Hz** (`rbpitch::kMinFreqHz`/`kMaxFreqHz`), sized
     around the RB vocal range MIDI 36–84 with ~6% headroom — boundary rejection
     discards a peak landing *on* a bound, so a tight bound rejects real content.
@@ -263,13 +273,16 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   no per-frame Font construction), Hybrid = cap at 0.8×width then push the rest. Off
   renders byte-identically to pre-feature (`_old/LYRIC_OVERLAP.md`).
 - **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics
-  (the calib field appends ` live` / ` playback` when the offset is non-zero — at 0 ms the
-  mode cannot change anything, so it is left off);
+  (the calib field reads `out/in ms`, appending ` live` / ` playback` when the *output*
+  offset is non-zero — at 0 ms the mode cannot change anything, so it is left off — and
+  ` (stopped)`, since the output offset is not applied while stopped);
   chart status string, overridden by an amber can't-keep-up warning when frames drop.
 - **Controls**: bottom bar (Vocal Mode, Lyric Mode, `<<`/Settings/`>>`) + `SettingsPanel`
   CallOutBox (Frame cap 20–60/uncapped default 60; REAPER priority off; Renderer
-  CPU/GL-session/GL-persist; Calibration −200..+500 ms; **Live-mic used** off — whether the
-  calibration also shifts detected pitch, see the round-trip gotcha; Note Speed 100–400 px/s; Lyrics
+  CPU/GL-session/GL-persist; Output calib −200..+500 ms step 20 (chart) and Input calib
+  −50..+250 ms step 5 (detections — finer, since the analysis chain alone is 5–30 ms);
+  **Live-mic used** off — whether the *output* calibration also shifts detected pitch, see
+  the calibration gotcha; Note Speed 100–400 px/s; Lyrics
   Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
   Octave Wrapping on; Pitch Trail on; Pitch Tolerance ±25/50/75/100 cents default
@@ -277,7 +290,7 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   frameInterval, reaperPriority, octaveWrap, pitchTolCents, pitchTrail, latencyMs,
-  liveMic, pixPerSec, lyricScale, squashGuard, lyricMode, renderer.
+  inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard, lyricMode, renderer.
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
@@ -404,15 +417,37 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   detection-side shift conditional so offline review and stem charting are correct out of
   the box — default off, since live-mic setup already has a documented checklist to add a
   step to while offline review had none. Adjacent items deliberately left for later:
-  - **Trail tails overhang by up to ~256 ms.** `pitchHoldFrames` (24 hops,
-    `PluginProcessor.cpp`) holds `currentMidiFloat` at the last pitch after voicing stops
-    and the hop queue publishes the held value, so the trail keeps extending and
-    `segmentPitchTrail` can't tell it from real voicing — exported notes run long.
-    `HopSample::voiced` is already published and ignored at the trail push
-    (`PluginEditorHighway.cpp`); gating on it is the likely one-line fix, but it shortens
-    the on-screen contour through consonants and interacts with the Mic gate, so it needs
-    its own REAPER pass. Note onsets also run a few tens of ms late (≈32 ms window +
-    median), which is inherent, not fixable by timestamping.
+  - **Pitch-trail hold tails fixed** (2026-08-04) — `pitchHoldFrames` still keeps the
+    live marker steady through brief unvoiced gaps, but `updateNoteHits()` now writes a
+    trail gap as soon as the RMS gate closes instead of preserving the held MIDI value.
+    This prevents Save take notes from inheriting up to ~260 ms of detector hold time.
+    The segmenter still bridges genuine short gap markers (≤80 ms), so brief consonants
+    within a sustain remain one exported note.
+  - **Hop timestamps anchored at the window centre** (2026-08-08) — supersedes this file's
+    earlier claim that onset lateness was "inherent, not fixable by timestamping". Half of
+    it was: a hop's 768-sample window *ends* at the sample that triggered it, so filing the
+    estimate there dated every detection ~16 ms late. `processBlock` now subtracts
+    `0.5 × kPitchWindow / detectRate`. What remains inherent is how much of the window the
+    new content must fill before the NSDF locks onto it.
+    `tests/DetectionLatencyTests.cpp` measures the whole chain and prints the figures;
+    identical in *hops* at 44.1 and 48 kHz, so quote them that way:
+
+    | | before | after |
+    | --- | --- | --- |
+    | onset out of silence | 2 hops (21–23 ms) | **0.5 hop (5.3–5.8 ms)** |
+    | legato pitch step | 4 hops (43–46 ms) | **2.5 hops (27–29 ms)** |
+    | gate close | 3 hops | 1.5 hops |
+
+    **The ~2-hop gap between an onset and a legato step is the load-bearing fact**: a
+    phrase-start onset publishes its first estimate unfiltered (`medianCount` resets on
+    every unvoiced hop) while a mid-phrase step pays the median-of-3 group delay *and* has
+    to overcome the previous note still filling the window. So phrase edges and phrase
+    interiors have genuinely different detection latency, and **no single Calibration value
+    can suit both** — the user-visible symptom is mid-phrase notes reading out of sync
+    after calibrating on phrase boundaries. Correcting the median half in the timestamp was
+    considered and **rejected**: subtracting a hop only on the median-active path makes the
+    bypassed hop and the first median hop share a timestamp, breaking the strictly-ascending
+    invariant the hop-queue tests assert and `rbtake::segmentPitchTrail` documents.
   - **Pinned live marker done** (2026-08-03, third patch, after the user tested the
     playback mode in REAPER) — everything on the playhead line now describes the audio
     being *heard*, not the newest analysed: `heardDetection()` reads a 256-sample rolling
@@ -428,12 +463,36 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 - **Note timing/length editing** — natural next step after pitch editing, but timing
   edits reorder MIDI so `sourceNoteIndex` can go stale mid-edit; needs re-resolution
   after each commit.
+- **Pitch 1 (lyric shift) loads as a singable note** — no `kLyricShiftPitch` constant
+  exists, so both parsers chart the RB3 lyric-shift marker, `minP` follows it, and the
+  highway floor lands on C-1. Confirmed 2026-08-23 on a real chart's **PART VOCALS**
+  (4 markers, content 45..64, so `minP` = 1 — it is not Harmonies-only as first assumed).
+  It also draws a stray bar and is an editable `MIDI_SetNote` target under Allow edits —
+  and the pitch-edit drag floor (`kRangeShiftPitch + 1`) is exactly that pitch. Cause + fix
+  sketch in
+  `_upcoming/CHART_REVIEW_FINDINGS.md` §2. Same content-derived-range root cause as the
+  next item, opposite direction — worth fixing together.
 - **Minimum highway range for charting-from-scratch** — the display range is purely
   content-derived (chart min/max ± 2, or Range-Shift section ± 5), so a flat
   placeholder chart (e.g. every note C3) collapses the highway to ~5 semitones and
   the pitch trail from a vocal stem wraps/folds uselessly. Enforce a minimum span
   (e.g. ≥ 1 octave centred on the content) so stem-guided charting works from a flat
-  start. (Surfaced 2026-07-19 discussing the trail as a charting aid.)
+  start. (Surfaced 2026-07-19 discussing the trail as a charting aid.) The bound in the
+  other direction — clamping the range into the singable band 36–84 so a stray low note
+  can't blow it open — belongs in the same patch.
+- **Lyrics on imported charts are type-1 text events, not type 5** — both parsers accept
+  `type == 5` only (`ChartLoader.cpp:445`, `:596`), but the RBN/Magma convention writes
+  PART VOCALS lyrics as **text** events, so an imported chart loads every note and no
+  lyrics. Proven 2026-08-23 against a real export: 261 type-1 events, 0 type-5, and with
+  type 1 accepted all 233 lyrics attach to all 233 singable notes at 0.00 ms offset. The
+  fix is *not* just widening the test: 28 of those 261 are `[idle]`/`[mellow]`-style
+  animation events, so accepting type 1 must come with skipping bracketed text — which is
+  very likely why type 5 was picked in the first place. Note the tests never caught this
+  because
+  `ChartLoaderTests.cpp:28` builds every fixture lyric as type 5, validating the loader
+  against its own assumption. Details + fixture plan in
+  `_upcoming/CHART_REVIEW_FINDINGS.md` §1. That doc also records a latent
+  `dedupHarmonyLyrics` bug that can hide a syllable on both harmony parts.
 - **Track identity by GUID** — name matching breaks on rename; `GetTrackGUID` is stable.
 - **Play/stop/record indicator** — `GetPlayState` bitmask (1=play 2=pause 4=record) is
   already polled; show it in the UI.
@@ -473,6 +532,14 @@ persistence — plus the take-export segmenter (pure functions in `src/TakeExpor
 tested without any plugin scaffolding). Piece A is a pluginval black-box smoke script. See TEST_PLAN.md for the
 full design rationale.
 
+`tests/DetectionLatencyTests.cpp` is a *measurement* test rather than a pass/fail one:
+it drives `processBlock` with synthesized onsets, legato pitch steps and gate closes,
+then prints how late each was reported (via Catch2 `WARN`, so the numbers surface on a
+passing run). Its bounds are expressed in hops, not milliseconds, because every figure
+comes out identical in hops across host rates. Read the numbers before changing anything
+in the detection front end — they are how the window-centre anchor and the phrase-edge
+vs mid-phrase asymmetry were established.
+
 ```
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug --target RBVocalSingTests
@@ -500,13 +567,38 @@ fallback — were fixed and un-flagged in the 2026-07-17 patch series.)
 
 ---
 
+## Dev tools (`_dev_tools/`, gitignored)
+
+Standalone local scripts for inspecting things the plugin can't show from inside itself.
+Not part of the build, not shipped, no dependencies beyond a stdlib Python 3.
+
+```
+python _dev_tools/midi_vocal_dump.py <file.mid> [--lyrics]
+```
+
+**`midi_vocal_dump.py`** — reads a `.mid` the way `ChartLoader.cpp` does and reports why a
+chart would load wrong: text events counted **by meta type** (the type-1 vs type-5
+distinction the loader turns on) split into lyric-looking vs bracketed, the note histogram
+separating singable notes from marker pitches (flagging pitch 1), the pitch range the
+highway would render, and the 50 ms lyric match replayed both as the loader behaves today
+and as it would with type-1 accepted. Use it whenever an imported chart misbehaves — it
+turns "lyrics don't show" into a count. It is also the acceptance check for the two open
+chart-loader bugs in the Backlog (`_upcoming/CHART_REVIEW_FINDINGS.md` §1.5).
+
+Drop `.mid` files into `_dev_tools/` or `_upcoming/` to inspect them; both are gitignored,
+so nothing an author sends for review can be committed by accident.
+
+---
+
 ## Known gotchas
 
 - **Three timelines exist — decide which one any new feature is on.** Raw project time
   (`cachedPlayTime`, `currentPlaybackTime`, `HopSample::time`, chart `NoteInfo` times);
-  the *drawing* timeline `t = cachedPlayTime - latencyOffsetMs / 1000.0`; and the
-  *detection* timeline `cachedPlayTime - detectionOffsetSec()`, which equals `t` only when
-  **Live-mic used** is on (see the next gotcha). The rule: **drawing `t`** for chart
+  the *drawing* timeline `t = cachedPlayTime - drawingOffsetSec()`; and the
+  *detection* timeline `cachedPlayTime - detectionOffsetSec()`. The two offsets are
+  independent settings and are equal only by coincidence (see the next gotcha); never
+  substitute one for the other, and never inline `latencyOffsetMs` in place of either —
+  both helpers carry conditions the raw field does not. The rule: **drawing `t`** for chart
   geometry; **detection time** for anything that pairs detected pitch with chart notes;
   **raw** for anything written into the project or reported as a project position
   (`SetEditCurPos`, `MIDI_SetNote`, the take export, the stats time readout). Audio-thread
@@ -524,18 +616,42 @@ fallback — were fixed and un-flagged in the 2026-07-17 patch series.)
   `t`, so at +200 ms the contour drew 200 ms right of the playhead and every scoring
   sub-interval fell outside `[t0, t]` — and the first fix over-corrected by storing
   calibrated times, which leaked the offset into the exported MIDI.
-- **Calibration cancels a *human* round trip, so the detection shift is conditional.** The
-  singer hears late and therefore sings late; `latencyOffsetMs` delays the visuals to match
-  *and* shifts the sung input back onto the chart. A machine source — vocal stem, ReaSynth,
-  reviewing a recorded take — reaches `processBlock` at true project time with no round
-  trip to cancel, so that second shift would place its trail (and its gold) `calib` early.
-  Which one applies is the **Live-mic used** setting (`liveMicInput`, default off), and
-  `detectionOffsetSec()` in PluginEditor.h is its single point of truth — `calib` when
-  ticked, 0 when not. The chart's own offset is **unconditional** in both modes: the user
-  hears through the same output latency either way, so the note at the playhead is always
-  the one in their ears. Not auto-detected on purpose: a mic and a stem are the same float
-  buffer, and `I_RECARM`/`I_RECMON` false-positives on the still-armed track you just
-  recorded the take on. The take export is immune (raw in both modes).
+- **Calibration is two numbers, because it compensates two different physical delays.**
+  Split 2026-08-08 (`latencyOffsetMs` + `inputOffsetMs`); before that one slider did both
+  jobs and could not satisfy them at once.
+  - **Output calib** (`latencyOffsetMs`) — how late the song reaches the listener's ears.
+    Shifts the **chart**, via `drawingOffsetSec()`.
+  - **Input calib** (`inputOffsetMs`) — how late a detection is *filed*: mic/interface
+    input latency plus the analysis chain. Shifts **detections**, via
+    `detectionOffsetSec()`. Non-obvious and the reason the split was needed: the analysis
+    chain alone contributes 5–30 ms that has no counterpart on the output side, so forcing
+    the two equal means either the chart drifts off the song or the trail drifts off the
+    chart. Users hit this by dragging the *chart* early to meet a late trail.
+  - **Live-mic used** (`liveMicInput`, default off) still cancels the *human* round trip:
+    a singer hears late and therefore sings late, so the output offset is added on top of
+    the input offset for detection. A machine source — vocal stem, ReaSynth, a recorded
+    take — reaches `processBlock` at true project time and never made that trip. Not
+    auto-detected on purpose: a mic and a stem are the same float buffer, and
+    `I_RECARM`/`I_RECMON` false-positive on the still-armed track you just recorded on.
+  - `detectionOffsetSec()` = `inputOffsetMs + (liveMic ? latencyOffsetMs : 0)`, and
+    `drawingOffsetSec()` = `latencyOffsetMs` **while playing, 0 while stopped** — both in
+    PluginEditor.h, each the single point of truth for its timeline. Both offsets at 0
+    reproduces pre-split behaviour, which is what a pre-split saved session loads as
+    (`inputLatencyMs` absent → 0).
+  - The take export is immune to both (raw project time in every mode).
+- **The output calibration must not apply while the transport is stopped.** While stopped,
+  `cachedPlayTime` is the edit cursor — a true project position with no audio in flight, so
+  there is no monitoring latency to cancel. Applying it anyway drew the chart
+  `latencyOffsetMs` away from the cursor, which made the natural verification move (park
+  the cursor on a note start, check the note is on the playhead line) report a sync error
+  that did not exist; a user found the plugin this way at −60 ms, where a 1/32 note was
+  displaced by roughly its own length (found 2026-08-08). `drawingOffsetSec()` gates on
+  `lastIsPlaying`, and only on the REAPER path — the file fallback's host playhead only
+  advances during playback, so it counts as always playing. Two consequences worth knowing:
+  the chart visibly shifts by the calibration on every play/stop transition (so
+  `lastIsPlaying` is in the idle-repaint gate — it is a *paint input* now, and a
+  stop-in-place changes nothing else the gate watches), and trail-vs-chart alignment is
+  unaffected in both states because both are mapped through the same `t`.
 - `DEF_CLASS_IID(IReaperHostApplication)` must appear in exactly **one** .cpp file.
   It is in `PluginProcessor.cpp`. Do not add it to any header.
 - `#define NOMINMAX` must precede any Windows headers to avoid `min`/`max` macro conflicts

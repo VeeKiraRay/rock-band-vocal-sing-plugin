@@ -204,7 +204,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     // not yet audible. `heard` is the sample being heard now; the marker shows it and the
     // contour stops there while playing, so the picture matches the ears in both modes.
     const double      detOffset = detectionOffsetSec();
-    const double      detLead   = latencyOffsetMs / 1000.0 - detOffset;
+    const double      detLead   = drawingOffsetSec() - detOffset;
     const TrailSample heard     = heardDetection();
 
     auto drawNotesForPart = [&] (VocalPart part)
@@ -563,7 +563,13 @@ RBVocalSingAudioProcessorEditor::heardDetection() const
     };
 
     const TrailSample& newest = at (1);
-    const double lead = latencyOffsetMs / 1000.0 - detectionOffsetSec();
+
+    // How far the newest detection sits ahead of the playhead line, both measured on the
+    // drawing axis: the newest sample lands at (now - detection offset), the line at
+    // (now - drawing offset). Zero or negative means the newest sample *is* what's being
+    // heard, which is the live-mic case and every stopped-transport case (nothing is
+    // coming out of the speakers to run ahead of).
+    const double lead = drawingOffsetSec() - detectionOffsetSec();
     if (lead <= 0.0) return newest;
 
     const double target = newest.time - lead;
@@ -584,7 +590,7 @@ RBVocalSingAudioProcessorEditor::heardDetection() const
 // next pass starts (hitResetPending); chart reloads remap the spans by note identity
 // (remapNoteHitSpans) and leave the trail untouched.
 //
-// Scores at hop resolution (~16 ms, the audio thread's detection cadence) rather
+// Scores at hop resolution (~11 ms, the audio thread's detection cadence) rather
 // than once per UI frame: the audio thread queues one HopSample per hop (voiced,
 // held, or silent), drained here every call. A UI frame can span several hops —
 // point-sampling only the latest atomic made hop-level detections invisible
@@ -744,13 +750,14 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         }
 
         // Trail capture (skipped when the Pitch Trail setting is off): one sample
-        // per hop instead of per frame; an unvoiced hop after voiced ones adds a
-        // single gap marker so the drawn contour breaks across silences. Stored at
-        // the raw hop time — drawHighway applies calibSec, and the take export wants
-        // true project time so its MIDI lines up with the audio waveform.
+        // per hop instead of per frame. A held MIDI estimate after the RMS gate has
+        // closed is a live-display convenience, not evidence for a saved take, so it
+        // also adds a gap marker. Stored at the raw hop time — drawHighway applies
+        // calibSec, and the take export wants true project time so its MIDI lines up
+        // with the audio waveform.
         if (pitchTrailOn)
         {
-            if (hop.midiFloat >= 0.0f)
+            if (hop.voiced && hop.midiFloat >= 0.0f)
                 pitchTrail.push_back ({ hop.time, hop.midiFloat });
             else if (! pitchTrail.empty() && pitchTrail.back().pitch >= 0.0f)
                 pitchTrail.push_back ({ hop.time, -1.0f });
@@ -1023,12 +1030,19 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
     const auto text = area.reduced (8, 0);
     g.setFont (juce::Font (12.0f, juce::Font::bold));
     g.setColour (juce::Colour (0xff556070));  // always faint
-    // The live-mic/playback mode only matters when there is an offset to apply, so it is
-    // appended when there is one and left off at 0 ms rather than shown as dead text.
-    const juce::String calibStr = (latencyOffsetMs == 0)
-                                      ? "0 ms"
-                                      : (latencyOffsetMs > 0 ? "+" : "") + juce::String (latencyOffsetMs)
-                                            + (liveMicInput ? " ms live" : " ms playback");
+    // Reads "out/in", the two calibrations that actually shape the picture. The
+    // live-mic/playback mode only matters when the output offset is non-zero (that is the
+    // only thing it redirects), so it is appended then and left off rather than shown as
+    // dead text. "(playing)" marks when the output offset is live: it is suppressed while
+    // stopped, and the field would otherwise claim a shift that isn't being applied.
+    const auto signed_ = [] (int ms) { return (ms > 0 ? "+" : "") + juce::String (ms); };
+    juce::String calibStr = signed_ (latencyOffsetMs) + "/" + signed_ (inputOffsetMs) + " ms";
+    if (latencyOffsetMs != 0)
+    {
+        calibStr += liveMicInput ? " live" : " playback";
+        if (audioProcessor.reaperApi.isLoaded() && ! lastIsPlaying)
+            calibStr += " (stopped)";
+    }
     juce::String rateStr = juce::String (cachedPlayRate, 2);
     if (! audioProcessor.reaperApi.CSurf_OnPlayRateChange)
         rateStr += " [N/A]";

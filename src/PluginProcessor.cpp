@@ -309,6 +309,7 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("pitchTolCents",  savedPitchTolCents.load(),    nullptr);
     state.setProperty ("pitchTrail",     savedPitchTrail.load(),       nullptr);
     state.setProperty ("latencyMs",      savedLatencyOffsetMs.load(),  nullptr);
+    state.setProperty ("inputLatencyMs", savedInputOffsetMs.load(),    nullptr);
     state.setProperty ("liveMic",        savedLiveMicInput.load(),     nullptr);
     state.setProperty ("pixPerSec",      (double) savedPixPerSec.load(), nullptr);
     state.setProperty ("lyricScale",     (double) savedLyricScale.load(), nullptr);
@@ -334,6 +335,9 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     savedPitchTolCents   =        (int)    state.getProperty ("pitchTolCents",  50);
     savedPitchTrail      =        (bool)   state.getProperty ("pitchTrail",     true);
     savedLatencyOffsetMs =        (int)    state.getProperty ("latencyMs",      0);
+    // Absent in sessions saved before the calibration split; 0 reproduces the old
+    // single-slider behaviour exactly, so those sessions load with no visible change.
+    savedInputOffsetMs   =        (int)    state.getProperty ("inputLatencyMs", 0);
     savedLiveMicInput    =        (bool)   state.getProperty ("liveMic",        false);
     savedPixPerSec       = (float)(double) state.getProperty ("pixPerSec",      200.0);
     savedLyricScale      = (float)(double) state.getProperty ("lyricScale",     1.0);

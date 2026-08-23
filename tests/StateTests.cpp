@@ -15,6 +15,7 @@ TEST_CASE ("state: all 14 persisted fields round-trip through a fresh processor"
     proc.savedPitchTolCents   = 75;
     proc.savedPitchTrail      = false;
     proc.savedLatencyOffsetMs = 123;
+    proc.savedInputOffsetMs   = 45;
     proc.savedLiveMicInput    = true;
     proc.savedPixPerSec       = 275.0f;
     proc.savedLyricScale      = 1.5f;
@@ -37,6 +38,7 @@ TEST_CASE ("state: all 14 persisted fields round-trip through a fresh processor"
     REQUIRE (proc2.savedPitchTolCents   == 75);
     REQUIRE (proc2.savedPitchTrail      == false);
     REQUIRE (proc2.savedLatencyOffsetMs == 123);
+    REQUIRE (proc2.savedInputOffsetMs   == 45);
     REQUIRE (proc2.savedLiveMicInput    == true);
     REQUIRE (proc2.savedPixPerSec       == Catch::Approx (275.0f));
     REQUIRE (proc2.savedLyricScale      == Catch::Approx (1.5f));
@@ -60,12 +62,34 @@ TEST_CASE ("state: garbage bytes are rejected without crashing, defaults intact"
     REQUIRE (proc.savedPitchTolCents   == 50);
     REQUIRE (proc.savedPitchTrail      == true);
     REQUIRE (proc.savedLatencyOffsetMs == 0);
+    REQUIRE (proc.savedInputOffsetMs   == 0);
     REQUIRE (proc.savedLiveMicInput    == false);
     REQUIRE (proc.savedPixPerSec       == Catch::Approx (200.0f));
     REQUIRE (proc.savedLyricScale      == Catch::Approx (1.0f));
     REQUIRE (proc.savedSquashGuard     == 0);
     REQUIRE (proc.savedLyricMode       == 0);
     REQUIRE (proc.savedRenderer        == 0);
+}
+
+TEST_CASE ("state: a session saved before the calibration split loads unchanged", "[state]")
+{
+    // Sessions written before Calibration was split into Output + Input have a
+    // "latencyMs" property and no "inputLatencyMs". Those must keep their calibration and
+    // pick up an input offset of 0, which is the value at which detectionOffsetSec()
+    // reduces to its pre-split form — so reopening an old project changes nothing.
+    juce::ValueTree legacy ("RBVocalSingState");
+    legacy.setProperty ("latencyMs", -60,  nullptr);
+    legacy.setProperty ("liveMic",   true, nullptr);
+
+    juce::MemoryBlock block;
+    juce::AudioProcessor::copyXmlToBinary (*legacy.createXml(), block);
+
+    RBVocalSingAudioProcessor proc;
+    proc.setStateInformation (block.getData(), (int) block.getSize());
+
+    REQUIRE (proc.savedLatencyOffsetMs == -60);
+    REQUIRE (proc.savedInputOffsetMs   == 0);
+    REQUIRE (proc.savedLiveMicInput    == true);
 }
 
 TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "[state]")
@@ -82,6 +106,7 @@ TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "
     REQUIRE (proc.savedPitchTolCents   == 50);
     REQUIRE (proc.savedPitchTrail      == true);
     REQUIRE (proc.savedLatencyOffsetMs == 0);
+    REQUIRE (proc.savedInputOffsetMs   == 0);
     REQUIRE (proc.savedLiveMicInput    == false);
     REQUIRE (proc.savedPixPerSec       == Catch::Approx (200.0f));
     REQUIRE (proc.savedLyricScale      == Catch::Approx (1.0f));

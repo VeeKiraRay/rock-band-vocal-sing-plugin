@@ -147,6 +147,10 @@ private:
     int    lastPaintLyricMode  { -1 };
     double lastPaintRate       { -1.0 };
     bool   lastPaintFlash      { false };
+    // Play state is a paint input, not just a poll result: drawingOffsetSec() applies the
+    // output calibration only while playing, so the whole chart shifts on the transition.
+    // A stop-in-place (cursor doesn't move) changes nothing else the gate watches.
+    bool   lastPaintPlaying    { false };
 
     // Measured duration of the last paint() (seconds), used by onFrame() to cap paint's
     // duty cycle so a heavy (large-window) paint can't starve REAPER's UI thread.
@@ -175,13 +179,22 @@ private:
     // frames). When false (default), the plugin renders as fast as it can.
     bool reaperPriority { false };
 
-    // Session-only calibration offset (ms) — subtracted from render time in paint().
+    // Output calibration (ms) — how late the song reaches the listener's ears, subtracted
+    // from render time in paint() so the note at the playhead line is the one they hear.
+    // Applies only while the transport is playing; see drawingOffsetSec().
     int    latencyOffsetMs { 0 };
-    // Does that offset apply to detected pitch as well as to the chart? A live singer's
-    // voice is timestamped only after the song has travelled out to their ears and back,
-    // which is the round trip latencyOffsetMs measures — so it must be shifted back onto
-    // the chart. Playback (a stem, a recorded take) never made that trip and is already
-    // at its true project time. See detectionOffsetSec().
+    // Input calibration (ms) — how late a detection is filed relative to when the sound
+    // was actually made: the mic/interface input latency plus the analysis chain (window
+    // fill + median, measured in tests/DetectionLatencyTests.cpp at ~5 ms for a phrase-start
+    // onset and ~29 ms for a mid-phrase legato step). Independent of latencyOffsetMs
+    // because it compensates a different physical delay — sharing one number forced a
+    // choice between the chart sitting on the audio and the trail sitting on the chart.
+    int    inputOffsetMs  { 0 };
+    // Does the *output* offset apply to detected pitch as well? A live singer's voice is
+    // timestamped only after the song has travelled out to their ears and back, so that
+    // round trip must be shifted back onto the chart on top of the input offset. Playback
+    // (a stem, a recorded take) never made that trip and is already at its true project
+    // time. See detectionOffsetSec().
     bool   liveMicInput   { false };
     // Session-only scroll rate (px/s) — drives both highway and lyric strips together.
     float  pixPerSec       { 200.0f };
@@ -338,9 +351,30 @@ private:
     int windowHHarm() const { return windowH() + lyricStripH(); }
 
     // Seconds to subtract from a detection's raw project time to place it on the chart —
-    // the single point of truth for the live-mic / playback split (see liveMicInput).
-    // The chart's own offset is unconditional; only detections are conditional.
-    double detectionOffsetSec() const { return liveMicInput ? latencyOffsetMs / 1000.0 : 0.0; }
+    // the single point of truth for the detection timeline. The input offset always
+    // applies (the analysis chain files every estimate late regardless of source); the
+    // output offset is added only for a live mic, whose voice also made the round trip
+    // out to the singer's ears and back (see liveMicInput). Both zero reproduces the
+    // pre-split behaviour exactly, which is what an old saved session loads as.
+    double detectionOffsetSec() const
+    {
+        return (inputOffsetMs + (liveMicInput ? latencyOffsetMs : 0)) / 1000.0;
+    }
+
+    // Seconds to subtract from cachedPlayTime to get the drawing timeline. Gated on the
+    // transport actually playing: while stopped, cachedPlayTime is the edit cursor, a true
+    // project position with no audio in flight, so there is no monitoring latency to
+    // cancel — applying it anyway drew the chart latencyOffsetMs away from the cursor and
+    // made "park the cursor on a note start" report a sync error that wasn't there
+    // (found 2026-08-08). Only the REAPER path knows the play state; the file fallback's
+    // host playhead only advances during playback, so treat it as always playing.
+    // This shifts chart and trail together — both are mapped through the same t — so
+    // their alignment to each other is identical in both transport states.
+    double drawingOffsetSec() const
+    {
+        const bool stopped = audioProcessor.reaperApi.isLoaded() && ! lastIsPlaying;
+        return stopped ? 0.0 : latencyOffsetMs / 1000.0;
+    }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RBVocalSingAudioProcessorEditor)
 };

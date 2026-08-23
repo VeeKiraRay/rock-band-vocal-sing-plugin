@@ -123,6 +123,8 @@ public:
         std::function<void(int)>   setRenderer;
         int                         initCalib          { 0 };
         std::function<void(int)>    setCalib;
+        int                         initInputCalib     { 0 };
+        std::function<void(int)>    setInputCalib;
         bool                        initLiveMic        { false };
         std::function<void(bool)>   setLiveMic;
         float                       initSpeed          { 200.0f };
@@ -153,8 +155,9 @@ public:
         static const juce::String kTipRate     = "Limit redraws per second. Lower values reduce CPU load on REAPER's UI thread.";
         static const juce::String kTipPriority = "Skips frames when paint takes too long, keeping REAPER's UI responsive. Recommended at large window sizes.";
         static const juce::String kTipRenderer = "CPU: software renderer (default). OpenGL: GPU rendering, may help at large window sizes. 'session only' reverts on next load; 'persist' saves the choice.";
-        static const juce::String kTipCalib    = "Shift note timing to compensate for audio output latency. Positive = notes appear later.";
-        static const juce::String kTipLiveMic  = "Tick when you sing into a mic: your voice reaches the plugin late by the same output latency Calibration compensates, so your detected pitch is shifted back onto the chart too. Leave it off when the plugin listens to playback (a vocal stem or a recorded take) - that audio is already at its true project time, and shifting it would draw the pitch trail early. No effect at 0 ms.";
+        static const juce::String kTipCalib    = "Shifts the chart to compensate for how late the song reaches your ears (audio output latency). Positive = notes appear later, negative = earlier. Applies only while playing, so parking the edit cursor on a note start always puts that note on the playhead line.";
+        static const juce::String kTipInCalib  = "Shifts your detected pitch to compensate for how late it is measured: your mic/interface input latency plus the analysis window (about 5 ms into a note, 30 ms on a mid-phrase syllable). Raise this until the pitch trail sits on the notes - do not use Output calibration for that, or the chart will drift off the song.";
+        static const juce::String kTipLiveMic  = "Tick when you sing into a mic: your voice reaches the plugin late by the output latency as well, because you sing to what you hear - so Output calibration is added to Input calibration for detection. Leave it off when the plugin listens to playback (a vocal stem or a recorded take) - that audio is already at its true project time. No effect when Output calibration is 0 ms.";
         static const juce::String kTipSpeed    = "How fast notes scroll across the highway. Higher = notes spread further apart.";
         static const juce::String kTipLyricSize = "Size of the lyric-strip text. The strips (and the default window height) grow or shrink to match.";
         static const juce::String kTipSquash    = "What scrolling lyrics do when packed words would overlap: push them apart (Spacing), squeeze the text to fit (Auto-shrink), or squeeze a little then push the rest (Hybrid).";
@@ -208,7 +211,7 @@ public:
         addAndMakeVisible (rendererCombo);
 
         // ── Highway ───────────────────────────────────────────────────────────
-        setupLabel (calibLabel, "Calibration", kTipCalib);
+        setupLabel (calibLabel, "Output calib", kTipCalib);
         calibSlider.setSliderStyle (juce::Slider::IncDecButtons);
         calibSlider.setRange (-200, 500, 20);
         calibSlider.setValue (this->cbs.initCalib, juce::dontSendNotification);
@@ -220,6 +223,21 @@ public:
             this->cbs.setCalib ((int) calibSlider.getValue());
         };
         addAndMakeVisible (calibSlider);
+
+        // Finer steps than the output slider: the analysis chain alone accounts for
+        // 5-30 ms, so a 20 ms step could not resolve it.
+        setupLabel (inCalibLabel, "Input calib", kTipInCalib);
+        inCalibSlider.setSliderStyle (juce::Slider::IncDecButtons);
+        inCalibSlider.setRange (-50, 250, 5);
+        inCalibSlider.setValue (this->cbs.initInputCalib, juce::dontSendNotification);
+        inCalibSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        inCalibSlider.setTextValueSuffix (" ms");
+        inCalibSlider.setTooltip (kTipInCalib);
+        inCalibSlider.onValueChange = [this]
+        {
+            this->cbs.setInputCalib ((int) inCalibSlider.getValue());
+        };
+        addAndMakeVisible (inCalibSlider);
 
         setupLabel (liveMicLabel, "Live-mic used", kTipLiveMic);
         setupToggle (liveMicToggle, this->cbs.initLiveMic, kTipLiveMic);
@@ -361,6 +379,7 @@ public:
         area.removeFromTop (kSecGap);
         layoutHdr (highwayHeader);
         layoutRow (calibLabel, calibSlider);
+        layoutRow (inCalibLabel, inCalibSlider);
         layoutRow (liveMicLabel, liveMicToggle, 24);
         layoutRow (speedLabel, noteSpeedSlider);
         layoutRow (lyricSizeLabel, lyricSizeSlider);
@@ -390,11 +409,11 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (5) + SINGING (4), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (6) + SINGING (4), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (5)
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (6)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (4);
 
 private:
@@ -447,6 +466,8 @@ private:
 
     juce::Label         calibLabel;
     juce::Slider        calibSlider;
+    juce::Label         inCalibLabel;
+    juce::Slider        inCalibSlider;
     juce::Label         liveMicLabel;
     juce::ToggleButton  liveMicToggle;
     juce::Label         speedLabel;
@@ -623,6 +644,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         };
         cbs.initCalib          = latencyOffsetMs;
         cbs.setCalib           = [safe] (int v)    { if (safe) { safe->latencyOffsetMs = v; safe->audioProcessor.savedLatencyOffsetMs = v; safe->repaint(); } };
+        cbs.initInputCalib     = inputOffsetMs;
+        cbs.setInputCalib      = [safe] (int v)    { if (safe) { safe->inputOffsetMs = v; safe->audioProcessor.savedInputOffsetMs = v; safe->repaint(); } };
         cbs.initLiveMic        = liveMicInput;
         cbs.setLiveMic         = [safe] (bool v)   { if (safe) { safe->liveMicInput = v; safe->audioProcessor.savedLiveMicInput = v; safe->repaint(); } };
         cbs.initSpeed          = pixPerSec;
@@ -719,6 +742,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     pitchTolCents       = juce::jlimit (25, 100, audioProcessor.savedPitchTolCents.load());
     pitchTrailOn        = audioProcessor.savedPitchTrail;
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
+    inputOffsetMs       = audioProcessor.savedInputOffsetMs;
     liveMicInput        = audioProcessor.savedLiveMicInput;
     pixPerSec           = audioProcessor.savedPixPerSec;
     lyricScale          = audioProcessor.savedLyricScale;
@@ -802,7 +826,7 @@ int RBVocalSingAudioProcessorEditor::hitTestNote (juce::Point<int> pt) const
 
     const auto&  notes = audioProcessor.getChartNotes();
     const float  phX   = (float) lastHighwayArea.getX() + (float) lastHighwayArea.getWidth() * 0.3f;
-    const double t     = cachedPlayTime - (latencyOffsetMs / 1000.0);
+    const double t     = cachedPlayTime - drawingOffsetSec();
 
     auto pitchY = [&] (int p) -> float {
         return (float) lastHighwayArea.getBottom() - ((float) p - lastFMinP + 0.5f) * lastNoteH;
@@ -866,9 +890,9 @@ void RBVocalSingAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     if (! audioProcessor.reaperApi.SetEditCurPos) return;
 
     // Map through the same calibrated time the highway is drawn with (and hitTestNote
-    // uses), so a click lands on the note the user sees, not latencyOffsetMs away.
+    // uses), so a click lands on the note the user sees, not a calibration away.
     const float  phX      = (float) highway.getX() + (float) highway.getWidth() * 0.3f;
-    const double seekTime = (cachedPlayTime - latencyOffsetMs / 1000.0)
+    const double seekTime = (cachedPlayTime - drawingOffsetSec())
                           + (e.x - phX) / (double) pixPerSec;
 
     audioProcessor.reaperApi.SetEditCurPos (std::max (0.0, seekTime), true, true);
@@ -1215,7 +1239,8 @@ void RBVocalSingAudioProcessorEditor::onFrame()
                       || (framesDropping  != lastPaintDropping)
                       || (curLyricMode    != lastPaintLyricMode)
                       || (cachedPlayRate  != lastPaintRate)
-                      || (flashActive     != lastPaintFlash);
+                      || (flashActive     != lastPaintFlash)
+                      || (lastIsPlaying   != lastPaintPlaying);
 
     if (changed)
     {
@@ -1226,6 +1251,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         lastPaintLyricMode  = curLyricMode;
         lastPaintRate       = cachedPlayRate;
         lastPaintFlash      = flashActive;
+        lastPaintPlaying    = lastIsPlaying;
 
         // Dirty only the dynamic areas — controls panel is static widgets that repaint themselves
         repaint (getLocalBounds().withBottom (getHeight() - kControlsH));
@@ -1322,7 +1348,7 @@ void RBVocalSingAudioProcessorEditor::paint (juce::Graphics& g)
     const auto statusArea  = juce::Rectangle<int> (0, statsArea.getBottom(),   getWidth(), kStatusH);
     const auto messageArea = juce::Rectangle<int> (0, statusArea.getBottom(),  getWidth(), kMessageH);
 
-    const double t = cachedPlayTime - (latencyOffsetMs / 1000.0);
+    const double t = cachedPlayTime - drawingOffsetSec();
 
     // Per-section timing (RB_PAINT_PROFILE builds only): accumulate raw ms per section
     // this frame, folded into the prof* EMAs after the draws. The whole-paint EMA at

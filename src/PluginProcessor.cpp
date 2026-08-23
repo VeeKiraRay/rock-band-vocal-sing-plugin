@@ -148,6 +148,15 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // over from a previous block), offset by the sample index within the block.
     const double blockStartTime = currentPlaybackTime.load (std::memory_order_relaxed);
 
+    // A hop's window *ends* at the sample that triggered it, so its estimate describes
+    // audio centred half a window earlier. Filing it at the trailing edge dated every
+    // detection ~16 ms late, which showed up as a pitch trail — and an exported take —
+    // lagging the audio it came from. Anchor at the window centre instead. This removes
+    // the geometric half of the analysis delay; the rest (how much of the window the new
+    // content must fill before the NSDF locks onto it) is inherent to the method and
+    // stays. Measured before/after in tests/DetectionLatencyTests.cpp.
+    const double windowCentreOffset = 0.5 * (double) kPitchWindow / detectRate;
+
     for (int i = 0; i < numSamples; ++i)
     {
         // Condition at the host rate, then keep every decimFactor-th sample for the
@@ -236,7 +245,11 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             // Publish this hop's result (voiced, held, or silent) so the UI thread
             // can see every estimate instead of point-sampling the latest atomics
             // once per frame — see the HopSample comment in the header.
-            const double hopTime = blockStartTime + (double) i / hostSampleRate;
+            // Clamped so a hop near the very start of a project can't be dated before it.
+            // Several hops can share the clamped value there; consumers already tolerate
+            // repeated hop times (a stopped transport reports the same time every block).
+            const double hopTime = std::max (0.0, blockStartTime + (double) i / hostSampleRate
+                                                      - windowCentreOffset);
             pushHopSample (hopTime, currentMidiFloat.load (std::memory_order_relaxed),
                            audioAboveGate.load (std::memory_order_relaxed));
         }

@@ -23,9 +23,18 @@ namespace
                           .withTimeStamp (secToTick (endSec)));
     }
 
+    // Type 5 = the MIDI "lyric" meta event, what this project's own charts use.
     void addLyric (juce::MidiMessageSequence& seq, double atSec, const juce::String& text)
     {
         seq.addEvent (juce::MidiMessage::textMetaEvent (5, text).withTimeStamp (secToTick (atSec)));
+    }
+
+    // Type 1 = a generic "text" meta event. This is what real RB exports use for lyrics
+    // (RBN/Magma convention), so both types must attach. Bracketed text on this same type
+    // is animation/marker data and must NOT attach.
+    void addTextLyric (juce::MidiMessageSequence& seq, double atSec, const juce::String& text)
+    {
+        seq.addEvent (juce::MidiMessage::textMetaEvent (1, text).withTimeStamp (secToTick (atSec)));
     }
 
     void addEndMarker (juce::MidiMessageSequence& seq, double atSec, const juce::String& text = "[end]")
@@ -107,6 +116,74 @@ TEST_CASE ("chartloader solo: lyric attaches within 50ms, not beyond", "[chartlo
     REQUIRE (notes.size() == 2);
     REQUIRE (notes[0].lyric == "near");
     REQUIRE (notes[1].lyric.isEmpty());
+}
+
+TEST_CASE ("chartloader solo: type-1 text events attach as lyrics", "[chartloader][solo]")
+{
+    // Regression: accepting only type 5 made every real RB export load with a full note
+    // chart and no lyrics at all — the RBN/Magma convention writes them as type 1.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote      (vocals, 1.0, 1.5, 60); addTextLyric (vocals, 1.0, "Don't");
+    addNote      (vocals, 2.0, 2.5, 62); addTextLyric (vocals, 2.0, "you");
+    addNote      (vocals, 3.0, 3.5, 64); addLyric     (vocals, 3.0, "still");  // type 5 still works
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    const auto& notes = proc.getChartNotes();
+    REQUIRE (notes.size() == 3);
+    REQUIRE (notes[0].lyric == "Don't");
+    REQUIRE (notes[1].lyric == "you");
+    REQUIRE (notes[2].lyric == "still");
+}
+
+TEST_CASE ("chartloader solo: bracketed marker text never becomes a lyric", "[chartloader][solo]")
+{
+    // The other half of type-1 support: animation/venue cues share the event type with
+    // lyrics, and only the bracket separates them. Accepting type 1 naively would print
+    // stage directions in the lyric strip.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote      (vocals, 1.0, 1.5, 60); addTextLyric (vocals, 1.0, "[idle]");
+    addNote      (vocals, 2.0, 2.5, 62); addTextLyric (vocals, 2.0, "  [tambourine_start]");
+    addNote      (vocals, 3.0, 3.5, 64); addTextLyric (vocals, 3.0, "real");
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    const auto& notes = proc.getChartNotes();
+    REQUIRE (notes.size() == 3);
+    REQUIRE (notes[0].lyric.isEmpty());   // [idle] is not a lyric
+    REQUIRE (notes[1].lyric.isEmpty());   // leading whitespace must not defeat the check
+    REQUIRE (notes[2].lyric == "real");
+}
+
+TEST_CASE ("chartloader solo: an [end] marker on the vocal track is not a lyric",
+           "[chartloader][solo]")
+{
+    // [end] lives on EVENTS, but a stray copy on PART VOCALS must not attach to the note
+    // beside it now that type 1 is accepted for lyrics.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote      (vocals, 1.0, 1.5, 60);
+    addEndMarker (vocals, 1.0);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    const auto& notes = proc.getChartNotes();
+    REQUIRE (notes.size() == 1);
+    REQUIRE (notes[0].lyric.isEmpty());
 }
 
 TEST_CASE ("chartloader solo: suffix flags classify talkie/hidden lyrics", "[chartloader][solo]")

@@ -429,7 +429,11 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
     int notecnt = 0, cccnt = 0, txtsyxcnt = 0;
     reaperApi.MIDI_CountEvts (take, &notecnt, &cccnt, &txtsyxcnt);
 
-    // Collect lyric text events (type 5)
+    // Collect lyric text events. Both meta types count: type 5 is the MIDI "lyric" event,
+    // but the RBN/Magma convention writes PART VOCALS lyrics as type 1 "text" events, and
+    // real exports use type 1 exclusively. Accepting only type 5 loaded every note with no
+    // lyrics at all on imported charts. Bracketed text on those same types is animation and
+    // marker data, never a lyric — see isBracketedMarkerText.
     struct Lyric { double time; juce::String text; };
     std::vector<Lyric> lyrics;
 
@@ -442,11 +446,14 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
         msgBuf[0] = '\0';
 
         if (reaperApi.MIDI_GetTextSysexEvt (take, s, &sel, &mute, &ppq, &type, msgBuf, &msgLen)
-            && type == 5 && msgLen > 0)
+            && (type == 1 || type == 5) && msgLen > 0)
         {
             msgBuf[msgLen] = '\0';
+            const juce::String text = decodeMidiText (msgBuf, msgLen);
+            if (isBracketedMarkerText (text)) continue;
+
             const double t = reaperApi.MIDI_GetProjTimeFromPPQPos (take, ppq);
-            lyrics.push_back ({ t, decodeMidiText (msgBuf, msgLen) });
+            lyrics.push_back ({ t, text });
         }
     }
 
@@ -588,15 +595,23 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
         juce::MidiMessageSequence track (*midi.getTrack (trackIdx));
         track.updateMatchedPairs();
 
+        // Type 1 and type 5 both carry lyrics, minus bracketed marker text — kept in sync
+        // with the REAPER path in parseChartNotes(); see the comment there for why.
         struct Lyric { double time; juce::String text; };
         std::vector<Lyric> lyrics;
         for (int i = 0; i < track.getNumEvents(); ++i)
         {
             const auto& msg = track.getEventPointer (i)->message;
-            if (msg.isMetaEvent() && msg.getMetaEventType() == 5)
-                lyrics.push_back ({ msg.getTimeStamp(),
-                                     decodeMidiText ((const char*) msg.getMetaEventData(),
-                                                    msg.getMetaEventLength()) });
+            if (! msg.isMetaEvent()) continue;
+
+            const int metaType = msg.getMetaEventType();
+            if (metaType != 1 && metaType != 5) continue;
+
+            const juce::String text = decodeMidiText ((const char*) msg.getMetaEventData(),
+                                                      msg.getMetaEventLength());
+            if (isBracketedMarkerText (text)) continue;
+
+            lyrics.push_back ({ msg.getTimeStamp(), text });
         }
 
         for (int i = 0; i < track.getNumEvents(); ++i)

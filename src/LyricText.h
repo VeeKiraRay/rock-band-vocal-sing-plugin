@@ -5,6 +5,16 @@
 // editor's paint code. Lives in its own header because processor TUs must not
 // include editor headers (EditorVisuals.h) by convention.
 
+// Rock Band charts carry non-lyric text — animation cues ([idle], [mellow], [play]),
+// mix/practice markers ([mix 0 drums4], [prc_intro]) and [end] — as MIDI text events on
+// the same tracks and the same meta-event types as lyrics. The bracket is the convention
+// that separates the two, and it is the only thing that does: both kinds appear as type 1
+// on PART VOCALS in real exports, so the loader cannot tell them apart by type.
+inline bool isBracketedMarkerText (const juce::String& s)
+{
+    return s.trimStart().startsWithChar ('[');
+}
+
 // Strips only the trailing notational suffixes (#, ^, $) — leaves connector chars intact.
 inline juce::String stripNotationSuffixes (const juce::String& s)
 {

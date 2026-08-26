@@ -26,7 +26,7 @@ any `.mid` dropped in for inspection) — see the Dev tools section below.
 | [_old/LYRIC_OVERLAP.md](_old/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 | [_old/TAKE_EXPORT.md](_old/TAKE_EXPORT.md) | **Implemented 2026-07-19/20** (4-patch series) — "Save take": pitch trail → semitone MIDI notes on a new timestamped track below the plugin's track. Doc kept for design rationale + segmentation constants + the in-REAPER findings (stopped-only gating, lazy self-track query, ASCII strings) |
-| [_upcoming/CHART_REVIEW_FINDINGS.md](_upcoming/CHART_REVIEW_FINDINGS.md) | **Open** (2026-08-23) — two findings from reviewing *other people's* charts, both root-caused, neither fixed: RB stores vocal lyrics as **type 1** text events while the loader accepts type 5 only (proven against a real export; needs bracket filtering alongside), and pitch 1 (lyric shift) parsed as a singable note |
+| [_upcoming/CHART_REVIEW_FINDINGS.md](_upcoming/CHART_REVIEW_FINDINGS.md) | Two findings from reviewing *other people's* charts. §1 type-1 lyric events — **fixed 2026-08-23**, doc kept for the evidence and the bracket-vs-lyric rationale. §2 pitch 1 (lyric shift) charted as a singable note — **still open**, root-caused with a fix sketch |
 
 Every `_old/` phase is complete; open work is the `_upcoming/` docs plus the Backlog
 section below.
@@ -149,10 +149,14 @@ yet during instantiation (found 2026-07-20).
 (`sourceTake`/`sourceNoteIndex`/`sourceTrack`/`sourceItem`, REAPER path only) used by the
 note-pitch editor's `MIDI_SetNote` write-back.
 
-- Lyrics: type-5 MIDI text events matched to the nearest note-on within 50 ms. The
-  talkie/hidden flags classify the lyric's whole trailing suffix run (`LyricText.h`),
-  so `"word#$"` is both. **Type 5 only is a known defect** — real RB exports use type-1
-  text events and load with zero lyrics (`_upcoming/CHART_REVIEW_FINDINGS.md` §1).
+- Lyrics: MIDI text events of **type 1 or type 5** matched to the nearest note-on within
+  50 ms. Both types are required — type 5 is the MIDI "lyric" event this project's own
+  charts use, while real RB exports (RBN/Magma convention) write lyrics as type-1 "text"
+  events; accepting only type 5 loaded imported charts with every note and no lyrics.
+  Because animation/venue cues (`[idle]`, `[mellow]`, `[play]`) share those event types,
+  **bracketed text is skipped** (`isBracketedMarkerText` in `LyricText.h`) — the bracket is
+  the only thing separating a cue from a lyric. The talkie/hidden flags classify the
+  lyric's whole trailing suffix run (`LyricText.h`), so `"word#$"` is both.
 - Marker pitches (named constants in `PluginProcessor.h`): `kRangeShiftPitch` 0 =
   Range Shift section boundary, `kPhraseMarkerPitch` 105 = phrase, `kOverdrivePitch`
   116 = overdrive, ≥ `kFirstReservedPitch` 96 = reserved (all excluded from `chartNotes`).
@@ -480,19 +484,15 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
   start. (Surfaced 2026-07-19 discussing the trail as a charting aid.) The bound in the
   other direction — clamping the range into the singable band 36–84 so a stray low note
   can't blow it open — belongs in the same patch.
-- **Lyrics on imported charts are type-1 text events, not type 5** — both parsers accept
-  `type == 5` only (`ChartLoader.cpp:445`, `:596`), but the RBN/Magma convention writes
-  PART VOCALS lyrics as **text** events, so an imported chart loads every note and no
-  lyrics. Proven 2026-08-23 against a real export: 261 type-1 events, 0 type-5, and with
-  type 1 accepted all 233 lyrics attach to all 233 singable notes at 0.00 ms offset. The
-  fix is *not* just widening the test: 28 of those 261 are `[idle]`/`[mellow]`-style
-  animation events, so accepting type 1 must come with skipping bracketed text — which is
-  very likely why type 5 was picked in the first place. Note the tests never caught this
-  because
-  `ChartLoaderTests.cpp:28` builds every fixture lyric as type 5, validating the loader
-  against its own assumption. Details + fixture plan in
-  `_upcoming/CHART_REVIEW_FINDINGS.md` §1. That doc also records a latent
-  `dedupHarmonyLyrics` bug that can hide a syllable on both harmony parts.
+- **Type-1 lyric support done** (2026-08-23) — both parsers now accept type 1 *and* type 5
+  and skip bracketed marker text; three fixtures added (type-1 attaches, bracketed does
+  not, a stray `[end]` on the vocal track does not). Diagnosed by dumping a real export:
+  261 type-1 events, 0 type-5, and with type 1 accepted all 233 lyrics attach to all 233
+  singable notes at 0.00 ms offset. The tests never caught it because
+  `ChartLoaderTests.cpp` built every fixture lyric as type 5 — the suite validated the
+  loader against its own assumption. `_upcoming/CHART_REVIEW_FINDINGS.md` §1 keeps the
+  evidence, and also records a still-open latent `dedupHarmonyLyrics` bug that can hide a
+  syllable on both harmony parts.
 - **Track identity by GUID** — name matching breaks on rename; `GetTrackGUID` is stable.
 - **Play/stop/record indicator** — `GetPlayState` bitmask (1=play 2=pause 4=record) is
   already polled; show it in the UI.

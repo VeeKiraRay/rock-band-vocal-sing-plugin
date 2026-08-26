@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include "PluginProcessor.h"
 #include "LyricText.h"   // stripNotationSuffixes (shared with the editor)
+#include "HighwayRange.h" // kVocalLow/kVocalHigh — one definition of the singable band
 #include <cmath>
 #include <algorithm>
 
@@ -253,8 +254,19 @@ void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&          
 
     if (minP <= maxP)
     {
-        chartMinPitch = std::max (0,   minP - 2);
-        chartMaxPitch = std::min (127, maxP + 2);
+        // Octave-wrap scoring range only — the highway draws the section min/max through
+        // rbhighway::visibleRange instead. Clamped into the same vocal band so a stray
+        // out-of-range note cannot widen the wrap target either; the clamp only ever
+        // narrows, so a well-formed chart is unaffected. The minimum-span rule is
+        // deliberately NOT applied here: widening the wrap range would send a sung pitch
+        // to a different octave than the one on screen.
+        chartMinPitch = std::max (rbhighway::kVocalLow,  minP - 2);
+        chartMaxPitch = std::min (rbhighway::kVocalHigh, maxP + 2);
+        if (chartMinPitch > chartMaxPitch)   // content entirely outside the band
+        {
+            chartMinPitch = rbhighway::kVocalLow;
+            chartMaxPitch = rbhighway::kVocalHigh;
+        }
     }
 
     buildPitchSections    (chartNotes, std::move (shiftMarkers), chartPitchSections);
@@ -478,6 +490,8 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
                 outShiftMarkers.push_back ({ startSec, endSec - startSec });
             continue;
         }
+        if (pitch == kLyricShiftPitch)   // RB3 lyric shift: a marker, nothing consumes it yet
+            continue;
         if (pitch == kPhraseMarkerPitch)
         {
             // Each part keeps its own phrase grid (bottom strip uses HARM1's,
@@ -631,6 +645,7 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
                 if (collectSections) shiftMarkers.push_back ({ startT, endT - startT });
                 continue;
             }
+            if (pitch == kLyricShiftPitch) continue;   // as above
             if (pitch == kPhraseMarkerPitch)
             {
                 if (phraseList != nullptr) phraseList->push_back ({ startT, endT });

@@ -26,7 +26,7 @@ any `.mid` dropped in for inspection) — see the Dev tools section below.
 | [_old/LYRIC_OVERLAP.md](_old/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions |
 | [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
 | [_old/TAKE_EXPORT.md](_old/TAKE_EXPORT.md) | **Implemented 2026-07-19/20** (4-patch series) — "Save take": pitch trail → semitone MIDI notes on a new timestamped track below the plugin's track. Doc kept for design rationale + segmentation constants + the in-REAPER findings (stopped-only gating, lazy self-track query, ASCII strings) |
-| [_upcoming/CHART_REVIEW_FINDINGS.md](_upcoming/CHART_REVIEW_FINDINGS.md) | Two findings from reviewing *other people's* charts. §1 type-1 lyric events — **fixed 2026-08-23**, doc kept for the evidence and the bracket-vs-lyric rationale. §2 pitch 1 (lyric shift) charted as a singable note — **still open**, root-caused with a fix sketch |
+| [_upcoming/CHART_REVIEW_FINDINGS.md](_upcoming/CHART_REVIEW_FINDINGS.md) | Two findings from reviewing *other people's* charts, **both fixed 2026-08-23** — §1 type-1 lyric events, §2 pitch 1 (lyric shift) charted as a singable note. Kept for the evidence, the bracket-vs-lyric rationale, and the one deliberately-deferred half (bounding the highway range to the singable band) |
 
 Every `_old/` phase is complete; open work is the `_upcoming/` docs plus the Backlog
 section below.
@@ -72,6 +72,9 @@ rock-band-vocal-sing-plugin/          (repo root)
                                     MIDI-text decode, pitch sections, harmony post-passes
     TakeExport.h / .cpp           — rbtake::segmentPitchTrail: pure pitch-trail → MIDI-note
                                     segmentation (JUCE-free; unit-tested directly)
+    HighwayRange.h                — rbhighway::visibleRange: pure pitch-axis rules (pad,
+                                    clamp to the 36–84 vocal band, minimum span). Header-only,
+                                    JUCE-free, unit-tested directly
     PluginEditor.h                — RBVocalSingAudioProcessorEditor decl
     PluginEditor.cpp              — editor lifecycle, VBlank frame loop, layout, paint dispatch,
                                     SettingsPanel popup, transport keys, note-pitch edit drag
@@ -160,10 +163,17 @@ note-pitch editor's `MIDI_SetNote` write-back.
 - Marker pitches (named constants in `PluginProcessor.h`): `kRangeShiftPitch` 0 =
   Range Shift section boundary, `kPhraseMarkerPitch` 105 = phrase, `kOverdrivePitch`
   116 = overdrive, ≥ `kFirstReservedPitch` 96 = reserved (all excluded from `chartNotes`).
-  **Pitch 1 = RB3 lyric shift is a marker too and is *not* currently filtered** — it loads
-  as a singable note and drags the highway range to C-1 (`_upcoming/CHART_REVIEW_FINDINGS.md`
-  §2). The list above is the set of *handled* markers, not the set that exists.
-- Pitch range (`chartMinPitch`/`chartMaxPitch`) = loaded note min/max ± 2 semitones.
+  `kLyricShiftPitch` 1 = RB3 lyric shift is filtered too, but unlike the others it is
+  *dropped* rather than collected — nothing consumes it yet. It has a named constant anyway
+  because charting it dragged the highway floor to C-1
+  (`_upcoming/CHART_REVIEW_FINDINGS.md` §2), and because the pitch-edit drag floor is
+  expressed as `kLyricShiftPitch + 1`.
+- Pitch range (`chartMinPitch`/`chartMaxPitch`) = loaded note min/max ± 2 semitones,
+  clamped into the singable band (`rbhighway::kVocalLow/High` = 36–84). This pair is the
+  **octave-wrap scoring range only** — the highway draws the section min/max through
+  `rbhighway::visibleRange` instead, so changing these numbers moves scoring, not the
+  picture. The minimum-span rule is deliberately not applied here (widening the wrap range
+  would send a sung pitch to a different octave than the one drawn).
 - `songEndTime` from an `[end]` text event on an EVENTS track, else the latest note end.
 - Muted MIDI notes are **deliberately not treated specially** — they draw and score like
   any other note (CODE_REVIEW 1.8 decision, 2026-07-17: not a common Rock Band authoring
@@ -255,7 +265,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   whole pass. Pitch range
   animates per Range-Shift section (smoothstep over the marker length); the per-frame
   geometry is cached (`lastHighwayArea`/`lastFMinP`/…) so mouse hit-testing matches the
-  screen exactly.
+  screen exactly. The per-section target range comes from `rbhighway::visibleRange`
+  (`HighwayRange.h`) — pad ± 5, clamp into 36–84, minimum 12-semitone span.
 - **Stats panel** (`drawStats`): time `MM:SS.ms / end`, live note name + MIDI + Hz,
   traffic light vs the closest active note of any part, scored in cents from
   `currentMidiFloat` (within ±`pitchTolCents` = GREAT, within 2× = CLOSE, else MISS;
@@ -467,23 +478,24 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 - **Note timing/length editing** — natural next step after pitch editing, but timing
   edits reorder MIDI so `sourceNoteIndex` can go stale mid-edit; needs re-resolution
   after each commit.
-- **Pitch 1 (lyric shift) loads as a singable note** — no `kLyricShiftPitch` constant
-  exists, so both parsers chart the RB3 lyric-shift marker, `minP` follows it, and the
-  highway floor lands on C-1. Confirmed 2026-08-23 on a real chart's **PART VOCALS**
-  (4 markers, content 45..64, so `minP` = 1 — it is not Harmonies-only as first assumed).
-  It also draws a stray bar and is an editable `MIDI_SetNote` target under Allow edits —
-  and the pitch-edit drag floor (`kRangeShiftPitch + 1`) is exactly that pitch. Cause + fix
-  sketch in
-  `_upcoming/CHART_REVIEW_FINDINGS.md` §2. Same content-derived-range root cause as the
-  next item, opposite direction — worth fixing together.
-- **Minimum highway range for charting-from-scratch** — the display range is purely
-  content-derived (chart min/max ± 2, or Range-Shift section ± 5), so a flat
-  placeholder chart (e.g. every note C3) collapses the highway to ~5 semitones and
-  the pitch trail from a vocal stem wraps/folds uselessly. Enforce a minimum span
-  (e.g. ≥ 1 octave centred on the content) so stem-guided charting works from a flat
-  start. (Surfaced 2026-07-19 discussing the trail as a charting aid.) The bound in the
-  other direction — clamping the range into the singable band 36–84 so a stray low note
-  can't blow it open — belongs in the same patch.
+- **Lyric-shift filtering done** (2026-08-23) — `kLyricShiftPitch = 1` added and dropped in
+  both parsers, so the RB3 lyric-shift marker no longer charts as a note, no longer feeds
+  `minP` (the highway floor was landing on C-1 against content at 45..64), and no longer
+  offers itself as a `MIDI_SetNote` target under Allow edits; the pitch-edit drag floor is
+  now `kLyricShiftPitch + 1` instead of `kRangeShiftPitch + 1`, which was the marker pitch
+  itself. Two fixtures, one of them asserting the *range* rather than just the note list.
+  Only the narrow half was taken — see the next item for the deferred structural half.
+- **Highway range bounds done** (2026-08-23) — the display range was purely
+  content-derived and unbounded in both directions. `rbhighway::visibleRange`
+  (`src/HighwayRange.h`, pure + unit-tested) now pads by 5, clamps into the singable band
+  36–84, then widens to a 12-semitone minimum, in that order — widening last so the clamp
+  can't undo it, and re-seated inside the band rather than allowed to escape. Closes both
+  halves at once: a flat placeholder chart (every note C3) no longer collapses the axis to
+  ~11 semitones and fold the stem's pitch trail, and a stray out-of-band note no longer
+  stretches it. Out-of-band notes draw off-screen **silently by design** — this plugin
+  reviews charts, it does not validate them, and RB ignores such notes anyway; dedicated
+  authoring tools check game conventions. Content entirely outside the band falls back to
+  the whole band, since an inverted axis would mirror every note rather than hide it.
 - **Type-1 lyric support done** (2026-08-23) — both parsers now accept type 1 *and* type 5
   and skip bracketed marker text; three fixtures added (type-1 attaches, bracketed does
   not, a stray `[end]` on the vocal track does not). Diagnosed by dumping a real export:
@@ -529,7 +541,8 @@ copy the `.vst3` into `C:\Program Files\Common Files\VST3` and re-scan in REAPER
 Catch2 unit tests (`RBVocalSingTests` target, `tests/*.cpp`) exercise the processor's
 public API directly — pitch detection, chart loading (Solo + Harmonies), settings
 persistence — plus the take-export segmenter (pure functions in `src/TakeExport.h`,
-tested without any plugin scaffolding). Piece A is a pluginval black-box smoke script. See TEST_PLAN.md for the
+tested without any plugin scaffolding) and the highway pitch-axis rules
+(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`). Piece A is a pluginval black-box smoke script. See TEST_PLAN.md for the
 full design rationale.
 
 `tests/DetectionLatencyTests.cpp` is a *measurement* test rather than a pass/fail one:

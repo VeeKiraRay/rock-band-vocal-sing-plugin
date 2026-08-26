@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "HighwayRange.h"
 #include "EditorVisuals.h"
 
 // The scrolling note highway plus the stats and status-bar panels below it. Shared
@@ -99,8 +100,8 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     // Compute the visible pitch range for the current section, with a smooth
     // transition on section change driven by playback time (no extra state needed).
     // Smoothstep interpolation over kTransitionDur seconds after each boundary.
-    static constexpr int kPitchPad = 5;
-
+    // The pad/clamp/min-span rules live in rbhighway::visibleRange (HighwayRange.h) so
+    // they are unit-testable and stated once for both sides of a transition.
     float fMinP = (float) audioProcessor.chartMinPitch;
     float fMaxP = (float) audioProcessor.chartMaxPitch;
 
@@ -110,25 +111,23 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         const auto& sec = sections[si];
         if (t < sec.startTime || t >= sec.endTime) continue;
 
-        const float tgtMin = (float) std::max (0,   sec.minPitch - kPitchPad);
-        const float tgtMax = (float) std::min (127, sec.maxPitch + kPitchPad);
+        const auto tgt = rbhighway::visibleRange (sec.minPitch, sec.maxPitch);
 
         if (si > 0 && t < sec.startTime + sec.transitionDur)
         {
-            const auto& prev   = sections[si - 1];
-            const float srcMin = (float) std::max (0,   prev.minPitch - kPitchPad);
-            const float srcMax = (float) std::min (127, prev.maxPitch + kPitchPad);
+            const auto& prev = sections[si - 1];
+            const auto  src  = rbhighway::visibleRange (prev.minPitch, prev.maxPitch);
 
             const float a = (float) (t - sec.startTime) / sec.transitionDur;
             const float s = a * a * (3.0f - 2.0f * a);  // smoothstep ease in/out
 
-            fMinP = srcMin + s * (tgtMin - srcMin);
-            fMaxP = srcMax + s * (tgtMax - srcMax);
+            fMinP = src.lo + s * (tgt.lo - src.lo);
+            fMaxP = src.hi + s * (tgt.hi - src.hi);
         }
         else
         {
-            fMinP = tgtMin;
-            fMaxP = tgtMax;
+            fMinP = tgt.lo;
+            fMaxP = tgt.hi;
         }
         break;
     }

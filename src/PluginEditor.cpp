@@ -906,9 +906,11 @@ void RBVocalSingAudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
     const int delta = (int) std::lround ((double) (dragAnchorY - e.y) / (double) lastNoteH);
 
     // Clamp to the visible lanes intersected with a safe singable band so a drag can never
-    // land on a reserved marker pitch (kRangeShiftPitch, kPhraseMarkerPitch/kOverdrivePitch,
-    // >= kFirstReservedPitch) and silently vanish on the next reload.
-    const int lo = std::max ((int) std::ceil  (lastFMinP), kRangeShiftPitch + 1);
+    // land on a reserved marker pitch (kRangeShiftPitch, kLyricShiftPitch,
+    // kPhraseMarkerPitch/kOverdrivePitch, >= kFirstReservedPitch) and silently vanish on the
+    // next reload. The floor is one above the highest *low* marker, so it tracks
+    // kLyricShiftPitch rather than kRangeShiftPitch — pitch 1 is a marker too.
+    const int lo = std::max ((int) std::ceil  (lastFMinP), kLyricShiftPitch + 1);
     const int hi = std::min ((int) std::floor (lastFMaxP), kFirstReservedPitch - 1);
     if (hi < lo) return;
 

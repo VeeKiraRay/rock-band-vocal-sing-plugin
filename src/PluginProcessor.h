@@ -11,9 +11,13 @@
 enum class VocalPart { Main = 0, Harm2 = 1, Harm3 = 2 };
 
 // Reserved marker pitches in Rock Band vocal charts. The parsers route these to
-// sections/phrases/overdrives instead of chartNotes; the editor's pitch-edit drag
-// clamps so a note can never land on one.
+// sections/phrases/overdrives instead of chartNotes -- or, for kLyricShiftPitch, drop them
+// outright, since nothing consumes lyric shift yet; it still needs a name and a routing
+// slot, because charting it as a note dragged the highway floor to C-1. Excluding a marker
+// here also keeps it out of chartMinPitch/chartMaxPitch, which is half the point. The
+// editor's pitch-edit drag clamps so a note can never land on one.
 constexpr int kRangeShiftPitch    = 0;    // Range Shift section boundary
+constexpr int kLyricShiftPitch    = 1;    // RB3 lyric shift (which part's lyric the strip shows)
 constexpr int kPhraseMarkerPitch  = 105;  // vocal phrase marker
 constexpr int kOverdrivePitch     = 116;  // overdrive (Star Power) phrase marker
 constexpr int kFirstReservedPitch = 96;   // >= this: reserved / non-singable

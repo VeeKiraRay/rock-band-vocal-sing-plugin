@@ -104,6 +104,7 @@ if (RBVS_BUILD_TESTS)
             tests/ChartLoaderTests.cpp
             tests/StateTests.cpp
             tests/TakeExportTests.cpp
+            tests/HighwayRangeTests.cpp
     )
 
     target_compile_definitions(RBVocalSingTests

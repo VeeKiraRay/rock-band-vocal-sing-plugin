@@ -241,6 +241,7 @@ TEST_CASE ("chartloader solo: marker pitches route to sections/phrases/overdrive
     juce::MidiMessageSequence vocals;
     addNote (vocals, 1.0,  1.5,  60);   // real note before the Range Shift marker
     addNote (vocals, 10.0, 10.2, 0);    // pitch 0: Range Shift boundary
+    addNote (vocals, 15.0, 15.2, 1);    // pitch 1: RB3 lyric shift, dropped entirely
     addNote (vocals, 20.0, 20.5, 62);   // real note after the marker
     addNote (vocals, 30.0, 30.5, 105);  // pitch 105: phrase marker
     addNote (vocals, 40.0, 40.5, 116);  // pitch 116: overdrive marker
@@ -277,6 +278,36 @@ TEST_CASE ("chartloader solo: chartMinPitch/chartMaxPitch pad real notes by 2 se
 
     REQUIRE (proc.chartMinPitch == 38);
     REQUIRE (proc.chartMaxPitch == 72);
+}
+
+TEST_CASE ("chartloader solo: lyric-shift markers never widen the pitch range",
+           "[chartloader][solo]")
+{
+    // Regression: pitch 1 (RB3 lyric shift) was charted as a singable note, so it fed
+    // minP. On a real chart with content at 45..64 that pulled chartMinPitch to 1 and the
+    // highway floor to C-1. Asserting the *range* as well as the note list is the point —
+    // excluding the marker from chartNotes but not from minP would still draw wrong.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote (vocals, 1.0,  1.5,  45);
+    addNote (vocals, 2.0,  2.5,  64);
+    addNote (vocals, 3.0,  3.1,  1);    // lyric shift
+    addNote (vocals, 4.0,  4.1,  1);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    REQUIRE (proc.getChartNotes().size() == 2);
+    REQUIRE (proc.chartMinPitch == 43);   // 45 - 2, not 1 - 2
+    REQUIRE (proc.chartMaxPitch == 66);
+
+    // The highway draws the section min/max, not chartMinPitch, so check that too.
+    const auto& sections = proc.getChartPitchSections();
+    REQUIRE (sections.size() == 1);
+    REQUIRE (sections[0].minPitch == 45);
 }
 
 TEST_CASE ("chartloader solo: songEndTime from [end] event on EVENTS track, trimmed", "[chartloader][solo]")

@@ -14,8 +14,16 @@
 .idea/
 *.user
 
+# Local working context (see CLAUDE.md's Local working context section)
+CLAUDE.local.md
+
 # OS cruft
 .DS_Store
 Thumbs.db
 /_old
 /_upcoming
+
+# Local dev aids: standalone triage scripts (e.g. the SMF dumper used to diagnose
+# imported charts) plus any .mid dropped in for inspection. Useful to Claude and
+# to local debugging, not to the shipped plugin.
+/_dev_tools

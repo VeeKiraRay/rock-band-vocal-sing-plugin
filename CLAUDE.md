@@ -9,27 +9,11 @@ persisted settings, transport navigation, write-back note-pitch editing, save-ta
 export). Builds and runs inside REAPER. User-facing documentation lives in **README.md** (installation, setup,
 usage) — keep it in sync when behaviour changes.
 
-## Reference documents (read before starting related tasks)
+## Local working context
 
-Local-only and gitignored: `_upcoming/` holds planned work, `_old/` holds completed phases
-kept for their design rationale, and `_dev_tools/` holds standalone triage scripts (plus
-any `.mid` dropped in for inspection) — see the Dev tools section below.
-
-| Document | Contents |
-| --- | --- |
-| [_old/CODE_REVIEW.md](_old/CODE_REVIEW.md) | 2026-07 full review — §1–§3 all fixed (2026-07-17 patch series); §4 recorded as non-action, §5 informational |
-| [_old/PERFORMANCE_IMPROVEMENT.md](_old/PERFORMANCE_IMPROVEMENT.md) | 2026-07 paint phase — closed: instrumentation + §c wins shipped (PERF-1…10); Release measurement showed Debug-build profiling was the real problem (~9× slower); §d not needed |
-| [_old/PERFORMANCE_VERIFICATION.md](_old/PERFORMANCE_VERIFICATION.md) | Manual REAPER checklist per PERF patch + a standing record of one unreproduced lyric-duplication glitch |
-| [_old/PITCH_DETECTION_IMPROVEMENT.md](_old/PITCH_DETECTION_IMPROVEMENT.md) | Pitch assessment — **fully implemented**: assist phase 2026-07-18/19 (c1, b1–b4), engine phase 2026-07-19 (ENGINE_V2.md) |
-| [_old/ENGINE_V2.md](_old/ENGINE_V2.md) | **Implemented 2026-07-19** (5-patch series) — engine v2 design, agreed constants and patch-by-patch findings (kept for rationale) |
-| [_old/FONT_SCALING.md](_old/FONT_SCALING.md) | **Implemented 2026-07-18** (5-patch series) — Lyrics Size setting (50–200%, scales text + strip heights). Doc kept for design rationale; the stretch goal (global UI text scale) is still open |
-| [_old/LYRIC_OVERLAP.md](_old/LYRIC_OVERLAP.md) | **Implemented 2026-07-18** (4-patch series) — Squash Guard dropdown (Off / Spacing / Auto-shrink / Hybrid). Doc kept for design rationale + implementation decisions |
-| [_old/TEST_PLAN.md](_old/TEST_PLAN.md) | Implemented test setup: pluginval smoke script + Catch2 unit-test target (design rationale; see the Testing section below for commands) |
-| [_old/TAKE_EXPORT.md](_old/TAKE_EXPORT.md) | **Implemented 2026-07-19/20** (4-patch series) — "Save take": pitch trail → semitone MIDI notes on a new timestamped track below the plugin's track. Doc kept for design rationale + segmentation constants + the in-REAPER findings (stopped-only gating, lazy self-track query, ASCII strings) |
-| [_upcoming/CHART_REVIEW_FINDINGS.md](_upcoming/CHART_REVIEW_FINDINGS.md) | Two findings from reviewing *other people's* charts, **both fixed 2026-08-23** — §1 type-1 lyric events, §2 pitch 1 (lyric shift) charted as a singable note. Kept for the evidence, the bracket-vs-lyric rationale, and the one deliberately-deferred half (bounding the highway range to the singable band) |
-
-Every `_old/` phase is complete; open work is the `_upcoming/` docs plus the Backlog
-section below.
+This file holds stable project knowledge only. Open work, the planned/completed-phase
+document index, and other WIP notes live in **CLAUDE.local.md** (gitignored, not part of
+a fresh clone) — check it before starting related tasks.
 
 ---
 
@@ -217,8 +201,9 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   maximum, boundary-lag rejection, clarity gate at NSDF peak < 0.80 = unvoiced,
   parabolic interpolation) → 3-tap median → 24-hop (~260 ms) hold decay.
   - Each `HopSample` is timestamped at its window's **centre**, not at the sample that
-    triggered it — see the 2026-08-08 backlog entry for the measured latency figures and
-    for the mid-phrase asymmetry that timestamping deliberately does *not* correct.
+    triggered it — see the 2026-08-08 backlog entry in CLAUDE.local.md for the measured
+    latency figures and for the mid-phrase asymmetry that timestamping deliberately does
+    *not* correct.
   - The searched band is **60–1200 Hz** (`rbpitch::kMinFreqHz`/`kMaxFreqHz`), sized
     around the RB vocal range MIDI 36–84 with ~6% headroom — boundary rejection
     discards a peak landing *on* a bound, so a tight bound rejects real content.
@@ -375,144 +360,6 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 
 ---
 
-## Backlog
-
-- **Tests done** — see the Testing section above.
-- **CODE_REVIEW fixes done** (2026-07-17, 17-patch series) — §1–§3 all fixed
-  (`_old/CODE_REVIEW.md`; §4 recorded as non-action, §5 informational). The one
-  behaviour decision: muted MIDI notes stay charted (1.8, documented in README;
-  revisit on user feedback).
-- **PERFORMANCE phase done** (2026-07-17, PERF-1…PERF-10 series) — profiling
-  instrumentation + windowing/render-cache wins shipped; phase closed after the
-  Release-build measurement (perf lesson 7 above; `_old/PERFORMANCE_IMPROVEMENT.md`).
-- **FONT_SCALING done** (2026-07-18, 5-patch series) — Lyrics Size setting shipped;
-  only the stretch goal (global UI text scale for stats/status/settings text) remains
-  open in `_old/FONT_SCALING.md`.
-- **Squash guard done** (2026-07-18, 4-patch series) — Off / Spacing / Auto-shrink /
-  Hybrid dropdown shipped, default Off; Auto-shrink uses proportional glyph scaling
-  (`_old/LYRIC_OVERLAP.md` records the design + decisions).
-- **Settings popup clipping fixed** (2026-07-18) — the panel (434 px since the Lyrics
-  Size + Squash Guard rows) exceeded the default Solo window (419 px). Final solution:
-  the panel scrolls inside `SettingsScroller` (Viewport wrapper, editor-parented
-  CallOutBox as before) whenever it is taller than the window minus popup headroom —
-  which also covers user-shrunk windows. Desktop-parented (`nullptr`) variants were
-  tried and reverted the same day (scale/DPI problems — see Known gotchas).
-- **Cents accuracy + assist features done** (2026-07-18/19 patch series) — fractional
-  pitch (`currentMidiFloat`), cents traffic light + Pitch Tolerance setting, visual
-  snap, note-hit highlighting, and the b4 pitch trail (Pitch Trail toggle, default
-  on).
-- **Engine v2 done** (2026-07-19, 5-patch series) — decimating front end, FFT NSDF,
-  256-hop overlapping windows, clarity gate + boundary-lag rejection, 3-tap median.
-  Closes PITCH_DETECTION_IMPROVEMENT.md (both docs now in `_old/`). The
-  `currentClarity` atomic is published but not yet consumed by the UI (candidate: dim
-  the arrowhead when uncertain).
-- **Detection range fix + 24 kHz move done** (2026-08-03, 3-patch series) — driven by
-  measurements ported from the sibling Lua tool
-  (`_upcoming/PITCH_DETECTION_FINDINGS.md`). Extracted `NsdfPeak.h/.cpp` (pure,
-  unit-testable) → widened the band to 60–1200 Hz with a zero-lag-lobe skip, fixing a
-  live defect where the detector covered only MIDI 40–82 against an RB vocal range of
-  36–84 (MIDI 36–39 and 83–84 produced *no detection at all*) → moved the internal
-  rate 16 → 24 kHz. Verified note-by-note in REAPER. Two things the plan got wrong and
-  measurement caught: raising the analysis window would have been a 3× CPU regression
-  for nothing, and `detectPitchAutocorrelation` had an unnormalised shrinking-window
-  bias that only surfaced once the band widened. **Still open**: behaviour at the range
-  extremes on a real voice (only synthetic tones so far — transposing a stem is the
-  suggested substitute), and inter-word trail spikes on AI-separated stems (finding 2:
-  a clarity gate cannot reject quiet-but-periodic bleed; the Mic gate is the only
-  control that can).
-- **Save take as MIDI done** (2026-07-19/20, 4-patch series, user-requested) — see the
-  Implemented features bullet; `_old/TAKE_EXPORT.md` records the design and the
-  in-REAPER findings (stopped-only gating; lazy self-track query via the retained
-  `reaperHost`; ASCII-only user-visible strings → Known gotchas). Strengthens the case
-  for the "Minimum highway range" item below — same stem-guided-charting workflow.
-- **Calibration timeline split done** (2026-08-03, 2-patch series) — the trail/scoring
-  mismatch above, then the correction: `pitchTrail` is stored raw and shifted at draw, so
-  the take export writes true project time and the stats readout matches REAPER's
-  transport. Follow-up patch added **Live-mic used** (`detectionOffsetSec()`), making the
-  detection-side shift conditional so offline review and stem charting are correct out of
-  the box — default off, since live-mic setup already has a documented checklist to add a
-  step to while offline review had none. Adjacent items deliberately left for later:
-  - **Pitch-trail hold tails fixed** (2026-08-04) — `pitchHoldFrames` still keeps the
-    live marker steady through brief unvoiced gaps, but `updateNoteHits()` now writes a
-    trail gap as soon as the RMS gate closes instead of preserving the held MIDI value.
-    This prevents Save take notes from inheriting up to ~260 ms of detector hold time.
-    The segmenter still bridges genuine short gap markers (≤80 ms), so brief consonants
-    within a sustain remain one exported note.
-  - **Hop timestamps anchored at the window centre** (2026-08-08) — supersedes this file's
-    earlier claim that onset lateness was "inherent, not fixable by timestamping". Half of
-    it was: a hop's 768-sample window *ends* at the sample that triggered it, so filing the
-    estimate there dated every detection ~16 ms late. `processBlock` now subtracts
-    `0.5 × kPitchWindow / detectRate`. What remains inherent is how much of the window the
-    new content must fill before the NSDF locks onto it.
-    `tests/DetectionLatencyTests.cpp` measures the whole chain and prints the figures;
-    identical in *hops* at 44.1 and 48 kHz, so quote them that way:
-
-    | | before | after |
-    | --- | --- | --- |
-    | onset out of silence | 2 hops (21–23 ms) | **0.5 hop (5.3–5.8 ms)** |
-    | legato pitch step | 4 hops (43–46 ms) | **2.5 hops (27–29 ms)** |
-    | gate close | 3 hops | 1.5 hops |
-
-    **The ~2-hop gap between an onset and a legato step is the load-bearing fact**: a
-    phrase-start onset publishes its first estimate unfiltered (`medianCount` resets on
-    every unvoiced hop) while a mid-phrase step pays the median-of-3 group delay *and* has
-    to overcome the previous note still filling the window. So phrase edges and phrase
-    interiors have genuinely different detection latency, and **no single Calibration value
-    can suit both** — the user-visible symptom is mid-phrase notes reading out of sync
-    after calibrating on phrase boundaries. Correcting the median half in the timestamp was
-    considered and **rejected**: subtracting a hop only on the median-active path makes the
-    bypassed hop and the first median hop share a timestamp, breaking the strictly-ascending
-    invariant the hop-queue tests assert and `rbtake::segmentPitchTrail` documents.
-  - **Pinned live marker done** (2026-08-03, third patch, after the user tested the
-    playback mode in REAPER) — everything on the playhead line now describes the audio
-    being *heard*, not the newest analysed: `heardDetection()` reads a 256-sample rolling
-    ring of recent hops (`detHistory`, independent of the Pitch Trail toggle and never
-    cleared) and returns the sample one *lead* back, where lead = `latencyOffsetMs / 1000 -
-    detectionOffsetSec()`. Anchoring the lead to the newest sample instead of to
-    `cachedPlayTime` keeps live-mic mode exactly on the newest entry (no jitter from where
-    a hop falls inside an audio block). The arrowhead pins to `phX` again, and the trail
-    clips to that sample while playing. Only a negative lead (negative Calibration *and*
-    playback mode) has no sample to pin to — the marker then follows the newest, as before.
-- **Phrase-level scoring feedback** — did the user hit all notes in a phrase? (builds on
-  the note-hit spans: per-note coverage ratio is already accumulated in `noteHitSpans`).
-- **Note timing/length editing** — natural next step after pitch editing, but timing
-  edits reorder MIDI so `sourceNoteIndex` can go stale mid-edit; needs re-resolution
-  after each commit.
-- **Lyric-shift filtering done** (2026-08-23) — `kLyricShiftPitch = 1` added and dropped in
-  both parsers, so the RB3 lyric-shift marker no longer charts as a note, no longer feeds
-  `minP` (the highway floor was landing on C-1 against content at 45..64), and no longer
-  offers itself as a `MIDI_SetNote` target under Allow edits; the pitch-edit drag floor is
-  now `kLyricShiftPitch + 1` instead of `kRangeShiftPitch + 1`, which was the marker pitch
-  itself. Two fixtures, one of them asserting the *range* rather than just the note list.
-  Only the narrow half was taken — see the next item for the deferred structural half.
-- **Highway range bounds done** (2026-08-23) — the display range was purely
-  content-derived and unbounded in both directions. `rbhighway::visibleRange`
-  (`src/HighwayRange.h`, pure + unit-tested) now pads by 5, clamps into the singable band
-  36–84, then widens to a 12-semitone minimum, in that order — widening last so the clamp
-  can't undo it, and re-seated inside the band rather than allowed to escape. Closes both
-  halves at once: a flat placeholder chart (every note C3) no longer collapses the axis to
-  ~11 semitones and fold the stem's pitch trail, and a stray out-of-band note no longer
-  stretches it. Out-of-band notes draw off-screen **silently by design** — this plugin
-  reviews charts, it does not validate them, and RB ignores such notes anyway; dedicated
-  authoring tools check game conventions. Content entirely outside the band falls back to
-  the whole band, since an inverted axis would mirror every note rather than hide it.
-- **Type-1 lyric support done** (2026-08-23) — both parsers now accept type 1 *and* type 5
-  and skip bracketed marker text; three fixtures added (type-1 attaches, bracketed does
-  not, a stray `[end]` on the vocal track does not). Diagnosed by dumping a real export:
-  261 type-1 events, 0 type-5, and with type 1 accepted all 233 lyrics attach to all 233
-  singable notes at 0.00 ms offset. The tests never caught it because
-  `ChartLoaderTests.cpp` built every fixture lyric as type 5 — the suite validated the
-  loader against its own assumption. `_upcoming/CHART_REVIEW_FINDINGS.md` §1 keeps the
-  evidence, and also records a still-open latent `dedupHarmonyLyrics` bug that can hide a
-  syllable on both harmony parts.
-- **Track identity by GUID** — name matching breaks on rename; `GetTrackGUID` is stable.
-- **Play/stop/record indicator** — `GetPlayState` bitmask (1=play 2=pause 4=record) is
-  already polled; show it in the UI.
-- **Out of scope:** per-track lane separation (harmony parts share one pitch axis by
-  design).
-
----
-
 ## Build
 
 ```
@@ -595,8 +442,8 @@ distinction the loader turns on) split into lyric-looking vs bracketed, the note
 separating singable notes from marker pitches (flagging pitch 1), the pitch range the
 highway would render, and the 50 ms lyric match replayed both as the loader behaves today
 and as it would with type-1 accepted. Use it whenever an imported chart misbehaves — it
-turns "lyrics don't show" into a count. It is also the acceptance check for the two open
-chart-loader bugs in the Backlog (`_upcoming/CHART_REVIEW_FINDINGS.md` §1.5).
+turns "lyrics don't show" into a count. It is also the acceptance check for the two
+chart-loader bugs recorded in CLAUDE.local.md (`_upcoming/CHART_REVIEW_FINDINGS.md` §1.5).
 
 Drop `.mid` files into `_dev_tools/` or `_upcoming/` to inspect them; both are gitignored,
 so nothing an author sends for review can be committed by accident.

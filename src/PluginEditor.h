@@ -151,12 +151,28 @@ private:
     // output calibration only while playing, so the whole chart shifts on the transition.
     // A stop-in-place (cursor doesn't move) changes nothing else the gate watches.
     bool   lastPaintPlaying    { false };
-    // Octave-guard evidence for the heard sample. Its own gate input because it moves
-    // independently of pitch — a steady note can cross the doubt threshold without
-    // currentMidiFloat changing at all, and the chip and red trail would then not appear
-    // (or not clear) while the transport is idle. Constant 0 when the guard is off, so
-    // this costs no extra repaints there.
+    // Octave-guard chip state. Its own gate inputs because they move independently of
+    // pitch — a steady note can cross the doubt threshold without currentMidiFloat
+    // changing at all, and the visibility deadline expires with nothing else changing, so
+    // without these the chip would not appear (or not clear) while the transport is idle.
+    // All constant when the guard is off, so this costs no extra repaints there.
     float  lastPaintOctRatio   { -1.0f };
+    bool   lastPaintOctDoubt   { false };
+    bool   lastPaintOctVisible { false };
+    bool   lastPaintOctDash    { false };
+
+    // Minimum time the octave chip stays on screen after a reading. Rival evidence is
+    // per-hop (~94/s) and intermittent, so without a hold the chip changed state faster
+    // than a two-digit number can be read. Long enough to bridge a consonant or a few
+    // rival-less hops, short enough not to linger after singing stops.
+    static constexpr double kOctChipHoldSec = 0.4;
+    float  heldOctRatio    { 0.0f };
+    bool   heldOctDoubt    { false };
+    double heldOctUntil       { 0.0 };   // a reading is still worth showing
+    double heldOctVoicedUntil { 0.0 };   // ...and, failing that, "no rival here"
+    // Both decided in onFrame(), consumed by drawStats — see the latch there.
+    bool   octChipVisible     { false };
+    bool   octChipDashVisible { false };
 
     // Measured duration of the last paint() (seconds), used by onFrame() to cap paint's
     // duty cycle so a heavy (large-window) paint can't starve REAPER's UI thread.

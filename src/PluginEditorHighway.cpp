@@ -1057,17 +1057,20 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     {
         auto octCol = row.removeFromRight (74);
 
-        if (heard.octaveRatio > 0.0f)
+        // The reading is latched in onFrame() and held for kOctChipHoldSec — see the
+        // comment there. It outranks the "--" branch below, so a brief unvoiced hop mid-
+        // phrase cannot blank a number that is still current enough to read.
+        if (octChipVisible)
         {
-            const bool doubt = heard.octaveDoubt;
-            const int  pct   = juce::roundToInt (heard.octaveRatio * 100.0f);
+            const bool doubt = heldOctDoubt;
+            const int  pct   = juce::roundToInt (heldOctRatio * 100.0f);
 
             g.setColour (doubt ? kOctaveDoubtColour : juce::Colours::grey);
             g.setFont   (juce::Font (12.0f, juce::Font::bold));
             g.drawText  ((doubt ? "OCT? " : "oct ") + juce::String (pct),
                          octCol, juce::Justification::centred, false);
         }
-        else if (heard.pitch >= 0.0f)
+        else if (octChipDashVisible)
         {
             // Voiced, guard on, but no rival peak was found at all. Blank would be
             // ambiguous with "guard off" and "not singing", and that ambiguity is what

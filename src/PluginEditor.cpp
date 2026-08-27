@@ -1282,9 +1282,39 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     // Flash visibility participates in the idle gate so the message-bar flash both
     // appears and expires while the transport sits idle (nothing else would repaint).
     const bool  flashActive  = juce::Time::getMillisecondCounterHiRes() * 0.001 < flashUntil;
-    const float heardOctRatio = heardDetection().octaveRatio;
+
+    // Octave-guard chip persistence. Rival evidence arrives per hop (~94/s) and a note can
+    // easily produce a rival on one hop and none on the next, so the chip was changing
+    // faster than the number could be read. Latch each real reading and keep showing it for
+    // kOctChipHoldSec — the value still updates live while readings keep arriving, so a
+    // genuinely fluctuating number still moves; only the *gaps* are bridged. Held across
+    // unvoiced hops too, which is the other half of the flicker (brief consonants would
+    // otherwise blank the chip entirely). Wall clock, like the message-bar flash: this is a
+    // legibility effect, so it belongs on the reader's clock rather than the project's.
+    const double nowSec = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    {
+        const auto heardNow = heardDetection();
+        if (heardNow.octaveRatio > 0.0f)
+        {
+            heldOctRatio = heardNow.octaveRatio;
+            heldOctDoubt = heardNow.octaveDoubt;
+            heldOctUntil = nowSec + kOctChipHoldSec;
+        }
+        // The "no rival here" state gets the same hold, for the same reason: keyed
+        // straight off voicing it would blink out on every consonant.
+        if (heardNow.pitch >= 0.0f)
+            heldOctVoicedUntil = nowSec + kOctChipHoldSec;
+    }
+    // Read by drawStats so the picture matches what the gate below decided, rather than
+    // re-testing the deadlines a few ms later during paint.
+    octChipVisible = nowSec < heldOctUntil;
+    octChipDashVisible = nowSec < heldOctVoicedUntil;
+
     const bool changed = (cachedPlayTime  != lastPaintTime)
-                      || (heardOctRatio   != lastPaintOctRatio)
+                      || (heldOctRatio    != lastPaintOctRatio)
+                      || (heldOctDoubt    != lastPaintOctDoubt)
+                      || (octChipVisible  != lastPaintOctVisible)
+                      || (octChipDashVisible != lastPaintOctDash)
                       || (livePitch       != lastPaintPitch)
                       || (lastStateCount  != lastPaintStateCount)
                       || (framesDropping  != lastPaintDropping)
@@ -1303,7 +1333,10 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         lastPaintRate       = cachedPlayRate;
         lastPaintFlash      = flashActive;
         lastPaintPlaying    = lastIsPlaying;
-        lastPaintOctRatio   = heardOctRatio;
+        lastPaintOctRatio   = heldOctRatio;
+        lastPaintOctDoubt   = heldOctDoubt;
+        lastPaintOctVisible = octChipVisible;
+        lastPaintOctDash    = octChipDashVisible;
 
         // Dirty only the dynamic areas — controls panel is static widgets that repaint themselves
         repaint (getLocalBounds().withBottom (getHeight() - kControlsH));

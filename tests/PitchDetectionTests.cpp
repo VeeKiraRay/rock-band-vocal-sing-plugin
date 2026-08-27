@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "NsdfPeak.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include <algorithm>
@@ -341,6 +342,128 @@ TEST_CASE ("pitch: 192 kHz, 110 Hz sine with MPM (production algorithm) detects 
     // kMaxLagBuf at every host rate — MPM's clamp can't raise the detection floor.
     REQUIRE (proc.currentMidiNote.load() == 45);
     REQUIRE (proc.currentFrequency.load() == Catch::Approx (110.0f).epsilon (0.01));
+}
+
+// ─── Octave guard ─────────────────────────────────────────────────────────────
+// End-to-end cover for the octave-low error a user hit charting from an AI-separated
+// vocal stem: the detector reported the right pitch class an octave below the truth.
+
+namespace
+{
+    // A sawtooth whose every second period is attenuated — the synthetic form of the
+    // reported failure. NSDF normalises by the energy of both halves, so alternating by a
+    // factor a lands nsdf(T) near 2a/(1+a^2); 0.6 gives ~0.88, which is under MPM's 0.93
+    // key threshold (so the walk skips the true period and takes 2T) but over the rival
+    // ratio (so the guard can see it). 0.7 would detect correctly and prove nothing.
+    // The window either side of that is measured in tests/NsdfPeakTests.cpp.
+    void feedAlternatingSaw (RBVocalSingAudioProcessor& proc, double sampleRate,
+                             double freqHz, int numBlocks = 12, int blockSize = 512)
+    {
+        proc.prepareToPlay (sampleRate, blockSize);
+        juce::MidiBuffer midi;
+
+        const double period = sampleRate / freqHz;
+        int sampleIndex = 0;
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (2, blockSize);
+            for (int i = 0; i < blockSize; ++i)
+            {
+                float s = 0.0f;
+                for (int k = 1; k <= 8; ++k)
+                {
+                    const double f = freqHz * k;
+                    if (f >= sampleRate * 0.5) break;
+                    s += (float) (std::sin (2.0 * juce::MathConstants<double>::pi
+                                              * f * sampleIndex / sampleRate) / k);
+                }
+                s *= 0.5f;
+                if (((int) ((double) sampleIndex / period)) % 2 == 1)
+                    s *= 0.6f;
+
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+                ++sampleIndex;
+            }
+            proc.processBlock (buffer, midi);
+        }
+    }
+
+    constexpr double kGuardTestHz = 261.63;   // C4, MIDI 60
+}
+
+TEST_CASE ("octave guard: off reports the octave-low pitch and no rival evidence", "[pitch][octave]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    // octaveGuard defaults to 0 — this is the pre-guard detector, asserted unchanged.
+    feedAlternatingSaw (proc, 48000.0, kGuardTestHz);
+
+    INFO ("reported " << proc.currentFrequency.load() << " Hz");
+    REQUIRE (proc.currentMidiNote.load() == 48);            // C3 — an octave below C4
+    REQUIRE (proc.currentOctaveRatio.load() == 0.0f);       // search never ran
+}
+
+TEST_CASE ("octave guard: warn publishes the evidence without changing the pitch", "[pitch][octave]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    proc.octaveGuard.store (1);
+    feedAlternatingSaw (proc, 48000.0, kGuardTestHz);
+
+    INFO ("rival ratio " << proc.currentOctaveRatio.load());
+    REQUIRE (proc.currentMidiNote.load() == 48);            // pitch untouched by design
+    REQUIRE (proc.currentOctaveRatio.load() >= rbpitch::kOctaveRivalRatio);
+}
+
+TEST_CASE ("octave guard: correct reports the true octave", "[pitch][octave]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    proc.octaveGuard.store (2);
+    feedAlternatingSaw (proc, 48000.0, kGuardTestHz);
+
+    INFO ("reported " << proc.currentFrequency.load() << " Hz");
+    REQUIRE (proc.currentMidiNote.load() == 60);
+    REQUIRE (proc.currentFrequency.load() == Catch::Approx (kGuardTestHz).epsilon (0.03));
+
+    // Corrected hops stay flagged, so the user can audit where the guard acted rather
+    // than having it silently rewrite pitches.
+    REQUIRE (proc.currentOctaveRatio.load() >= rbpitch::kOctaveRivalRatio);
+}
+
+TEST_CASE ("octave guard: a clean tone is left alone in every mode", "[pitch][octave]")
+{
+    // The guard must not manufacture corrections on input that was never ambiguous —
+    // this is the false-positive check that matters most in Correct mode.
+    for (int mode : { 0, 1, 2 })
+    {
+        RBVocalSingAudioProcessor proc;
+        proc.pitchMethod.store (2);
+        proc.octaveGuard.store (mode);
+        feedSine (proc, 48000.0, 440.0f, 0.5f);
+
+        INFO ("octaveGuard = " << mode);
+        REQUIRE (proc.currentMidiNote.load() == 69);
+        REQUIRE (proc.currentOctaveRatio.load() < rbpitch::kOctaveRivalRatio);
+    }
+}
+
+TEST_CASE ("octave guard: the rival evidence rides the hop queue", "[pitch][octave][hopqueue]")
+{
+    // The stats chip and the trail colouring read per-hop values, not the atomic, so the
+    // ratio has to survive the queue — otherwise the pinned marker and the badge disagree.
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    proc.octaveGuard.store (1);
+    feedAlternatingSaw (proc, 48000.0, kGuardTestHz);
+
+    RBVocalSingAudioProcessor::HopSample buf[RBVocalSingAudioProcessor::kHopQueueCapacity];
+    const int n = proc.drainHopSamples (buf, RBVocalSingAudioProcessor::kHopQueueCapacity);
+
+    REQUIRE (n > 0);
+    REQUIRE (buf[n - 1].octaveRatio >= rbpitch::kOctaveRivalRatio);
 }
 
 // ─── Hop-sample queue (bug #3 fix, see _upcoming/SHORT_NOTE_HIT_TRACKING.md) ────

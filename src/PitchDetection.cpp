@@ -22,7 +22,8 @@ float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSampl
     if (!aboveGate)
         return 0.0f;
 
-    lastDetectClarity = 0.0f;
+    lastDetectClarity     = 0.0f;
+    lastDetectOctaveRatio = 0.0f;
 
     float hz = 0.0f;
     switch (pitchMethod.load (std::memory_order_relaxed))
@@ -33,7 +34,9 @@ float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSampl
     }
 
     // The fallback detectors have no confidence measure — a successful detection
-    // counts as fully voiced so the clarity consumers behave sanely under them.
+    // counts as fully voiced so the clarity consumers behave sanely under them. They
+    // have no octave-rival measure either, and lastDetectOctaveRatio stays 0 for them:
+    // "no evidence of an octave error" rather than a fabricated reassurance.
     if (hz > 0.0f && lastDetectClarity <= 0.0f)
         lastDetectClarity = 1.0f;
 
@@ -170,11 +173,28 @@ float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSa
     // all live in rbpitch::findNsdfPeak (src/NsdfPeak.h) — pure, so the unit tests drive
     // them on hand-built NSDF tables instead of hoping a synthesised signal hits each
     // path. Clarity is published even when the frame is rejected for being unvoiced.
-    const auto peak = rbpitch::findNsdfPeak (nsdf, { minLag, maxLag, 0.93f, kClarityThreshold });
-    lastDetectClarity = peak.clarity;
+    //
+    // The octave guard rides along as one extra parameter: 0 skips the rival search, so
+    // Off costs nothing and returns exactly what it always did.
+    const int   guard      = octaveGuard.load (std::memory_order_relaxed);
+    const float rivalRatio = (guard != 0) ? rbpitch::kOctaveRivalRatio : 0.0f;
+
+    const auto peak = rbpitch::findNsdfPeak (nsdf, { minLag, maxLag, 0.93f, kClarityThreshold,
+                                                     rivalRatio });
+    lastDetectClarity     = peak.clarity;
+    lastDetectOctaveRatio = peak.octaveRatio;
 
     if (peak.tau <= 0.0f)
         return 0.0f;
+
+    // Correct mode takes the rival lag — half the period, so an octave up. Reporting it
+    // here rather than in the editor is what keeps the correction consistent across every
+    // consumer: it goes through the median filter with its neighbours, and the corrected
+    // value is what reaches scoring, the pitch trail and the take export. The doubt flag
+    // still travels (lastDetectOctaveRatio is untouched), so a corrected hop stays visibly
+    // marked and the user can audit where the guard acted.
+    if (guard == 2 && peak.octaveTau > 0.0f)
+        return (float) detectRate / peak.octaveTau;
 
     return (float) detectRate / peak.tau;
 }

@@ -91,12 +91,13 @@ void RBVocalSingAudioProcessor::prepareToPlay (double sampleRate, int)
 // HopSample comment in the header). Standard AbstractFifo pattern: prepareToWrite/
 // prepareToRead may hand back a wrapped (start1/size1 + start2/size2) range.
 
-void RBVocalSingAudioProcessor::pushHopSample (double time, float midiFloat, bool voiced) noexcept
+void RBVocalSingAudioProcessor::pushHopSample (double time, float midiFloat, bool voiced,
+                                                float octaveRatio) noexcept
 {
     int start1, size1, start2, size2;
     hopFifo.prepareToWrite (1, start1, size1, start2, size2);
     if (size1 > 0)
-        hopBuffer[(size_t) start1] = { time, midiFloat, voiced };
+        hopBuffer[(size_t) start1] = { time, midiFloat, voiced, octaveRatio };
     // size1 == 0 means the fifo is full (UI thread stalled) — drop this sample.
     hopFifo.finishedWrite (size1);
 }
@@ -197,6 +198,12 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             currentClarity.store (hz > 0.0f ? lastDetectClarity : 0.0f,
                                   std::memory_order_relaxed);
 
+            // Octave-rival evidence for this hop. Zero on a rejected or held hop, like
+            // clarity: a held pitch is not fresh evidence of anything, so it must not
+            // keep re-flagging after the audio that produced it has gone.
+            const float hopOctaveRatio = (hz > 0.0f) ? lastDetectOctaveRatio : 0.0f;
+            currentOctaveRatio.store (hopOctaveRatio, std::memory_order_relaxed);
+
             if (hz > 0.0f)
             {
                 // Median-of-3 over the accepted estimates (see medianHist); until
@@ -251,7 +258,8 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             const double hopTime = std::max (0.0, blockStartTime + (double) i / hostSampleRate
                                                       - windowCentreOffset);
             pushHopSample (hopTime, currentMidiFloat.load (std::memory_order_relaxed),
-                           audioAboveGate.load (std::memory_order_relaxed));
+                           audioAboveGate.load (std::memory_order_relaxed),
+                           hopOctaveRatio);
         }
     }
 

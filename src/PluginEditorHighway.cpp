@@ -615,7 +615,8 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     // trail; heardDetection() applies the lead when it looks a sample up.
     for (int i = 0; i < hopN; ++i)
     {
-        detHistory[(size_t) detHistoryHead] = { hopBuf[i].time, hopBuf[i].midiFloat };
+        detHistory[(size_t) detHistoryHead] = { hopBuf[i].time, hopBuf[i].midiFloat,
+                                                hopBuf[i].octaveRatio };
         detHistoryHead = (detHistoryHead + 1) % kDetHistorySize;
         if (detHistoryCount < kDetHistorySize) ++detHistoryCount;
     }
@@ -757,7 +758,7 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         if (pitchTrailOn)
         {
             if (hop.voiced && hop.midiFloat >= 0.0f)
-                pitchTrail.push_back ({ hop.time, hop.midiFloat });
+                pitchTrail.push_back ({ hop.time, hop.midiFloat, hop.octaveRatio });
             else if (! pitchTrail.empty() && pitchTrail.back().pitch >= 0.0f)
                 pitchTrail.push_back ({ hop.time, -1.0f });
         }

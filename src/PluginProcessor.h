@@ -165,6 +165,14 @@ public:
     // 0 while unvoiced or held). Frames below kClarityThreshold are treated as
     // unvoiced; the UI may also use this (e.g. dim the arrowhead when uncertain).
     std::atomic<float>  currentClarity      { 0.0f };
+    // Octave-rival strength of the last analysis (0-1): how tall the NSDF peak near half
+    // the chosen lag was, relative to the chosen peak — i.e. the evidence that this
+    // estimate is an octave too LOW. 0 when the octave guard is off, when no rival peak
+    // was found, or while unvoiced. Deliberately NOT the same axis as currentClarity: an
+    // octave-down pick usually has *high* clarity, because 2x the true period genuinely
+    // correlates well. Doubt is `>= rbpitch::kOctaveRivalRatio`; the sub-threshold values
+    // are kept so the UI can show how close the call was.
+    std::atomic<float>  currentOctaveRatio  { 0.0f };
     std::atomic<double> currentPlaybackTime { 0.0 };  // fallback when API unavailable
 
     // One entry per audio-thread hop estimate (~every 16 ms). Queued so the UI
@@ -173,7 +181,7 @@ public:
     // decay, silence) before the next UI frame reads the atomics was previously
     // invisible to note-hit tracking and the take-export pitch trail, especially
     // for notes shorter than one UI frame interval (see _upcoming/SHORT_NOTE_HIT_TRACKING.md).
-    struct HopSample { double time; float midiFloat; bool voiced; };
+    struct HopSample { double time; float midiFloat; bool voiced; float octaveRatio; };
     static constexpr int kHopQueueCapacity = 128;  // ~2s of hops @ ~16ms — UI-stall headroom
 
     // Message thread only. Drains up to maxCount queued hop samples (oldest first)
@@ -203,6 +211,14 @@ public:
     std::atomic<bool>  audioAboveGate { false };
     std::atomic<int>   pitchMethod   { 2 };   // 0=Autocorr  1=YIN  2=MPM (production default)
 
+    // Octave guard: 0=Off  1=Warn  2=Warn+Correct. Off skips the rival search entirely,
+    // so the detector is bit-for-bit what it was before the guard existed. Warn measures
+    // and publishes but never changes the pitch; Correct additionally re-picks the rival
+    // lag, which is why it has to happen here rather than in the editor — the corrected
+    // value must reach the median filter, the hop queue, scoring and the take export
+    // together. MPM only: the fallback detectors have no rival measure.
+    std::atomic<int>   octaveGuard   { 0 };
+
     // ── Vocal mode (Solo / Harmonies) — set by editor, drives chart re-read ────
     std::atomic<int> vocalMode { (int) VocalMode::Solo };
 
@@ -215,6 +231,9 @@ public:
     std::atomic<bool>   savedOctaveWrap      { true };
     std::atomic<int>    savedPitchTolCents   { 50 };    // GREAT window ± cents; CLOSE = 2×
     std::atomic<bool>   savedPitchTrail      { true };  // sung-pitch contour on the highway
+    std::atomic<int>    savedOctaveGuard     { 0 };     // 0=Off 1=Warn 2=Warn+Correct.
+                                                        // Defaults to 0 so a session saved
+                                                        // before the guard loads unchanged.
     std::atomic<int>    savedLatencyOffsetMs { 0 };     // output calibration: chart shift
     std::atomic<int>    savedInputOffsetMs   { 0 };     // input calibration: detection shift.
                                                         // Defaults to 0 so a session saved
@@ -317,6 +336,7 @@ private:
     int   hopCount        { 0 };   // internal samples since the last detection
     int   pitchHoldFrames { 0 };
     float lastDetectClarity { 0.0f };   // written by detectPitch, published by processBlock
+    float lastDetectOctaveRatio { 0.0f };   // ditto — see currentOctaveRatio
 
     // The published pitch is the median of the last 3 accepted estimates once the
     // history is full — a single-frame octave/subharmonic error (note onsets, tone
@@ -331,7 +351,7 @@ private:
     // least of the problems.
     juce::AbstractFifo hopFifo { kHopQueueCapacity };
     std::array<HopSample, kHopQueueCapacity> hopBuffer;
-    void pushHopSample (double time, float midiFloat, bool voiced) noexcept;
+    void pushHopSample (double time, float midiFloat, bool voiced, float octaveRatio) noexcept;
 
     // Constructed once with the processor (allocation happens off the audio thread);
     // fftScratch is the in-place real-FFT workspace (2 × kFftSize floats).

@@ -1,7 +1,6 @@
 #include "PluginEditor.h"
 #include "HighwayRange.h"
 #include "EditorVisuals.h"
-#include "NsdfPeak.h"   // kOctaveRivalRatio — the threshold the doubt colouring uses
 
 // The scrolling note highway plus the stats and status-bar panels below it. Shared
 // colours and the lyric-suffix helper live in EditorVisuals.h. The lyric strips are
@@ -1067,6 +1066,17 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
             g.setFont   (juce::Font (12.0f, juce::Font::bold));
             g.drawText  ((doubt ? "OCT? " : "oct ") + juce::String (pct),
                          octCol, juce::Justification::centred, false);
+        }
+        else if (heard.pitch >= 0.0f)
+        {
+            // Voiced, guard on, but no rival peak was found at all. Blank would be
+            // ambiguous with "guard off" and "not singing", and that ambiguity is what
+            // made a missed flag need a conversation to diagnose: a number means the
+            // threshold is the thing to adjust, "--" means no rival was located and
+            // adjusting it would change nothing.
+            g.setColour (juce::Colours::darkgrey);
+            g.setFont   (juce::Font (12.0f, juce::Font::bold));
+            g.drawText  ("oct --", octCol, juce::Justification::centred, false);
         }
     }
 

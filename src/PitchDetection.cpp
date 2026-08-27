@@ -181,7 +181,8 @@ float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSa
     // The octave guard rides along as one extra parameter: 0 skips the rival search, so
     // Off costs nothing and returns exactly what it always did.
     const int   guard      = octaveGuard.load (std::memory_order_relaxed);
-    const float rivalRatio = (guard != 0) ? rbpitch::kOctaveRivalRatio : 0.0f;
+    const float rivalRatio = (guard != 0) ? octaveThreshold.load (std::memory_order_relaxed)
+                                          : 0.0f;
 
     const auto peak = rbpitch::findNsdfPeak (nsdf, { minLag, maxLag, 0.93f, kClarityThreshold,
                                                      rivalRatio });

@@ -141,6 +141,8 @@ public:
         std::function<void(bool)>   setPitchTrail;
         int                         initOctaveGuard    { 0 };   // 0=Off 1=Warn 2=Warn+correct
         std::function<void(int)>    setOctaveGuard;
+        int                         initOctaveThresh   { 80 };  // percent
+        std::function<void(int)>    setOctaveThresh;
         bool                        showLoadMidi       { false };
         std::function<void()>       loadMidi;
     };
@@ -168,6 +170,7 @@ public:
         static const juce::String kTipTrail    = "Draws the pitch you actually sang as a faint contour on the highway (no snapping), so scoops and drift are visible. Clears when the next pass starts.";
         static const juce::String kTipGate     = "Minimum mic volume before pitch detection activates. Raise if background noise triggers false readings.";
         static const juce::String kTipOctGuard = "Marks places where the detector is UNSURE which octave it heard - it is not a claim that the octave is wrong. Red means a competing pitch an octave up fit the sound almost as well, which happens on AI-separated stems. \"Warn only\" colours those red and shows the evidence strength in the stats bar without changing the pitch; \"Warn + correct\" also moves them up an octave, in the readout, the trail and saved takes - check the red marks look right before trusting it. It cannot detect the opposite error.";
+        static const juce::String kTipOctThresh = "How strong the competing octave has to be before the guard marks it, as a percentage of the pitch it did report. The stats chip shows this same number, so set this just below one you have seen on a note you know is wrong. Lower catches more and misfires more; above about 90 nothing is caught at all, because a real octave error cannot score that high.";
 
         setupLabel (rateLabel, "Frame cap", kTipRate);
         rateCombo.addItem ("20 fps",   1);
@@ -331,6 +334,19 @@ public:
         };
         addAndMakeVisible (octGuardCombo);
 
+        setupLabel (octThreshLabel, "Octave Threshold", kTipOctThresh);
+        octThreshSlider.setSliderStyle (juce::Slider::IncDecButtons);
+        octThreshSlider.setRange (60, 90, 5);
+        octThreshSlider.setValue (this->cbs.initOctaveThresh, juce::dontSendNotification);
+        octThreshSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        octThreshSlider.setTextValueSuffix (" %");
+        octThreshSlider.setTooltip (kTipOctThresh);
+        octThreshSlider.onValueChange = [this]
+        {
+            this->cbs.setOctaveThresh ((int) octThreshSlider.getValue());
+        };
+        addAndMakeVisible (octThreshSlider);
+
         setupLabel (gateLabel, "Mic Gate", kTipGate);
         gateSlider.setRange (0.001, 0.05, 0.0);
         gateSlider.setValue (proc.gateThreshold.load (std::memory_order_relaxed),
@@ -407,6 +423,7 @@ public:
         layoutRow (trailLabel, trailToggle, 24);
         layoutRow (pitchTolLabel, pitchTolSlider);
         layoutRow (octGuardLabel, octGuardCombo, 150);
+        layoutRow (octThreshLabel, octThreshSlider);
         layoutRow (gateLabel, gateSlider);
 
         if (cbs.showLoadMidi)
@@ -426,12 +443,12 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (6) + SINGING (5), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (6) + SINGING (6), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (6)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (5);
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (6);
 
 private:
     void setupHeader (juce::Label& lbl, const juce::String& text)
@@ -502,6 +519,8 @@ private:
     juce::Slider        pitchTolSlider;
     juce::Label         octGuardLabel;
     juce::ComboBox      octGuardCombo;
+    juce::Label         octThreshLabel;
+    juce::Slider        octThreshSlider;
     juce::Label         gateLabel;
     juce::Slider        gateSlider;
 
@@ -684,6 +703,10 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         // appear and disappear with the mode.
         cbs.initOctaveGuard    = audioProcessor.octaveGuard.load (std::memory_order_relaxed);
         cbs.setOctaveGuard     = [safe] (int v)    { if (safe) { safe->audioProcessor.octaveGuard.store (juce::jlimit (0, 2, v), std::memory_order_relaxed); safe->repaint(); } };
+        // Stored as a fraction, shown as a percentage — the same units the stats chip
+        // prints, so a number seen there can be dialled in directly.
+        cbs.initOctaveThresh   = juce::roundToInt (audioProcessor.octaveThreshold.load (std::memory_order_relaxed) * 100.0f);
+        cbs.setOctaveThresh    = [safe] (int v)    { if (safe) { safe->audioProcessor.octaveThreshold.store (juce::jlimit (RBVocalSingAudioProcessor::kOctaveThresholdMin, RBVocalSingAudioProcessor::kOctaveThresholdMax, (float) v / 100.0f), std::memory_order_relaxed); safe->repaint(); } };
         cbs.showLoadMidi       = !audioProcessor.reaperApi.isLoaded();
         cbs.loadMidi           = [safe]()           { if (safe) safe->openMidiFile(); };
 

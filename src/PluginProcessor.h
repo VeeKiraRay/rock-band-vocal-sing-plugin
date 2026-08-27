@@ -4,6 +4,7 @@
 #include <atomic>
 #include <vector>
 #include "reaper_api.h"
+#include "NsdfPeak.h"   // kOctaveRivalRatio — default for the octave-threshold setting
 
 // Which vocal part a note belongs to. Main = Solo (PART VOCALS) or HARM1 (lead) —
 // both render cyan with lyrics below the highway. Harm2/Harm3 render in their own
@@ -229,6 +230,17 @@ public:
     // vocalMode pattern) — the audio thread reads this one, so a second copy would only
     // be something to keep in sync. Absent from a pre-guard session, which loads as 0.
     std::atomic<int>   octaveGuard   { 0 };
+
+    // How strong the rival must be, as a fraction of the reported peak, before the guard
+    // marks it. User-tunable because the right value is a property of the material, not of
+    // the algorithm: it trades missed errors against false alarms, and a stem's artifacts
+    // decide where that balance sits. Clamped to kOctaveThresholdMin..Max — the ceiling is
+    // the key threshold (see rbpitch::kOctaveRivalRatio), above which a real octave error
+    // cannot score at all, and below the floor a rival is too weak to mean anything.
+    std::atomic<float> octaveThreshold { rbpitch::kOctaveRivalRatio };
+
+    static constexpr float kOctaveThresholdMin = 0.60f;
+    static constexpr float kOctaveThresholdMax = 0.90f;
 
     // ── Vocal mode (Solo / Harmonies) — set by editor, drives chart re-read ────
     std::atomic<int> vocalMode { (int) VocalMode::Solo };

@@ -214,7 +214,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
     `findNsdfPeak` additionally looks for a peak near `bestTau / 2` (±6% window, required
     to sit inside the walked region and to be a genuine local maximum, parabolically
     interpolated like the main peak) and reports `octaveRatio` / `octaveTau`. A rival at
-    or above `kOctaveRivalRatio` (0.85) that persists `kOctaveRunHops` (6) consecutive
+    or above the `octaveThreshold` setting (default `kOctaveRivalRatio` 0.80, user-tunable
+    0.60–0.90) that persists `kOctaveRunHops` (6) consecutive
     voiced hops is believed; in Correct mode `detectPitchMPM` then returns the rival lag,
     **before** the median filter, so scoring, the trail and the take export all agree.
     Off passes `octaveRivalRatio = 0`, which skips the search — the detector is then
@@ -302,13 +303,14 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
   Octave Wrapping on; Pitch Trail on; Pitch Tolerance ±25/50/75/100 cents default
-  ±50; Octave Guard Off/Warn only/Warn + correct default Off; Mic gate; Load MIDI File
-  when no REAPER API) + **Allow edits** toggle in the stats band.
+  ±50; Octave Guard Off/Warn only/Warn + correct default Off; Octave Threshold 60–90%
+  step 5 default 80; Mic gate; Load MIDI File when no REAPER API) + **Allow edits** toggle in the stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
-  octaveGuard, frameInterval, reaperPriority, octaveWrap, pitchTolCents, pitchTrail,
-  latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard, lyricMode,
-  renderer. `octaveGuard` follows the `gateThreshold`/`vocalMode` pattern — no `saved*`
-  mirror, because the audio thread reads it — and is clamped to 0..2 on read.
+  octaveGuard, octaveThresh, frameInterval, reaperPriority, octaveWrap, pitchTolCents,
+  pitchTrail, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
+  lyricMode, renderer. `octaveGuard`/`octaveThreshold` follow the
+  `gateThreshold`/`vocalMode` pattern — no `saved*` mirror, because the audio thread reads
+  them — and are clamped on read (0..2 and 0.60..0.90).
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
@@ -541,6 +543,14 @@ so nothing an author sends for review can be committed by accident.
   2τ check for octave-high errors: a peak at 2τ always exists for a periodic signal, so it
   carries no information at all. Found the hard way — Warn mode lit up glides and
   mid-sustain moments on a real vocal before the persistence filter existed (2026-08-27).
+- **The octave-rival ratio has a ceiling at the key threshold (0.93), and it is not
+  obvious.** An octave-low error can only *happen* when the walk skipped the run at the
+  true period T, i.e. `nsdf(T) < 0.93 × globalMax`; with 2T the tallest peak that forces
+  `ratio = nsdf(T)/nsdf(2T) < 0.93`. So a genuine error can never score above ~0.93, and a
+  threshold set near there catches only the mildest damping — which is exactly how the
+  first constant (0.85) came to miss a clear error on real material. Any future retune must
+  respect that the usable band is roughly 0.60–0.90, not 0–1. The setting range is built
+  around this.
 - `DEF_CLASS_IID(IReaperHostApplication)` must appear in exactly **one** .cpp file.
   It is in `PluginProcessor.cpp`. Do not add it to any header.
 - `#define NOMINMAX` must precede any Windows headers to avoid `min`/`max` macro conflicts

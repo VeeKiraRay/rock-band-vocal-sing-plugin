@@ -352,16 +352,22 @@ namespace
 {
     // A sawtooth whose every second period is attenuated — the synthetic form of the
     // reported failure. NSDF normalises by the energy of both halves, so alternating by a
-    // factor a lands nsdf(T) near 2a/(1+a^2); 0.6 gives ~0.88, which is under MPM's 0.93
-    // key threshold (so the walk skips the true period and takes 2T) but over the rival
-    // ratio (so the guard can see it). 0.7 would detect correctly and prove nothing.
-    // The window either side of that is measured in tests/NsdfPeakTests.cpp.
+    // factor `atten` lands nsdf(T) near 2a/(1+a^2) — which is both how badly the detector
+    // fails and roughly what the rival ratio comes out at:
+    //
+    //   0.7 -> ~0.94   above MPM's 0.93 key threshold: detects correctly, nothing to catch
+    //   0.6 -> ~0.88   error occurs, and a threshold at or below 0.88 sees it
+    //   0.5 -> ~0.80   error occurs, and a threshold above 0.80 misses it entirely
+    //
+    // The 0.5 case is the shape of the miss a user hit on real material — see the
+    // threshold tests below. Measured either side of this in tests/NsdfPeakTests.cpp.
+    //
     // Returns the sample index to continue from, so a caller can feed several stretches
     // without re-preparing (prepareToPlay clears the guard's run counter, which would
     // hide exactly what a multi-stretch test is trying to observe).
     int feedAlternatingSaw (RBVocalSingAudioProcessor& proc, double sampleRate,
                             double freqHz, int numBlocks = 12, int blockSize = 512,
-                            bool prepare = true, int startSample = 0)
+                            bool prepare = true, int startSample = 0, float atten = 0.6f)
     {
         if (prepare)
             proc.prepareToPlay (sampleRate, blockSize);
@@ -385,7 +391,7 @@ namespace
                 }
                 s *= 0.5f;
                 if (((int) ((double) sampleIndex / period)) % 2 == 1)
-                    s *= 0.6f;
+                    s *= atten;
 
                 buffer.setSample (0, i, s);
                 buffer.setSample (1, i, s);
@@ -420,7 +426,7 @@ TEST_CASE ("octave guard: warn publishes the evidence without changing the pitch
 
     INFO ("rival ratio " << proc.currentOctaveRatio.load());
     REQUIRE (proc.currentMidiNote.load() == 48);            // pitch untouched by design
-    REQUIRE (proc.currentOctaveRatio.load() >= rbpitch::kOctaveRivalRatio);
+    REQUIRE (proc.currentOctaveRatio.load() >= proc.octaveThreshold.load());
     REQUIRE (proc.currentOctaveDoubt.load());               // sustained, so confirmed
 }
 
@@ -442,6 +448,60 @@ TEST_CASE ("octave guard: a brief rival is evidence but not a decision", "[pitch
     REQUIRE (proc.currentOctaveRatio.load() > 0.0f);   // the rival was seen...
     REQUIRE (! proc.currentOctaveDoubt.load());        // ...and deliberately not believed
     REQUIRE (proc.currentMidiNote.load() == 48);       // so no correction happened
+}
+
+TEST_CASE ("octave guard: a threshold above the evidence misses a real error", "[pitch][octave]")
+{
+    // The miss a user reported on real material, reproduced. At 0.5 attenuation the octave
+    // error genuinely happens and the rival is measured at ~0.80 — but the original 0.85
+    // threshold rejected it, so the highway showed a dim number and no warning.
+    //
+    // This is not a bug in the measurement, it is the threshold being set near the ceiling:
+    // an octave error can only occur when the walk SKIPPED the true period, i.e. when
+    // nsdf(T) < 0.93 x globalMax, so the rival ratio for a genuine error is always under
+    // ~0.93. A threshold of 0.85 therefore only ever catches the mildest damping.
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    proc.octaveGuard.store (2);            // Correct — so a miss means no correction either
+    proc.octaveThreshold.store (0.85f);    // the original constant
+    feedAlternatingSaw (proc, 48000.0, kGuardTestHz, 12, 512, true, 0, 0.5f);
+
+    INFO ("ratio " << proc.currentOctaveRatio.load());
+    REQUIRE (proc.currentOctaveRatio.load() > 0.0f);    // the rival was found and measured
+    REQUIRE (proc.currentOctaveRatio.load() < 0.85f);   // ...and scored under the threshold
+    REQUIRE (! proc.currentOctaveDoubt.load());         // so nothing was flagged
+    REQUIRE (proc.currentMidiNote.load() == 48);        // and the error stands uncorrected
+}
+
+TEST_CASE ("octave guard: lowering the threshold catches it", "[pitch][octave]")
+{
+    // Same signal, threshold moved below the evidence. This is the whole point of the
+    // setting: the stats chip prints the ratio, so a number seen on a note known to be
+    // wrong can be dialled in directly.
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    proc.octaveGuard.store (2);
+    proc.octaveThreshold.store (0.75f);
+    feedAlternatingSaw (proc, 48000.0, kGuardTestHz, 12, 512, true, 0, 0.5f);
+
+    INFO ("ratio " << proc.currentOctaveRatio.load());
+    REQUIRE (proc.currentOctaveDoubt.load());
+    REQUIRE (proc.currentMidiNote.load() == 60);        // true octave restored
+}
+
+TEST_CASE ("octave guard: the threshold does not make a clean tone suspect", "[pitch][octave]")
+{
+    // The floor of the range still has to be safe: at the most sensitive setting a clean
+    // 440 Hz tone must not acquire a rival strong enough to flag, let alone be corrected.
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    proc.octaveGuard.store (2);
+    proc.octaveThreshold.store (RBVocalSingAudioProcessor::kOctaveThresholdMin);
+    feedSine (proc, 48000.0, 440.0f, 0.5f);
+
+    INFO ("ratio " << proc.currentOctaveRatio.load());
+    REQUIRE (proc.currentMidiNote.load() == 69);
+    REQUIRE (! proc.currentOctaveDoubt.load());
 }
 
 TEST_CASE ("octave guard: silence breaks a run instead of bridging it", "[pitch][octave]")
@@ -482,7 +542,7 @@ TEST_CASE ("octave guard: correct reports the true octave", "[pitch][octave]")
 
     // Corrected hops stay flagged, so the user can audit where the guard acted rather
     // than having it silently rewrite pitches.
-    REQUIRE (proc.currentOctaveRatio.load() >= rbpitch::kOctaveRivalRatio);
+    REQUIRE (proc.currentOctaveRatio.load() >= proc.octaveThreshold.load());
 }
 
 TEST_CASE ("octave guard: a clean tone is left alone in every mode", "[pitch][octave]")
@@ -498,7 +558,7 @@ TEST_CASE ("octave guard: a clean tone is left alone in every mode", "[pitch][oc
 
         INFO ("octaveGuard = " << mode);
         REQUIRE (proc.currentMidiNote.load() == 69);
-        REQUIRE (proc.currentOctaveRatio.load() < rbpitch::kOctaveRivalRatio);
+        REQUIRE (proc.currentOctaveRatio.load() < proc.octaveThreshold.load());
     }
 }
 

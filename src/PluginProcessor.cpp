@@ -315,6 +315,7 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("vocalMode",      vocalMode.load (std::memory_order_relaxed),           nullptr);
     state.setProperty ("gateThreshold",  (double) gateThreshold.load (std::memory_order_relaxed), nullptr);
     state.setProperty ("octaveGuard",    octaveGuard.load (std::memory_order_relaxed),          nullptr);
+    state.setProperty ("octaveThresh",   (double) octaveThreshold.load (std::memory_order_relaxed), nullptr);
     state.setProperty ("frameInterval",  savedFrameInterval.load(),    nullptr);
     state.setProperty ("reaperPriority", savedReaperPriority.load(),   nullptr);
     state.setProperty ("octaveWrap",     savedOctaveWrap.load(),       nullptr);
@@ -343,6 +344,10 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     gateThreshold.store ((float)  (double) state.getProperty ("gateThreshold", 0.01),          std::memory_order_relaxed);
     // Absent in sessions saved before the octave guard; 0 is Off, so those load unchanged.
     octaveGuard.store   (juce::jlimit (0, 2, (int) state.getProperty ("octaveGuard", 0)),      std::memory_order_relaxed);
+    octaveThreshold.store (juce::jlimit (kOctaveThresholdMin, kOctaveThresholdMax,
+                                         (float) (double) state.getProperty ("octaveThresh",
+                                                                             (double) rbpitch::kOctaveRivalRatio)),
+                           std::memory_order_relaxed);
     savedFrameInterval   =        (double) state.getProperty ("frameInterval",  1.0 / 60.0);
     savedReaperPriority  =        (bool)   state.getProperty ("reaperPriority", false);
     savedOctaveWrap      =        (bool)   state.getProperty ("octaveWrap",     true);

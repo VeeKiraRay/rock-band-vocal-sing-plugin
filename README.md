@@ -151,6 +151,7 @@ where that rival fits the sound almost as well:
 | Red arrowhead / red trail       | The detector is unsure which octave it heard, here.                     |
 | `OCT? 88` in the stats panel    | Same, with the rival's strength as a percentage — 100 = a dead heat.    |
 | Dim `oct 74` in the stats panel | A rival was noticed but rejected as too weak or too brief. Nothing else marks it; shown so you can see how close the calls are on your material. |
+| Dim `oct --` in the stats panel | No competing octave was found here at all. |
 
 **Read red as "not sure", not as "wrong".** A rival peak means the audio is genuinely
 ambiguous about its period, and an octave error is only one reason for that. Two harmless
@@ -160,6 +161,19 @@ first. The guard ignores anything lasting under ~64 ms, which filters out most o
 but the marks are still evidence rather than a verdict. Judge them in context: if the
 notes around a red mark are all nearby in pitch, an octave jump there is unlikely and the
 mark is a false alarm.
+
+**If a wrong octave goes unmarked, tune the threshold to it.** The number in the chip and
+the **Octave Threshold** setting are the same scale, so the adjustment is direct: park on
+the note the plugin got wrong, read what the chip says (`oct 78`), and set the threshold
+just below it (75). Everything at or above that strength is then marked.
+
+Two things bound how far this goes. A `oct --` reading means no competing octave was found
+at all, so the threshold is not the problem and lowering it changes nothing. And above
+about **90 %** nothing is ever caught: the detector only picks the wrong octave in the
+first place when the right one scored *below* its own internal bar, so a genuine error can
+never show a number that high. The useful range is the low-60s to high-80s. Lower settings
+catch more, at the cost of more false alarms — especially sustained ones on vibrato or on a
+single vowel, which the guard's timing filter cannot remove.
 
 The three modes:
 
@@ -212,6 +226,7 @@ Click **Settings** to open these. All of them are saved in the plugin's state, s
 | **Pitch Trail**     | on               | Draws the pitch you actually sang as a faint white contour on the highway (raw, no snapping), so scoops and drift are visible. Clears when the next pass starts.       |
 | **Pitch Tolerance** | ± 50 cents       | How close to the note you must sing for a green light (± 25 / 50 / 75 / 100 cents; 100 cents = one semitone). Twice the tolerance still shows yellow. Lower = stricter. |
 | **Octave Guard**    | Off              | Marks places where the detector is **unsure which octave** it heard — see [Octave Guard](#octave-guard) below. **Warn only** colours them red without changing anything; **Warn + correct** also moves them up an octave. |
+| **Octave Threshold**| 80 %             | How strong the competing octave must be before the guard marks it (60–90%, 5% steps). Lower catches more and misfires more. Only used when Octave Guard is on. |
 | **Mic Gate**        | —                | RMS threshold (0.001–0.05). Raise if background noise triggers false pitches; lower if quiet singing is ignored.                                                     |
 | **Load MIDI File**  | —                | Only shown outside REAPER — pick the `.mid` chart to load.                                                                                                           |
 

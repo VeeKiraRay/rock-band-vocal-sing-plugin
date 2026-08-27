@@ -33,9 +33,22 @@ constexpr double kMaxFreqHz = 1200.0;  // top of the scanned band (MIDI 84 + ~9%
 constexpr double kMinFreqHz =   60.0;  // bottom of the scanned band (MIDI 36 - ~8%)
 
 // Default strength (relative to the chosen peak) at which the peak near half the chosen
-// lag counts as a credible octave rival. See the octave-rival block in the .cpp for why
-// this evidence is one-directional.
-constexpr float kOctaveRivalRatio = 0.85f;
+// lag counts as a credible octave rival. A *default*, not policy — the plugin exposes it
+// as a setting and passes the user's value through PeakParams; this layer only ever reads
+// the parameter. See the octave-rival block in the .cpp for why the evidence is
+// one-directional.
+//
+// The reachable range is bounded above by the key threshold, and the bound is not
+// obvious. For the walk to have made an octave-low error at all it must have SKIPPED the
+// run at the true period T, i.e. nsdf(T) < keyThresholdRatio x globalMax. When 2T is the
+// tallest peak — the usual shape of this failure — that forces
+//
+//     ratio = nsdf(T) / nsdf(2T)  <  keyThresholdRatio   (0.93)
+//
+// so a genuine octave error can never score above ~0.93, and a threshold set near there
+// catches only the mildest damping. 0.85 was tried first and missed a clear error on real
+// material for exactly that reason (2026-08-27).
+constexpr float kOctaveRivalRatio = 0.80f;
 
 LagBounds lagBounds (double detectRate, int lagBufCapacity) noexcept;
 

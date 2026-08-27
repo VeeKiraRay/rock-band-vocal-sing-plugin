@@ -134,7 +134,45 @@ The stats panel compares your live pitch to the **closest active chart note of a
 | 🔴 Red    | Further off than that.                              |
 | ⚪ Grey   | No chart note active, or no pitch sung.             |
 
-> **About pitch detection.** The plugin uses the MPM (McLeod Pitch Method) algorithm at roughly 60 estimates per second, with a voicing gate that discards breath sounds, hard consonants and other unpitched audio, and a median filter that suppresses momentary octave errors on note attacks. It is a solid tracker but not infallible — if background noise still triggers spurious pitches, raise the **Mic Gate** in Settings. The traffic light is a charting aid: consistent green across a phrase is a good sign that the notes and lyrics are placed correctly; don't treat individual flickers as a definitive grade.
+> **About pitch detection.** The plugin uses the MPM (McLeod Pitch Method) algorithm at roughly 60 estimates per second, with a voicing gate that discards breath sounds, hard consonants and other unpitched audio, and a median filter that suppresses momentary octave errors on note attacks. It is a solid tracker but not infallible — if background noise still triggers spurious pitches, raise the **Mic Gate** in Settings, and if whole notes come out an octave low (common on AI-separated stems), see [Octave Guard](#octave-guard). The traffic light is a charting aid: consistent green across a phrase is a good sign that the notes and lyrics are placed correctly; don't treat individual flickers as a definitive grade.
+
+### Octave Guard
+
+Sometimes the detector lands the right note name in the wrong octave — usually an octave
+**too low**. It shows up most on vocals separated out of a finished mix by an AI stem
+splitter, whose artifacts make each cycle of the waveform slightly unlike the last.
+
+**Octave Guard** (Settings, default **Off**) surfaces it. When it is on, the plugin also
+watches for a competing pitch an octave above the one it reported, and marks the places
+where that rival fits the sound almost as well:
+
+| What you see                    | Meaning                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| Red arrowhead / red trail       | The detector is unsure which octave it heard, here.                     |
+| `OCT? 88` in the stats panel    | Same, with the rival's strength as a percentage — 100 = a dead heat.    |
+| Dim `oct 74` in the stats panel | A rival was noticed but rejected as too weak or too brief. Nothing else marks it; shown so you can see how close the calls are on your material. |
+
+**Read red as "not sure", not as "wrong".** A rival peak means the audio is genuinely
+ambiguous about its period, and an octave error is only one reason for that. Two harmless
+ones are common: a **pitch glide**, where the analysis window spans two notes at once, and
+certain **vowels** whose tone colour puts more energy in the second harmonic than the
+first. The guard ignores anything lasting under ~64 ms, which filters out most of both,
+but the marks are still evidence rather than a verdict. Judge them in context: if the
+notes around a red mark are all nearby in pitch, an octave jump there is unlikely and the
+mark is a false alarm.
+
+The three modes:
+
+- **Off** — the detector behaves exactly as it does without this feature.
+- **Warn only** — marks doubtful spots; changes no pitch. Start here.
+- **Warn + correct** — also moves those spots up an octave, in the readout, the traffic
+  light, the pitch trail and any take you save. Only use it once **Warn only** has shown
+  you the marks land where you would agree with them, since it rewrites pitches based on
+  the same judgement.
+
+It cannot detect the opposite error. A peak an octave *below* the reported pitch is
+present for any periodic sound, so it carries no information — nothing can be inferred
+from it, and the guard does not try.
 
 ### Lyric strips
 
@@ -173,6 +211,7 @@ Click **Settings** to open these. All of them are saved in the plugin's state, s
 | **Octave Wrapping** | on               | Wraps your detected pitch by octave to match the chart's range, so singing an octave too high or low still scores against the right note.                            |
 | **Pitch Trail**     | on               | Draws the pitch you actually sang as a faint white contour on the highway (raw, no snapping), so scoops and drift are visible. Clears when the next pass starts.       |
 | **Pitch Tolerance** | ± 50 cents       | How close to the note you must sing for a green light (± 25 / 50 / 75 / 100 cents; 100 cents = one semitone). Twice the tolerance still shows yellow. Lower = stricter. |
+| **Octave Guard**    | Off              | Marks places where the detector is **unsure which octave** it heard — see [Octave Guard](#octave-guard) below. **Warn only** colours them red without changing anything; **Warn + correct** also moves them up an octave. |
 | **Mic Gate**        | —                | RMS threshold (0.001–0.05). Raise if background noise triggers false pitches; lower if quiet singing is ignored.                                                     |
 | **Load MIDI File**  | —                | Only shown outside REAPER — pick the `.mid` chart to load.                                                                                                           |
 

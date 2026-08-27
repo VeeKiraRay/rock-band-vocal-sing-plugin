@@ -210,6 +210,16 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   - `NsdfPeak.h/.cpp` is pure and JUCE-free so the peak-picking decisions are unit
     tested on hand-built NSDF tables (`tests/NsdfPeakTests.cpp`), including hidden
     `[.sweep]` accuracy sweeps across analysis rates and window lengths.
+  - **Octave guard** (`octaveGuard` 0=Off 1=Warn 2=Warn+Correct, default Off): when on,
+    `findNsdfPeak` additionally looks for a peak near `bestTau / 2` (±6% window, required
+    to sit inside the walked region and to be a genuine local maximum, parabolically
+    interpolated like the main peak) and reports `octaveRatio` / `octaveTau`. A rival at
+    or above `kOctaveRivalRatio` (0.85) that persists `kOctaveRunHops` (6) consecutive
+    voiced hops is believed; in Correct mode `detectPitchMPM` then returns the rival lag,
+    **before** the median filter, so scoring, the trail and the take export all agree.
+    Off passes `octaveRivalRatio = 0`, which skips the search — the detector is then
+    bit-for-bit its pre-guard self. Rationale and the false-positive findings:
+    `_upcoming/OCTAVE_CONFIDENCE.md`.
   - Design rationale: `_old/ENGINE_V2.md` (original v2),
     `_upcoming/PITCH_DETECTION_FINDINGS.md` (2026-08 range fix + 24 kHz move, with
     the measurements behind both).
@@ -222,7 +232,13 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   separator lines, white (or amber-when-octave-wrapped) live-pitch arrowhead — drawn at
   the fractional pitch (glides, no semitone stepping) and snapped onto the closest
   active note's lane when within the Pitch Tolerance (b2 visual snap; the idle-repaint
-  gate tracks `currentMidiFloat` so sub-semitone movement repaints), and note-hit
+  gate tracks `currentMidiFloat` so sub-semitone movement repaints, and the heard sample's
+  `octaveRatio` for the same reason — doubt moves independently of pitch), octave-guard
+  doubt marking when the guard is on (`kOctaveDoubtColour` red arrowhead — outranking the
+  octave-wrapped amber — plus red trail segments built as a second `juce::Path` in the
+  same walk, sharing the boundary vertex so the contour stays unbroken; the stats chip
+  shows `OCT? nn` confirmed / dim `oct nn` for a rival seen but not believed, in a column
+  taken only while the guard is on so Off keeps the pre-feature layout), and note-hit
   highlighting — `updateNoteHits()` (called from `onFrame()`) accumulates per-note
   sung-within-tolerance spans (`noteHitSpans`; accumulation only while actually
   playing on the REAPER path, since the stopped-state time follows the edit cursor;
@@ -286,11 +302,13 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
   Octave Wrapping on; Pitch Trail on; Pitch Tolerance ±25/50/75/100 cents default
-  ±50; Mic gate; Load MIDI File when no REAPER API) + **Allow edits** toggle in the
-  stats band.
+  ±50; Octave Guard Off/Warn only/Warn + correct default Off; Mic gate; Load MIDI File
+  when no REAPER API) + **Allow edits** toggle in the stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
-  frameInterval, reaperPriority, octaveWrap, pitchTolCents, pitchTrail, latencyMs,
-  inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard, lyricMode, renderer.
+  octaveGuard, frameInterval, reaperPriority, octaveWrap, pitchTolCents, pitchTrail,
+  latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard, lyricMode,
+  renderer. `octaveGuard` follows the `gateThreshold`/`vocalMode` pattern — no `saved*`
+  mirror, because the audio thread reads it — and is clamped to 0..2 on read.
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
@@ -512,6 +530,17 @@ so nothing an author sends for review can be committed by accident.
   `lastIsPlaying` is in the idle-repaint gate — it is a *paint input* now, and a
   stop-in-place changes nothing else the gate watches), and trail-vs-chart alignment is
   unaffected in both states because both are mapped through the same `t`.
+- **The octave rival is one-directional evidence, and weaker than it looks.** A peak near
+  `bestTau / 2` is worth something because a signal periodic at τ is *not* periodic at τ/2
+  — but only when it is cleanly periodic and fundamental-dominant. Two common cases break
+  that and produce a rival with the pitch entirely correct: a pitch glide (the 768-sample
+  window spans two notes, so consecutive periods differ and nsdf(τ) is damped) and a vowel
+  whose first formant sits near H2 (the waveform genuinely has a strong quasi-period at
+  τ/2). Hence `kOctaveRunHops` — the rival must outlast a transition, which contaminates
+  about `kPitchWindow / kPitchHop` = 3 hops. Do **not** "complete the symmetry" by adding a
+  2τ check for octave-high errors: a peak at 2τ always exists for a periodic signal, so it
+  carries no information at all. Found the hard way — Warn mode lit up glides and
+  mid-sustain moments on a real vocal before the persistence filter existed (2026-08-27).
 - `DEF_CLASS_IID(IReaperHostApplication)` must appear in exactly **one** .cpp file.
   It is in `PluginProcessor.cpp`. Do not add it to any header.
 - `#define NOMINMAX` must precede any Windows headers to avoid `min`/`max` macro conflicts

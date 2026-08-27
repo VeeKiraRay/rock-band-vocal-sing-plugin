@@ -139,6 +139,8 @@ public:
         std::function<void(int)>    setPitchTol;
         bool                        initPitchTrail     { true };
         std::function<void(bool)>   setPitchTrail;
+        int                         initOctaveGuard    { 0 };   // 0=Off 1=Warn 2=Warn+correct
+        std::function<void(int)>    setOctaveGuard;
         bool                        showLoadMidi       { false };
         std::function<void()>       loadMidi;
     };
@@ -165,6 +167,7 @@ public:
         static const juce::String kTipPitchTol = "How close to the note you must sing to score GREAT, in cents (100 = one semitone). Twice this distance still counts as CLOSE.";
         static const juce::String kTipTrail    = "Draws the pitch you actually sang as a faint contour on the highway (no snapping), so scoops and drift are visible. Clears when the next pass starts.";
         static const juce::String kTipGate     = "Minimum mic volume before pitch detection activates. Raise if background noise triggers false readings.";
+        static const juce::String kTipOctGuard = "Flags notes where the detector may have landed an octave too LOW - common on AI-separated stems. \"Warn only\" colours them red and shows the evidence strength in the stats bar without changing the pitch; \"Warn + correct\" also moves them up an octave, in the readout, the trail and saved takes. It cannot detect the opposite error.";
 
         setupLabel (rateLabel, "Frame cap", kTipRate);
         rateCombo.addItem ("20 fps",   1);
@@ -315,6 +318,19 @@ public:
         };
         addAndMakeVisible (pitchTolSlider);
 
+        setupLabel (octGuardLabel, "Octave Guard", kTipOctGuard);
+        octGuardCombo.addItem ("Off",            1);
+        octGuardCombo.addItem ("Warn only",      2);
+        octGuardCombo.addItem ("Warn + correct", 3);
+        octGuardCombo.setSelectedId (this->cbs.initOctaveGuard + 1, juce::dontSendNotification);
+        styleCombo (octGuardCombo);
+        octGuardCombo.setTooltip (kTipOctGuard);
+        octGuardCombo.onChange = [this]
+        {
+            this->cbs.setOctaveGuard (octGuardCombo.getSelectedId() - 1);
+        };
+        addAndMakeVisible (octGuardCombo);
+
         setupLabel (gateLabel, "Mic Gate", kTipGate);
         gateSlider.setRange (0.001, 0.05, 0.0);
         gateSlider.setValue (proc.gateThreshold.load (std::memory_order_relaxed),
@@ -390,6 +406,7 @@ public:
         layoutRow (wrapLabel, wrapToggle, 24);
         layoutRow (trailLabel, trailToggle, 24);
         layoutRow (pitchTolLabel, pitchTolSlider);
+        layoutRow (octGuardLabel, octGuardCombo, 150);
         layoutRow (gateLabel, gateSlider);
 
         if (cbs.showLoadMidi)
@@ -409,12 +426,12 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (6) + SINGING (4), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (6) + SINGING (5), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (6)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (4);
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (5);
 
 private:
     void setupHeader (juce::Label& lbl, const juce::String& text)
@@ -483,6 +500,8 @@ private:
     juce::ToggleButton  trailToggle;
     juce::Label         pitchTolLabel;
     juce::Slider        pitchTolSlider;
+    juce::Label         octGuardLabel;
+    juce::ComboBox      octGuardCombo;
     juce::Label         gateLabel;
     juce::Slider        gateSlider;
 
@@ -660,6 +679,11 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setPitchTol        = [safe] (int v)    { if (safe) { safe->pitchTolCents = juce::jlimit (25, 100, v); safe->audioProcessor.savedPitchTolCents = safe->pitchTolCents; } };
         cbs.initPitchTrail     = pitchTrailOn;
         cbs.setPitchTrail      = [safe] (bool v)   { if (safe) { safe->pitchTrailOn = v; safe->audioProcessor.savedPitchTrail = v; safe->repaint(); } };
+        // Lives on the processor (the audio thread reads it), so there is no editor-side
+        // mirror to update — just the live value and a repaint, since the guard's visuals
+        // appear and disappear with the mode.
+        cbs.initOctaveGuard    = audioProcessor.octaveGuard.load (std::memory_order_relaxed);
+        cbs.setOctaveGuard     = [safe] (int v)    { if (safe) { safe->audioProcessor.octaveGuard.store (juce::jlimit (0, 2, v), std::memory_order_relaxed); safe->repaint(); } };
         cbs.showLoadMidi       = !audioProcessor.reaperApi.isLoaded();
         cbs.loadMidi           = [safe]()           { if (safe) safe->openMidiFile(); };
 

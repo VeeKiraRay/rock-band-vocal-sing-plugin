@@ -4,11 +4,12 @@
 #include <catch2/catch_approx.hpp>
 #include <vector>
 
-TEST_CASE ("state: all 14 persisted fields round-trip through a fresh processor", "[state]")
+TEST_CASE ("state: all 16 persisted fields round-trip through a fresh processor", "[state]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store       ((int) VocalMode::Harmonies, std::memory_order_relaxed);
     proc.gateThreshold.store   (0.0456f, std::memory_order_relaxed);
+    proc.octaveGuard.store     (2, std::memory_order_relaxed);
     proc.savedFrameInterval   = 1.0 / 30.0;
     proc.savedReaperPriority  = true;
     proc.savedOctaveWrap      = false;
@@ -32,6 +33,7 @@ TEST_CASE ("state: all 14 persisted fields round-trip through a fresh processor"
 
     REQUIRE (proc2.vocalMode.load()     == (int) VocalMode::Harmonies);
     REQUIRE (proc2.gateThreshold.load() == Catch::Approx (0.0456f));
+    REQUIRE (proc2.octaveGuard.load()   == 2);
     REQUIRE (proc2.savedFrameInterval   == Catch::Approx (1.0 / 30.0));
     REQUIRE (proc2.savedReaperPriority  == true);
     REQUIRE (proc2.savedOctaveWrap      == false);
@@ -56,6 +58,7 @@ TEST_CASE ("state: garbage bytes are rejected without crashing, defaults intact"
 
     REQUIRE (proc.vocalMode.load()     == (int) VocalMode::Solo);
     REQUIRE (proc.gateThreshold.load() == Catch::Approx (0.01f));
+    REQUIRE (proc.octaveGuard.load()   == 0);
     REQUIRE (proc.savedFrameInterval   == Catch::Approx (1.0 / 60.0));
     REQUIRE (proc.savedReaperPriority  == false);
     REQUIRE (proc.savedOctaveWrap      == true);
@@ -90,6 +93,27 @@ TEST_CASE ("state: a session saved before the calibration split loads unchanged"
     REQUIRE (proc.savedLatencyOffsetMs == -60);
     REQUIRE (proc.savedInputOffsetMs   == 0);
     REQUIRE (proc.savedLiveMicInput    == true);
+
+    // Same reasoning for the octave guard: no "octaveGuard" property means Off, which is
+    // the mode at which the detector is bit-for-bit its pre-guard self. An old session
+    // must never come back with pitches being silently rewritten.
+    REQUIRE (proc.octaveGuard.load()   == 0);
+}
+
+TEST_CASE ("state: an out-of-range octave guard value is clamped, not trusted", "[state]")
+{
+    // Unlike the saved* settings, this one is read by the audio thread and indexes
+    // behaviour directly, so a corrupt or future-version value has to land somewhere safe.
+    juce::ValueTree bad ("RBVocalSingState");
+    bad.setProperty ("octaveGuard", 99, nullptr);
+
+    juce::MemoryBlock block;
+    juce::AudioProcessor::copyXmlToBinary (*bad.createXml(), block);
+
+    RBVocalSingAudioProcessor proc;
+    proc.setStateInformation (block.getData(), (int) block.getSize());
+
+    REQUIRE (proc.octaveGuard.load() == 2);
 }
 
 TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "[state]")
@@ -100,6 +124,7 @@ TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "
 
     REQUIRE (proc.vocalMode.load()     == (int) VocalMode::Solo);
     REQUIRE (proc.gateThreshold.load() == Catch::Approx (0.01f));
+    REQUIRE (proc.octaveGuard.load()   == 0);
     REQUIRE (proc.savedFrameInterval   == Catch::Approx (1.0 / 60.0));
     REQUIRE (proc.savedReaperPriority  == false);
     REQUIRE (proc.savedOctaveWrap      == true);

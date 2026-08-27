@@ -217,6 +217,10 @@ public:
     // lag, which is why it has to happen here rather than in the editor — the corrected
     // value must reach the median filter, the hop queue, scoring and the take export
     // together. MPM only: the fallback detectors have no rival measure.
+    //
+    // Serialised directly rather than through a saved* mirror (the gateThreshold /
+    // vocalMode pattern) — the audio thread reads this one, so a second copy would only
+    // be something to keep in sync. Absent from a pre-guard session, which loads as 0.
     std::atomic<int>   octaveGuard   { 0 };
 
     // ── Vocal mode (Solo / Harmonies) — set by editor, drives chart re-read ────
@@ -231,9 +235,6 @@ public:
     std::atomic<bool>   savedOctaveWrap      { true };
     std::atomic<int>    savedPitchTolCents   { 50 };    // GREAT window ± cents; CLOSE = 2×
     std::atomic<bool>   savedPitchTrail      { true };  // sung-pitch contour on the highway
-    std::atomic<int>    savedOctaveGuard     { 0 };     // 0=Off 1=Warn 2=Warn+Correct.
-                                                        // Defaults to 0 so a session saved
-                                                        // before the guard loads unchanged.
     std::atomic<int>    savedLatencyOffsetMs { 0 };     // output calibration: chart shift
     std::atomic<int>    savedInputOffsetMs   { 0 };     // input calibration: detection shift.
                                                         // Defaults to 0 so a session saved

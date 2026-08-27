@@ -14,11 +14,13 @@ namespace rbtake
 
 // One trail sample: absolute project time (s) + raw fractional MIDI pitch.
 // pitch < 0 marks a gap (the singer went unvoiced).
-// octaveRatio is the octave guard's evidence for this sample (0-1, 0 = none/guard off);
-// segmentation ignores it, but the editor's trail and marker history are TrailPoints, so
-// carrying it here is what lets the highway colour a doubtful stretch and the stats chip
-// stay pinned to the *heard* sample rather than the newest analysed one.
-struct TrailPoint   { double time; float pitch; float octaveRatio { 0.0f }; };
+// The octave guard's evidence (octaveRatio, 0-1) and its persistence-filtered decision
+// (octaveDoubt) for this sample. Segmentation ignores both, but the editor's trail and
+// marker history are TrailPoints, so carrying them here is what lets the highway colour a
+// doubtful stretch and the stats chip stay pinned to the *heard* sample rather than the
+// newest analysed one.
+struct TrailPoint   { double time; float pitch;
+                      float octaveRatio { 0.0f }; bool octaveDoubt { false }; };
 
 // One exported note: absolute project times (s), integer MIDI pitch.
 struct ExportedNote { double startTime, endTime; int pitch; };

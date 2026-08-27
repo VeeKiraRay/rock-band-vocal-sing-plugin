@@ -151,6 +151,12 @@ private:
     // output calibration only while playing, so the whole chart shifts on the transition.
     // A stop-in-place (cursor doesn't move) changes nothing else the gate watches.
     bool   lastPaintPlaying    { false };
+    // Octave-guard evidence for the heard sample. Its own gate input because it moves
+    // independently of pitch — a steady note can cross the doubt threshold without
+    // currentMidiFloat changing at all, and the chip and red trail would then not appear
+    // (or not clear) while the transport is idle. Constant 0 when the guard is off, so
+    // this costs no extra repaints there.
+    float  lastPaintOctRatio   { -1.0f };
 
     // Measured duration of the last paint() (seconds), used by onFrame() to cap paint's
     // duty cycle so a heavy (large-window) paint can't starve REAPER's UI thread.

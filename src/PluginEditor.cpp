@@ -167,7 +167,7 @@ public:
         static const juce::String kTipPitchTol = "How close to the note you must sing to score GREAT, in cents (100 = one semitone). Twice this distance still counts as CLOSE.";
         static const juce::String kTipTrail    = "Draws the pitch you actually sang as a faint contour on the highway (no snapping), so scoops and drift are visible. Clears when the next pass starts.";
         static const juce::String kTipGate     = "Minimum mic volume before pitch detection activates. Raise if background noise triggers false readings.";
-        static const juce::String kTipOctGuard = "Flags notes where the detector may have landed an octave too LOW - common on AI-separated stems. \"Warn only\" colours them red and shows the evidence strength in the stats bar without changing the pitch; \"Warn + correct\" also moves them up an octave, in the readout, the trail and saved takes. It cannot detect the opposite error.";
+        static const juce::String kTipOctGuard = "Marks places where the detector is UNSURE which octave it heard - it is not a claim that the octave is wrong. Red means a competing pitch an octave up fit the sound almost as well, which happens on AI-separated stems. \"Warn only\" colours those red and shows the evidence strength in the stats bar without changing the pitch; \"Warn + correct\" also moves them up an octave, in the readout, the trail and saved takes - check the red marks look right before trusting it. It cannot detect the opposite error.";
 
         setupLabel (rateLabel, "Frame cap", kTipRate);
         rateCombo.addItem ("20 fps",   1);
@@ -1259,7 +1259,9 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     // Flash visibility participates in the idle gate so the message-bar flash both
     // appears and expires while the transport sits idle (nothing else would repaint).
     const bool  flashActive  = juce::Time::getMillisecondCounterHiRes() * 0.001 < flashUntil;
+    const float heardOctRatio = heardDetection().octaveRatio;
     const bool changed = (cachedPlayTime  != lastPaintTime)
+                      || (heardOctRatio   != lastPaintOctRatio)
                       || (livePitch       != lastPaintPitch)
                       || (lastStateCount  != lastPaintStateCount)
                       || (framesDropping  != lastPaintDropping)
@@ -1278,6 +1280,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         lastPaintRate       = cachedPlayRate;
         lastPaintFlash      = flashActive;
         lastPaintPlaying    = lastIsPlaying;
+        lastPaintOctRatio   = heardOctRatio;
 
         // Dirty only the dynamic areas — controls panel is static widgets that repaint themselves
         repaint (getLocalBounds().withBottom (getHeight() - kControlsH));

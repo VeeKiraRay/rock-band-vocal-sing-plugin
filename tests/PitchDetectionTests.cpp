@@ -356,14 +356,19 @@ namespace
     // key threshold (so the walk skips the true period and takes 2T) but over the rival
     // ratio (so the guard can see it). 0.7 would detect correctly and prove nothing.
     // The window either side of that is measured in tests/NsdfPeakTests.cpp.
-    void feedAlternatingSaw (RBVocalSingAudioProcessor& proc, double sampleRate,
-                             double freqHz, int numBlocks = 12, int blockSize = 512)
+    // Returns the sample index to continue from, so a caller can feed several stretches
+    // without re-preparing (prepareToPlay clears the guard's run counter, which would
+    // hide exactly what a multi-stretch test is trying to observe).
+    int feedAlternatingSaw (RBVocalSingAudioProcessor& proc, double sampleRate,
+                            double freqHz, int numBlocks = 12, int blockSize = 512,
+                            bool prepare = true, int startSample = 0)
     {
-        proc.prepareToPlay (sampleRate, blockSize);
+        if (prepare)
+            proc.prepareToPlay (sampleRate, blockSize);
         juce::MidiBuffer midi;
 
         const double period = sampleRate / freqHz;
-        int sampleIndex = 0;
+        int sampleIndex = startSample;
 
         for (int b = 0; b < numBlocks; ++b)
         {
@@ -388,6 +393,7 @@ namespace
             }
             proc.processBlock (buffer, midi);
         }
+        return sampleIndex;
     }
 
     constexpr double kGuardTestHz = 261.63;   // C4, MIDI 60
@@ -415,6 +421,52 @@ TEST_CASE ("octave guard: warn publishes the evidence without changing the pitch
     INFO ("rival ratio " << proc.currentOctaveRatio.load());
     REQUIRE (proc.currentMidiNote.load() == 48);            // pitch untouched by design
     REQUIRE (proc.currentOctaveRatio.load() >= rbpitch::kOctaveRivalRatio);
+    REQUIRE (proc.currentOctaveDoubt.load());               // sustained, so confirmed
+}
+
+TEST_CASE ("octave guard: a brief rival is evidence but not a decision", "[pitch][octave]")
+{
+    // The false-positive case a user hit in REAPER: on a real vocal, pitch transitions and
+    // strong-2nd-harmonic vowels raise a rival for a few hops with the pitch entirely
+    // correct. Anything shorter than kOctaveRunHops must publish its ratio (the chip shows
+    // it as evidence) but never colour the highway or move the pitch.
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    proc.octaveGuard.store (2);   // Correct — the mode where a false positive does damage
+
+    // Two blocks past the window fill is ~4 hops of ambiguous audio, under the run length.
+    feedAlternatingSaw (proc, 48000.0, kGuardTestHz, 5);
+
+    INFO ("ratio " << proc.currentOctaveRatio.load()
+          << ", doubt " << proc.currentOctaveDoubt.load());
+    REQUIRE (proc.currentOctaveRatio.load() > 0.0f);   // the rival was seen...
+    REQUIRE (! proc.currentOctaveDoubt.load());        // ...and deliberately not believed
+    REQUIRE (proc.currentMidiNote.load() == 48);       // so no correction happened
+}
+
+TEST_CASE ("octave guard: silence breaks a run instead of bridging it", "[pitch][octave]")
+{
+    // Two short ambiguous stretches either side of a gap must not add up to a confirmed
+    // run — otherwise a rival could accumulate across a whole phrase of unrelated notes.
+    RBVocalSingAudioProcessor proc;
+    proc.pitchMethod.store (2);
+    proc.octaveGuard.store (1);
+    juce::MidiBuffer midi;
+
+    int at = 0;
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        // prepare only on the first pass — re-preparing would clear the run counter and
+        // make this test pass for the wrong reason.
+        at = feedAlternatingSaw (proc, 48000.0, kGuardTestHz, 5, 512, pass == 0, at);
+        for (int b = 0; b < 30; ++b)                           // silence, past the hold
+        {
+            auto silence = silentBlock (512);
+            proc.processBlock (silence, midi);
+        }
+    }
+
+    REQUIRE (! proc.currentOctaveDoubt.load());
 }
 
 TEST_CASE ("octave guard: correct reports the true octave", "[pitch][octave]")

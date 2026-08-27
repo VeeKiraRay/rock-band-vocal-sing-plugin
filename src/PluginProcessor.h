@@ -173,6 +173,12 @@ public:
     // correlates well. Doubt is `>= rbpitch::kOctaveRivalRatio`; the sub-threshold values
     // are kept so the UI can show how close the call was.
     std::atomic<float>  currentOctaveRatio  { 0.0f };
+    // The *decision* the ratio above is only the evidence for: true once a rival has
+    // persisted for kOctaveRunHops consecutive voiced hops. Separate from the ratio
+    // because persistence is temporal state — a consumer holding one sample cannot
+    // reconstruct it, and having the display and the correction each re-derive it would
+    // let them drift apart.
+    std::atomic<bool>   currentOctaveDoubt  { false };
     std::atomic<double> currentPlaybackTime { 0.0 };  // fallback when API unavailable
 
     // One entry per audio-thread hop estimate (~every 16 ms). Queued so the UI
@@ -181,7 +187,8 @@ public:
     // decay, silence) before the next UI frame reads the atomics was previously
     // invisible to note-hit tracking and the take-export pitch trail, especially
     // for notes shorter than one UI frame interval (see _upcoming/SHORT_NOTE_HIT_TRACKING.md).
-    struct HopSample { double time; float midiFloat; bool voiced; float octaveRatio; };
+    struct HopSample { double time; float midiFloat; bool voiced;
+                       float octaveRatio; bool octaveDoubt; };
     static constexpr int kHopQueueCapacity = 128;  // ~2s of hops @ ~16ms — UI-stall headroom
 
     // Message thread only. Drains up to maxCount queued hop samples (oldest first)
@@ -296,6 +303,21 @@ private:
     // they feed the hold decay instead of publishing a garbage pitch.
     static constexpr float kClarityThreshold = 0.80f;
 
+    // Consecutive voiced hops a rival must survive before the octave guard believes it.
+    //
+    // A peak near half the chosen lag is evidence of *period ambiguity*, which an octave
+    // error causes but so do two benign, common things: a pitch transition (the 768-sample
+    // window spans two notes, so consecutive periods differ and nsdf(T) is damped) and a
+    // vowel whose first formant sits near the 2nd harmonic (H2 exceeds H1, so the waveform
+    // genuinely has a strong quasi-period at T/2). Both are brief — a transition
+    // contaminates about kPitchWindow / kPitchHop = 3 hops — while a real octave error
+    // persists for most of the note. 6 hops (~64 ms) clears the transition case with
+    // margin and still fires well inside a short note.
+    //
+    // Found by a user testing Warn mode on a real vocal: glides and mid-sustain moments
+    // lit up red on a passage whose neighbouring notes made an octave jump implausible.
+    static constexpr int kOctaveRunHops = 6;
+
     // MPM's NSDF autocorrelation term is computed as IFFT(|FFT(x)|²) — O(N log N)
     // instead of the direct O(N × maxLag) form. kFftSize must be ≥ kPitchWindow +
     // maxLag (≤ 1087) so the circular correlation is linear over the scanned lags.
@@ -338,6 +360,10 @@ private:
     int   pitchHoldFrames { 0 };
     float lastDetectClarity { 0.0f };   // written by detectPitch, published by processBlock
     float lastDetectOctaveRatio { 0.0f };   // ditto — see currentOctaveRatio
+    bool  lastDetectOctaveDoubt { false };  // ditto — see currentOctaveDoubt
+    int   octaveRunHops         { 0 };      // consecutive voiced hops with a rival above
+                                            //   threshold; reset by silence and by any hop
+                                            //   without one, so a run never bridges a gap
 
     // The published pitch is the median of the last 3 accepted estimates once the
     // history is full — a single-frame octave/subharmonic error (note onsets, tone
@@ -352,7 +378,8 @@ private:
     // least of the problems.
     juce::AbstractFifo hopFifo { kHopQueueCapacity };
     std::array<HopSample, kHopQueueCapacity> hopBuffer;
-    void pushHopSample (double time, float midiFloat, bool voiced, float octaveRatio) noexcept;
+    void pushHopSample (double time, float midiFloat, bool voiced,
+                        float octaveRatio, bool octaveDoubt) noexcept;
 
     // Constructed once with the processor (allocation happens off the audio thread);
     // fftScratch is the in-place real-FFT workspace (2 × kFftSize floats).

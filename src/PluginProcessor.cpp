@@ -84,6 +84,7 @@ void RBVocalSingAudioProcessor::prepareToPlay (double sampleRate, int)
     hopCount        = 0;
     pitchHoldFrames = 0;
     medianCount     = 0;
+    octaveRunHops   = 0;
     hopFifo.reset();
 }
 
@@ -92,12 +93,12 @@ void RBVocalSingAudioProcessor::prepareToPlay (double sampleRate, int)
 // prepareToRead may hand back a wrapped (start1/size1 + start2/size2) range.
 
 void RBVocalSingAudioProcessor::pushHopSample (double time, float midiFloat, bool voiced,
-                                                float octaveRatio) noexcept
+                                                float octaveRatio, bool octaveDoubt) noexcept
 {
     int start1, size1, start2, size2;
     hopFifo.prepareToWrite (1, start1, size1, start2, size2);
     if (size1 > 0)
-        hopBuffer[(size_t) start1] = { time, midiFloat, voiced, octaveRatio };
+        hopBuffer[(size_t) start1] = { time, midiFloat, voiced, octaveRatio, octaveDoubt };
     // size1 == 0 means the fifo is full (UI thread stalled) — drop this sample.
     hopFifo.finishedWrite (size1);
 }
@@ -202,7 +203,9 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             // clarity: a held pitch is not fresh evidence of anything, so it must not
             // keep re-flagging after the audio that produced it has gone.
             const float hopOctaveRatio = (hz > 0.0f) ? lastDetectOctaveRatio : 0.0f;
+            const bool  hopOctaveDoubt = (hz > 0.0f) && lastDetectOctaveDoubt;
             currentOctaveRatio.store (hopOctaveRatio, std::memory_order_relaxed);
+            currentOctaveDoubt.store (hopOctaveDoubt, std::memory_order_relaxed);
 
             if (hz > 0.0f)
             {
@@ -259,7 +262,7 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                                       - windowCentreOffset);
             pushHopSample (hopTime, currentMidiFloat.load (std::memory_order_relaxed),
                            audioAboveGate.load (std::memory_order_relaxed),
-                           hopOctaveRatio);
+                           hopOctaveRatio, hopOctaveDoubt);
         }
     }
 

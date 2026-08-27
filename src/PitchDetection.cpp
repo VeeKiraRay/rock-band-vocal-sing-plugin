@@ -20,10 +20,14 @@ float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSampl
     const bool aboveGate = std::sqrtf (sum / (float) numSamples) >= gateThreshold.load (std::memory_order_relaxed);
     audioAboveGate.store (aboveGate, std::memory_order_relaxed);
     if (!aboveGate)
+    {
+        octaveRunHops = 0;   // silence ends any run — see kOctaveRunHops
         return 0.0f;
+    }
 
     lastDetectClarity     = 0.0f;
     lastDetectOctaveRatio = 0.0f;
+    lastDetectOctaveDoubt = false;
 
     float hz = 0.0f;
     switch (pitchMethod.load (std::memory_order_relaxed))
@@ -185,15 +189,27 @@ float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSa
     lastDetectOctaveRatio = peak.octaveRatio;
 
     if (peak.tau <= 0.0f)
+    {
+        octaveRunHops = 0;   // unvoiced hop — see kOctaveRunHops
         return 0.0f;
+    }
+
+    // Persistence filter. A single hop's rival proves very little: pitch transitions and
+    // strong-2nd-harmonic vowels both raise one for a few hops with the pitch entirely
+    // correct. Only a rival that survives kOctaveRunHops consecutive voiced hops is
+    // treated as a real octave error. The raw ratio above is left unfiltered — it is the
+    // evidence, and the stats chip shows it so the thresholds can be judged from real
+    // material; this is the decision.
+    octaveRunHops = (peak.octaveTau > 0.0f) ? octaveRunHops + 1 : 0;
+    lastDetectOctaveDoubt = (octaveRunHops >= kOctaveRunHops);
 
     // Correct mode takes the rival lag — half the period, so an octave up. Reporting it
     // here rather than in the editor is what keeps the correction consistent across every
     // consumer: it goes through the median filter with its neighbours, and the corrected
     // value is what reaches scoring, the pitch trail and the take export. The doubt flag
-    // still travels (lastDetectOctaveRatio is untouched), so a corrected hop stays visibly
-    // marked and the user can audit where the guard acted.
-    if (guard == 2 && peak.octaveTau > 0.0f)
+    // travels with it, so a corrected hop stays visibly marked and the user can audit
+    // where the guard acted.
+    if (guard == 2 && lastDetectOctaveDoubt)
         return (float) detectRate / peak.octaveTau;
 
     return (float) detectRate / peak.tau;

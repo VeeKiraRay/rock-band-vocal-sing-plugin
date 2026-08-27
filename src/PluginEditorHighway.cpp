@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "HighwayRange.h"
 #include "EditorVisuals.h"
+#include "NsdfPeak.h"   // kOctaveRivalRatio — the threshold the doubt colouring uses
 
 // The scrolling note highway plus the stats and status-bar panels below it. Shared
 // colours and the lyric-suffix helper live in EditorVisuals.h. The lyric strips are
@@ -53,6 +54,16 @@ static float scoringPitchFor (float midiF, bool octaveWrap, int minP, int maxP,
 
     return (float) wrapPitchIntoRange (rounded, minP, maxP, candsByPc)
          + (midiF - (float) rounded);
+}
+
+// Whether to mark a sample as octave-doubtful. The decision itself is made on the audio
+// thread (see kOctaveRunHops) because it depends on how long the rival persisted, which a
+// consumer holding one sample cannot reconstruct — and because the correction has to obey
+// the same rule. Paint only applies the mode gate on top, so what Warn colours red stays
+// exactly the set Warn + correct would have moved.
+static bool isOctaveDoubtful (const rbtake::TrailPoint& s, bool guardOn) noexcept
+{
+    return guardOn && s.octaveDoubt;
 }
 
 // ─── Highway ──────────────────────────────────────────────────────────────────
@@ -205,6 +216,10 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     const double      detOffset = detectionOffsetSec();
     const double      detLead   = drawingOffsetSec() - detOffset;
     const TrailSample heard     = heardDetection();
+
+    // Octave guard: Off draws exactly what it always did, so every doubt test below
+    // collapses to false and no extra path or colour is built.
+    const bool guardOn = audioProcessor.octaveGuard.load (std::memory_order_relaxed) != 0;
 
     auto drawNotesForPart = [&] (VocalPart part)
     {
@@ -425,8 +440,13 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                                          visibleLeft + detOffset,
             [] (const TrailSample& s, double v) { return s.time < v; });
 
-        juce::Path trail;
-        bool open = false;
+        // Two paths from one walk: the ordinary contour and the stretches the octave guard
+        // doubts. Where doubt changes between adjacent samples the boundary point is
+        // written into both, so the contour stays continuous across the colour change
+        // instead of showing a one-sample gap.
+        juce::Path trail, trailDoubt;
+        bool open = false, curDoubt = false;
+
         for (; trailIt != pitchTrail.end(); ++trailIt)
         {
             if (trailIt->time > trailRight) break;
@@ -443,17 +463,42 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 
             const float x = phX + (float) (trailIt->time - detOffset - t) * pixPerSec;
             const float y = pitchY (p);
-            if (open) trail.lineTo (x, y);
-            else      { trail.startNewSubPath (x, y); open = true; }
+            const bool  doubt = isOctaveDoubtful (*trailIt, guardOn);
+
+            if (! open)
+            {
+                (doubt ? trailDoubt : trail).startNewSubPath (x, y);
+                open     = true;
+                curDoubt = doubt;
+            }
+            else if (doubt == curDoubt)
+            {
+                (doubt ? trailDoubt : trail).lineTo (x, y);
+            }
+            else
+            {
+                // Close the run at this point, then open the other colour's run at the
+                // same point — the shared vertex is what keeps the line unbroken.
+                (curDoubt ? trailDoubt : trail).lineTo (x, y);
+                (doubt    ? trailDoubt : trail).startNewSubPath (x, y);
+                curDoubt = doubt;
+            }
         }
 
-        if (! trail.isEmpty())
+        if (! trail.isEmpty() || ! trailDoubt.isEmpty())
         {
+            const juce::PathStrokeType stroke (1.5f, juce::PathStrokeType::curved,
+                                                     juce::PathStrokeType::rounded);
             g.saveState();
             g.reduceClipRegion (area);
+            // Doubt last, so red reads on top wherever the two runs share a vertex.
             g.setColour (kPitchTrailColour);
-            g.strokePath (trail, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved,
-                                                       juce::PathStrokeType::rounded));
+            g.strokePath (trail, stroke);
+            if (! trailDoubt.isEmpty())
+            {
+                g.setColour (kOctaveDoubtColour);
+                g.strokePath (trailDoubt, stroke);
+            }
             g.restoreState();
         }
     }
@@ -523,8 +568,12 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
             arrow.lineTo          (tipX - 20.0f,  cy + 10.0f);
             arrow.closeSubPath();
 
-            const juce::Colour fillColour = doWrap ? juce::Colour (0xffffaa44)
-                                                   : juce::Colours::white;
+            // Doubt outranks the octave-wrapped amber: if the octave itself is in
+            // question then which octave the wrap chose is not the useful thing to say.
+            const juce::Colour fillColour =
+                  isOctaveDoubtful (heard, guardOn)             ? kOctaveDoubtColour
+                : doWrap                                        ? juce::Colour (0xffffaa44)
+                                                                : juce::Colours::white;
             g.setColour (kNoteColour.withAlpha (0.35f));
             g.strokePath (arrow, juce::PathStrokeType (6.0f));
             g.setColour  (fillColour);
@@ -616,7 +665,7 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     for (int i = 0; i < hopN; ++i)
     {
         detHistory[(size_t) detHistoryHead] = { hopBuf[i].time, hopBuf[i].midiFloat,
-                                                hopBuf[i].octaveRatio };
+                                                hopBuf[i].octaveRatio, hopBuf[i].octaveDoubt };
         detHistoryHead = (detHistoryHead + 1) % kDetHistorySize;
         if (detHistoryCount < kDetHistorySize) ++detHistoryCount;
     }
@@ -758,7 +807,8 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         if (pitchTrailOn)
         {
             if (hop.voiced && hop.midiFloat >= 0.0f)
-                pitchTrail.push_back ({ hop.time, hop.midiFloat, hop.octaveRatio });
+                pitchTrail.push_back ({ hop.time, hop.midiFloat,
+                                        hop.octaveRatio, hop.octaveDoubt });
             else if (! pitchTrail.empty() && pitchTrail.back().pitch >= 0.0f)
                 pitchTrail.push_back ({ hop.time, -1.0f });
         }
@@ -861,7 +911,8 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     // name beside it. Hz is recomputed from the fractional pitch instead of carrying the
     // frequency across the hop queue: it is the exact inverse of the processor's own
     // conversion, so the displayed value is unchanged at the precision shown.
-    const float midiF = heardDetection().pitch;
+    const TrailSample heard = heardDetection();
+    const float midiF = heard.pitch;
     const int   note  = midiF >= 0.0f ? juce::jlimit (0, 127, juce::roundToInt (midiF)) : -1;
     const float hz    = midiF >= 0.0f ? 440.0f * std::pow (2.0f, (midiF - 69.0f) / 12.0f) : 0.0f;
 
@@ -988,6 +1039,36 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     g.setColour (juce::Colours::lightgrey);
     g.setFont   (juce::Font (10.0f, juce::Font::bold));
     g.drawText  (lightLabel, lightCol.withTrimmedTop (30), juce::Justification::centred, false);
+
+    // ── Octave-guard chip ────────────────────────────────────────────────────
+    // Reads the *heard* sample, like everything else on this row, so it describes the
+    // audio at the playhead rather than the newest hop analysed.
+    //
+    // The column is taken only when the guard is on: switching the guard off restores the
+    // pre-feature layout exactly, while leaving it on keeps the note name still as the
+    // chip comes and goes. The number is the point — the rival strength is what tells the
+    // user whether the thresholds suit their material, and a bare flag would hide the
+    // near-misses that decide it.
+    //
+    // Two states, because a rival alone is common and mostly benign (glides and
+    // strong-2nd-harmonic vowels raise one): "OCT? nn" in red is the confirmed decision,
+    // matching what the highway marks and what Correct mode would move; dim "oct nn" is a
+    // rival that was seen but did not persist, shown only as evidence.
+    if (audioProcessor.octaveGuard.load (std::memory_order_relaxed) != 0)
+    {
+        auto octCol = row.removeFromRight (74);
+
+        if (heard.octaveRatio > 0.0f)
+        {
+            const bool doubt = heard.octaveDoubt;
+            const int  pct   = juce::roundToInt (heard.octaveRatio * 100.0f);
+
+            g.setColour (doubt ? kOctaveDoubtColour : juce::Colours::grey);
+            g.setFont   (juce::Font (12.0f, juce::Font::bold));
+            g.drawText  ((doubt ? "OCT? " : "oct ") + juce::String (pct),
+                         octCol, juce::Justification::centred, false);
+        }
+    }
 
     // ── Note display ─────────────────────────────────────────────────────────
     if (note >= 0)

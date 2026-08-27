@@ -30,6 +30,12 @@ inline const juce::Colour kNoteHitColour       { 0xffffd000 };
 // Sung-pitch contour of the current pass (pitch trail) — faint white so it reads
 // over the dark background and every part colour without competing with the bars.
 inline const juce::Colour kPitchTrailColour    { 0x66ffffff };
+// Octave-guard doubt: the stretch of trail (and the arrowhead) where the detector may
+// have landed an octave too low. Deliberately the same red family as the MISS traffic
+// light — they never appear on the same element, and "red = do not trust this" is one
+// idea worth stating once. Opaque, unlike the trail it overlays, so a doubtful stretch
+// reads at a glance against the faint white contour.
+inline const juce::Colour kOctaveDoubtColour   { 0xffff3b30 };
 inline const juce::Colour kPhraseSepColour     { 0x55aaaacc };  // muted blue-grey phrase separator
 
 inline juce::Colour colourForPart (VocalPart part)

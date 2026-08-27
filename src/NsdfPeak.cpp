@@ -11,6 +11,24 @@ LagBounds lagBounds (double detectRate, int lagBufCapacity) noexcept
              std::min ((int) (detectRate / kMinFreqHz), lagBufCapacity - 1) };
 }
 
+namespace
+{
+
+// Sub-sample refinement of an integer peak by fitting a parabola through it and its two
+// neighbours. Caller must have established that tau ± 1 are readable.
+float parabolicTau (const float* nsdf, int tau) noexcept
+{
+    const float s0    = nsdf[tau - 1];
+    const float s1    = nsdf[tau];
+    const float s2    = nsdf[tau + 1];
+    const float denom = 2.0f * s1 - s2 - s0;
+
+    return (std::abs (denom) > 1e-6f) ? (float) tau + (s2 - s0) / (2.0f * denom)
+                                      : (float) tau;
+}
+
+} // namespace
+
 PeakResult findNsdfPeak (const float* nsdf, const PeakParams& p) noexcept
 {
     // Degenerate range: the walk below and the parabolic interpolation both assume at
@@ -88,13 +106,52 @@ PeakResult findNsdfPeak (const float* nsdf, const PeakParams& p) noexcept
     if (r.clarity < p.clarityThreshold)
         return r;
 
-    const float s0    = nsdf[bestTau - 1];
-    const float s1    = nsdf[bestTau];
-    const float s2    = nsdf[bestTau + 1];
-    const float denom = 2.0f * s1 - s2 - s0;
+    r.tau = parabolicTau (nsdf, bestTau);
 
-    r.tau = (std::abs (denom) > 1e-6f) ? (float) bestTau + (s2 - s0) / (2.0f * denom)
-                                       : (float) bestTau;
+    // ── Octave rival ──────────────────────────────────────────────────────────
+    // Evidence that the walk above landed an octave too low. For a *correct* pick at lag
+    // tau, nsdf(tau/2) sits in a trough — a signal periodic at tau is not periodic at
+    // tau/2 — so a genuine peak there says the true period is the shorter one and the
+    // walk skipped it. That happens when nsdf(tau) is damped below the key threshold
+    // while nsdf(2·tau) is not: period-to-period amplitude jitter, creak, and the phasey
+    // residue of AI stem separation all do it.
+    //
+    // The mirror check is deliberately absent. A peak at 2·tau ALWAYS exists for a
+    // periodic signal, so it is not evidence of anything, and taking the first qualifying
+    // run already biases this picker against octave-up errors. Adding a 2·tau test to
+    // "complete the symmetry" would only manufacture false alarms.
+    if (p.octaveRivalRatio > 0.0f && localMax > 0.0f)
+    {
+        // ~6% either side of tau/2, the same headroom the band bounds use: an octave-down
+        // pick is rarely at exactly 2x, and the rival peak drifts with it.
+        const int lo = (int) std::lround ((double) bestTau * 0.47);
+        const int hi = (int) std::lround ((double) bestTau * 0.53);
+
+        // The whole window (plus the neighbours the peak test and interpolation read)
+        // must sit inside the region actually walked. When tau/2 falls in the zero-lag
+        // lobe or above the band ceiling there is no trustworthy rival to find, and
+        // correcting onto a lag outside the scanned band would report a pitch this
+        // detector never validated.
+        if (lo >= searchStart + 1 && hi <= p.maxLag - 1 && lo <= hi)
+        {
+            int rivalTau = lo;
+            for (int tau = lo + 1; tau <= hi; ++tau)
+                if (nsdf[tau] > nsdf[rivalTau]) rivalTau = tau;
+
+            // A genuine local maximum, not the flank of something outside the window —
+            // a flank keeps climbing past one edge and would otherwise qualify on height.
+            const float rivalVal = nsdf[rivalTau];
+            if (rivalVal > 0.0f
+                && nsdf[rivalTau - 1] <= rivalVal
+                && nsdf[rivalTau + 1] <= rivalVal)
+            {
+                r.octaveRatio = rivalVal / localMax;
+                if (r.octaveRatio >= p.octaveRivalRatio)
+                    r.octaveTau = parabolicTau (nsdf, rivalTau);
+            }
+        }
+    }
+
     return r;
 }
 

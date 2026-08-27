@@ -32,6 +32,11 @@ struct LagBounds { int minLag, maxLag; };
 constexpr double kMaxFreqHz = 1200.0;  // top of the scanned band (MIDI 84 + ~9%)
 constexpr double kMinFreqHz =   60.0;  // bottom of the scanned band (MIDI 36 - ~8%)
 
+// Default strength (relative to the chosen peak) at which the peak near half the chosen
+// lag counts as a credible octave rival. See the octave-rival block in the .cpp for why
+// this evidence is one-directional.
+constexpr float kOctaveRivalRatio = 0.85f;
+
 LagBounds lagBounds (double detectRate, int lagBufCapacity) noexcept;
 
 struct PeakParams
@@ -41,6 +46,11 @@ struct PeakParams
     float keyThresholdRatio { 0.93f };  // MPM "key maximum": fraction of the global peak
                                         //   a candidate must reach to be chosen
     float clarityThreshold  { 0.80f };  // below this the frame counts as unvoiced
+
+    // Octave-rival search (the "octave guard"). 0 disables it outright — no extra scan
+    // runs and both rival fields below keep their defaults, so the guard costs nothing
+    // and changes nothing when the user has it switched off.
+    float octaveRivalRatio  { 0.0f };
 };
 
 struct PeakResult
@@ -53,6 +63,17 @@ struct PeakResult
     // peak survived both picking and boundary rejection, so a rejected-on-boundary frame
     // publishes no confidence rather than a misleading one.
     float clarity { 0.0f };
+
+    // Octave rival: the peak near tau/2, i.e. the evidence that this estimate is an octave
+    // too LOW. Both stay at their defaults unless octaveRivalRatio asked for the search.
+    //
+    //   octaveTau   — parabolically interpolated lag of that peak, and therefore the lag a
+    //                 correcting caller should use instead. < 0 when no credible rival was
+    //                 found (including when it was found but fell under the ratio).
+    //   octaveRatio — its height relative to the chosen peak, reported whenever a peak was
+    //                 located at all, so a caller can show *how* close the call was.
+    float octaveTau   { -1.0f };
+    float octaveRatio {  0.0f };
 };
 
 // nsdf must be readable over [0, maxLag]. Values are the standard NSDF

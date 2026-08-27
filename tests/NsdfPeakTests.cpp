@@ -254,6 +254,168 @@ TEST_CASE ("nsdf: a degenerate lag range fails closed", "[nsdf]")
     REQUIRE (rbpitch::findNsdfPeak (t.data(), { 100,  99 }).tau < 0.0f);
 }
 
+// ─── Octave rival (the octave guard's evidence) ───────────────────────────────
+//
+// Every table here uses the production key threshold, so the pick the walk makes is the
+// pick it would make on real audio. The shared shape is a peak at 100 that clears the
+// threshold and one at 50 that does not — i.e. the picker reporting an octave too low,
+// which is exactly the failure the rival search exists to detect.
+
+namespace
+{
+
+// Baseline table: chosen peak at 100 (0.95), optional rival peak at 50 of the given
+// height. keyThreshold = 0.93 x 0.95 = 0.8835, so any rival below that is skipped by the
+// walk and left for the rival search to find.
+std::vector<float> tableWithRival (float rivalHeight)
+{
+    std::vector<float> t (201, -0.5f);
+    t[99] = 0.60f; t[100] = 0.95f; t[101] = 0.60f;
+
+    if (rivalHeight > 0.0f)
+    {
+        t[49] = rivalHeight * 0.7f;
+        t[50] = rivalHeight;
+        t[51] = rivalHeight * 0.7f;
+    }
+    return t;
+}
+
+constexpr rbpitch::PeakParams kGuardOn { 16, 200, 0.93f, 0.80f, rbpitch::kOctaveRivalRatio };
+
+} // namespace
+
+TEST_CASE ("nsdf: a strong peak near half the chosen lag is reported as an octave rival", "[nsdf]")
+{
+    const auto t = tableWithRival (0.86f);
+    const auto r = rbpitch::findNsdfPeak (t.data(), kGuardOn);
+
+    // The walk still picks the low octave — this is the live defect, not a hypothetical.
+    REQUIRE (r.tau == Catch::Approx (100.0).epsilon (0.01));
+
+    // ...and the rival points back at the true period, interpolated like the main peak so
+    // a correcting caller gets a usable lag rather than a bare integer.
+    REQUIRE (r.octaveTau == Catch::Approx (50.0).epsilon (0.01));
+    REQUIRE (r.octaveRatio == Catch::Approx (0.86f / 0.95f).epsilon (0.001));
+}
+
+TEST_CASE ("nsdf: a clean peak reports no octave rival", "[nsdf]")
+{
+    // Nothing near tau/2 — the trough a correct pick sits above. No false alarm.
+    const auto t = tableWithRival (0.0f);
+    const auto r = rbpitch::findNsdfPeak (t.data(), kGuardOn);
+
+    REQUIRE (r.tau == Catch::Approx (100.0).epsilon (0.01));
+    REQUIRE (r.octaveTau < 0.0f);
+    REQUIRE (r.octaveRatio == 0.0f);
+}
+
+TEST_CASE ("nsdf: a weak rival reports its ratio but withholds the lag", "[nsdf]")
+{
+    // Present but unconvincing. The ratio is still published so a caller can show how
+    // close the call was; the lag is withheld so nothing corrects onto it.
+    const auto t = tableWithRival (0.70f);
+    const auto r = rbpitch::findNsdfPeak (t.data(), kGuardOn);
+
+    REQUIRE (r.octaveRatio == Catch::Approx (0.70f / 0.95f).epsilon (0.001));
+    REQUIRE (r.octaveRatio < rbpitch::kOctaveRivalRatio);
+    REQUIRE (r.octaveTau < 0.0f);
+}
+
+TEST_CASE ("nsdf: the octave rival search is off by default", "[nsdf]")
+{
+    // octaveRivalRatio defaults to 0, which skips the scan entirely — the guard costs
+    // nothing and reports nothing for users who never switch it on.
+    const auto t = tableWithRival (0.86f);
+    const auto r = rbpitch::findNsdfPeak (t.data(), { 16, 200 });
+
+    REQUIRE (r.tau == Catch::Approx (100.0).epsilon (0.01));
+    REQUIRE (r.octaveTau < 0.0f);
+    REQUIRE (r.octaveRatio == 0.0f);
+}
+
+TEST_CASE ("nsdf: an octave rival outside the walked region is not reported", "[nsdf]")
+{
+    // Chosen lag 34 puts half of it on top of minLag, so the rival window would read lags
+    // the walk never considered. Correcting onto one would report a pitch above the
+    // scanned band that this detector never validated.
+    std::vector<float> t (201, -0.5f);
+    t[33] = 0.60f; t[34] = 0.95f; t[35] = 0.60f;
+
+    const auto r = rbpitch::findNsdfPeak (t.data(), kGuardOn);
+    REQUIRE (r.tau == Catch::Approx (34.0).epsilon (0.01));
+    REQUIRE (r.octaveTau < 0.0f);
+    REQUIRE (r.octaveRatio == 0.0f);
+}
+
+TEST_CASE ("nsdf: a rising flank through the rival window is not a rival", "[nsdf]")
+{
+    // A broad run whose own peak (0.87) misses the key threshold, positioned so the rival
+    // window catches its flank rather than its top. Height alone would qualify it; the
+    // local-maximum test is what rejects it.
+    std::vector<float> t (201, -0.5f);
+    for (int tau = 45; tau <= 60; ++tau)
+        t[(size_t) tau] = 0.30f + 0.038f * (float) (tau - 45);
+    t[99] = 0.60f; t[100] = 0.95f; t[101] = 0.60f;
+
+    const auto r = rbpitch::findNsdfPeak (t.data(), kGuardOn);
+    REQUIRE (r.tau == Catch::Approx (100.0).epsilon (0.01));
+    REQUIRE (r.octaveTau < 0.0f);
+    REQUIRE (r.octaveRatio == 0.0f);
+}
+
+TEST_CASE ("nsdf: a rejected frame reports no octave rival", "[nsdf]")
+{
+    // Below the clarity gate: no lag is published, so there is no chosen octave for a
+    // rival to be relative to. The rival search sits after the gate for this reason.
+    std::vector<float> t (201, -0.5f);
+    t[99] = 0.40f; t[100] = 0.50f; t[101] = 0.40f;
+    t[49] = 0.30f; t[50] = 0.45f;  t[51] = 0.30f;
+
+    const auto r = rbpitch::findNsdfPeak (t.data(), kGuardOn);
+    REQUIRE (r.tau < 0.0f);
+    REQUIRE (r.octaveTau < 0.0f);
+    REQUIRE (r.octaveRatio == 0.0f);
+}
+
+TEST_CASE ("nsdf: the octave rival is found on a real octave-down waveform", "[nsdf]")
+{
+    // The synthetic version of the reported defect: a sawtooth whose every second period
+    // is attenuated. nsdf(T) is damped by the amplitude mismatch while nsdf(2T) compares
+    // like with like, so the walk skips the true period. AI stem separation produces the
+    // same shape through phase smearing and residual bleed.
+    //
+    // The attenuation is chosen, not arbitrary. NSDF normalises by the energy of both
+    // halves, so alternating by a factor a lands nsdf(T) near 2a / (1 + a^2): 0.7 gives
+    // ~0.94, which still clears the 0.93 key threshold and detects correctly. 0.6 gives
+    // ~0.88 — under the threshold (so the walk skips it) but over the rival ratio (so the
+    // guard can see it). That window, roughly 0.85 to 0.93, IS the set of octave errors
+    // this evidence can catch, and the test sits inside it deliberately.
+    const double freq   = midiToHz (60);
+    const double period = kDetectRate / freq;
+
+    auto wave = sawtooth (freq, 768);
+    for (int i = 0; i < (int) wave.size(); ++i)
+        if (((int) ((double) i / period)) % 2 == 1)
+            wave[(size_t) i] *= 0.6f;
+
+    const auto b    = rbpitch::lagBounds (kDetectRate, kLagBufCap);
+    const auto nsdf = nsdfOf (wave, b.maxLag);
+    const auto r    = rbpitch::findNsdfPeak (nsdf.data(),
+                                             { b.minLag, b.maxLag, 0.93f, 0.80f,
+                                               rbpitch::kOctaveRivalRatio });
+
+    REQUIRE (r.tau > 0.0f);
+    const double gotHz = kDetectRate / (double) r.tau;
+    INFO ("reported " << gotHz << " Hz, wanted " << freq
+          << " Hz, rival ratio " << r.octaveRatio);
+
+    // The pick is an octave low, and the rival recovers the true pitch.
+    REQUIRE (gotHz == Catch::Approx (freq / 2.0).epsilon (0.03));
+    REQUIRE (r.octaveTau > 0.0f);
+    REQUIRE (kDetectRate / (double) r.octaveTau == Catch::Approx (freq).epsilon (0.03));
+}
+
 // ─── Synthetic waveforms across the vocal range ───────────────────────────────
 
 TEST_CASE ("nsdf: mid-range vocal pitches detect accurately", "[nsdf]")

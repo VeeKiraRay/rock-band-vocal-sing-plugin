@@ -791,6 +791,20 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     };
     addAndMakeVisible (stemToggle);
 
+    // ── Analyse stem button (offline sweep → pitch trail) ─────────────────────
+    // Doubles as Cancel while a sweep runs. Enabled only with Stem mode on and the
+    // transport stopped, like the readout it shares a reader with.
+    analyseBtn.setTooltip ("Read the whole stem on this track and fill the pitch trail "
+                           "from it, without playing anything. Then press Save take to "
+                           "write it out as a reference MIDI.");
+    analyseBtn.setEnabled (false);
+    analyseBtn.onClick = [this]()
+    {
+        if (sweepActive) cancelStemSweep();
+        else             startStemSweep();
+    };
+    addAndMakeVisible (analyseBtn);
+
     setWantsKeyboardFocus (true);
 
     // Pitch detection fixed to MPM.
@@ -1036,12 +1050,7 @@ void RBVocalSingAudioProcessorEditor::saveCurrentTake()
     if (lastIsPlaying || ! api.isLoaded() || ! api.canExportTake())
         return;   // enablement prevents this; defensive against a stale click
 
-    const auto flash = [this] (const juce::String& msg)
-    {
-        flashMessage = msg;
-        flashUntil   = juce::Time::getMillisecondCounterHiRes() * 0.001 + 4.0;
-        repaint();
-    };
+    const auto flash = [this] (const juce::String& msg) { flashMsg (msg); };
 
     const auto notes = rbtake::segmentPitchTrail (pitchTrail);
     if (notes.empty())
@@ -1167,6 +1176,197 @@ bool RBVocalSingAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
     }
 
     return false;
+}
+
+// ─── Message-bar flash ────────────────────────────────────────────────────────
+// Shared by the take export and the stem sweep. Wall clock, like the octave chip hold:
+// this is feedback for a reader, so it belongs on the reader's clock rather than the
+// project's, and it participates in the idle-repaint gate so it both appears and expires
+// while the transport sits idle.
+
+void RBVocalSingAudioProcessorEditor::flashMsg (const juce::String& msg)
+{
+    flashMessage = msg;
+    flashUntil   = juce::Time::getMillisecondCounterHiRes() * 0.001 + 4.0;
+    repaint();
+}
+
+// ─── Offline stem sweep (whole track → pitch trail) ───────────────────────────
+// Reads the entire stem through the accessor and fills the pitch trail from it, so Save
+// take can write a reference MIDI with no playback and no singing. Same detector code as
+// the live path, deliberately: an offline sweep and a real-time pass over the same audio
+// must agree, which is what makes the exported notes trustworthy.
+//
+// Chunked across frames. A 4-minute stem is ~22k detections; a blocking loop would freeze
+// REAPER for the whole of it, and every REAPER call here has to stay on the message
+// thread anyway, so a background thread would buy nothing without a handoff.
+
+void RBVocalSingAudioProcessorEditor::startStemSweep()
+{
+    if (sweepActive)
+        return;
+
+    const auto& api = audioProcessor.reaperApi;
+    if (! api.canAnalyzeOffline() || lastIsPlaying)
+        return;
+
+    void* selfTrack = (audioProcessor.reaperHost != nullptr)
+                          ? audioProcessor.reaperHost->getReaperParent (1)
+                          : nullptr;
+    if (selfTrack == nullptr)
+    {
+        flashMsg ("Cannot find this plugin's own track.");
+        return;
+    }
+
+    if (! stemReader.isOpen() || stemReader.getTrack() != selfTrack)
+        if (! stemReader.open (api, selfTrack))
+        {
+            flashMsg ("Could not open this track's audio for reading.");
+            return;
+        }
+
+    stemReader.refresh();
+
+    const double rate = audioProcessor.getSampleRate();
+    if (rate <= 0.0)
+        return;
+
+    sweepStart = stemReader.startTime();
+    sweepEnd   = stemReader.endTime();
+
+    // Clamp against the song end. The accessor spans every item on the track, so a stray
+    // clip parked far down the timeline would otherwise turn a 4-minute stem into a scan
+    // of everything up to it. songEndTime is the EVENTS [end] marker, falling back to the
+    // last charted note — and it is read before the no-vocal-track bail precisely so this
+    // failsafe exists while charting from scratch.
+    const double songEnd = audioProcessor.songEndTime;
+    if (songEnd > 0.0)
+        sweepEnd = std::min (sweepEnd, songEnd);
+
+    if (sweepEnd <= sweepStart)
+    {
+        flashMsg ("No audio found on this track to analyse.");
+        return;
+    }
+
+    sweepPos = sweepStart;
+    sweepTrail.clear();
+
+    sweepDetector.prepare (rate);
+
+    // The live settings, unchanged — including the hold decay. Matching the live path
+    // exactly is the point: a hop whose gate is open but whose clarity was rejected
+    // publishes a held pitch, and the trail records it, so a different holdCycles here
+    // would make the swept trail disagree with a sung pass over the same stem.
+    rbpitch::DetectorParams p;
+    p.gateThreshold   = audioProcessor.gateThreshold.load   (std::memory_order_relaxed);
+    p.method          = audioProcessor.pitchMethod.load     (std::memory_order_relaxed);
+    p.octaveGuard     = audioProcessor.octaveGuard.load     (std::memory_order_relaxed);
+    p.octaveThreshold = audioProcessor.octaveThreshold.load (std::memory_order_relaxed);
+    sweepDetector.setParams (p);
+
+    sweepActive = true;
+    analyseBtn.setButtonText ("Cancel");
+    flashMsg ("Analysing stem...");
+}
+
+void RBVocalSingAudioProcessorEditor::advanceStemSweep()
+{
+    const double rate = audioProcessor.getSampleRate();
+    if (rate <= 0.0 || ! stemReader.isOpen())
+    {
+        cancelStemSweep();
+        return;
+    }
+
+    if (sweepScratch.size() < (size_t) kSweepChunk)
+        sweepScratch.resize ((size_t) kSweepChunk);
+
+    const double      ticksPerSec = (double) juce::Time::getHighResolutionTicksPerSecond();
+    const juce::int64 deadline    = juce::Time::getHighResolutionTicks()
+                                        + (juce::int64) (kSweepBudgetSec * ticksPerSec);
+
+    while (sweepPos < sweepEnd)
+    {
+        const double remaining = (sweepEnd - sweepPos) * rate;
+        const int    numRead   = (int) std::min ((double) kSweepChunk, std::ceil (remaining));
+        if (numRead <= 0)
+            break;
+
+        // A range with no audio (a gap between items) comes back as silence, which the
+        // detector reads as unvoiced and the trail records as a gap marker — so the
+        // segmenter ends a note there instead of smearing one across the gap.
+        const double chunkStart = sweepPos;
+        stemReader.readMono (chunkStart, rate, numRead, sweepScratch.data());
+
+        // The ring carries across chunks (no prepare() here), so hops flow continuously
+        // over the boundaries exactly as they would in one long read.
+        rbpitch::DetectorResult hop;
+        for (int i = 0; i < numRead; ++i)
+            if (sweepDetector.pushSample (sweepScratch[(size_t) i], hop))
+            {
+                // Raw project time, anchored at the window centre — the same correction
+                // processBlock applies. Raw keeps the export neutral about calibration,
+                // which is what lets the written MIDI line up with the waveform.
+                const double t = std::max (0.0, chunkStart + (double) i / rate
+                                                    - sweepDetector.windowCentreSeconds());
+
+                if (hop.aboveGate && hop.midiFloat >= 0.0f)
+                    sweepTrail.push_back ({ t, hop.midiFloat, hop.octaveRatio, hop.octaveDoubt });
+                else if (! sweepTrail.empty() && sweepTrail.back().pitch >= 0.0f)
+                    sweepTrail.push_back ({ t, -1.0f });
+            }
+
+        sweepPos = chunkStart + (double) numRead / rate;
+
+        if (juce::Time::getHighResolutionTicks() >= deadline)
+            break;
+    }
+
+    if (sweepPos >= sweepEnd)
+    {
+        finishStemSweep();
+        return;
+    }
+
+    const double span = sweepEnd - sweepStart;
+    const int    pct  = (span > 0.0)
+                          ? juce::jlimit (0, 99, (int) ((sweepPos - sweepStart) / span * 100.0))
+                          : 0;
+    flashMsg ("Analysing stem... " + juce::String (pct) + "%");
+}
+
+void RBVocalSingAudioProcessorEditor::finishStemSweep()
+{
+    sweepActive = false;
+    analyseBtn.setButtonText ("Analyse stem");
+
+    // Replaces whatever take was on screen: the sweep *is* the new take, and Save take
+    // operates on exactly what the highway shows.
+    pitchTrail = std::move (sweepTrail);
+    sweepTrail.clear();
+
+    size_t voiced = 0;
+    for (const auto& s : pitchTrail)
+        if (s.pitch >= 0.0f) ++voiced;
+
+    if (voiced == 0)
+        flashMsg ("Stem analysed - no pitch found. Check the Mic gate and the track audio.");
+    else
+        flashMsg ("Stem analysed - " + juce::String ((int) voiced)
+                  + " points. Press Save take to write the MIDI.");
+}
+
+void RBVocalSingAudioProcessorEditor::cancelStemSweep()
+{
+    if (! sweepActive)
+        return;
+
+    sweepActive = false;
+    sweepTrail.clear();          // a half-swept trail is not a take
+    analyseBtn.setButtonText ("Analyse stem");
+    flashMsg ("Stem analysis cancelled.");
 }
 
 // ─── Offline stem readout (cursor-follow) ─────────────────────────────────────
@@ -1404,6 +1604,18 @@ void RBVocalSingAudioProcessorEditor::onFrame()
                 }
             }
 
+            // A sweep is a stopped-transport operation: if playback starts underneath it
+            // the accessor reads would race the listener and the trail would be half swept,
+            // half sung. Abandon rather than blend.
+            if (sweepActive && lastIsPlaying)
+                cancelStemSweep();
+
+            const bool canSweep = stemMode
+                               && audioProcessor.reaperApi.canAnalyzeOffline()
+                               && ! lastIsPlaying;
+            if (canSweep != analyseBtn.isEnabled())
+                analyseBtn.setEnabled (canSweep);
+
             // Reads only when the cursor has actually moved, so parking costs nothing;
             // scrubbing costs one 150 ms analysis per poll tick. Deliberately inside the
             // poll gate rather than the frame loop — at 60 fps this would be three times
@@ -1419,6 +1631,11 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     {
         cachedPlayTime = audioProcessor.currentPlaybackTime.load (std::memory_order_relaxed);
     }
+
+    // The sweep runs every frame rather than on the poll gate: it is a bounded burst of
+    // work the user is waiting on, so it should finish as fast as the budget allows.
+    if (sweepActive)
+        advanceStemSweep();
 
     // Accumulate note-hit coverage and the pitch trail against this frame's final
     // play time.
@@ -1566,6 +1783,7 @@ void RBVocalSingAudioProcessorEditor::resized()
         editToggle.setBounds (8, statsTop + 2, 130, kEditRowH - 2);
         saveTakeBtn.setBounds (146, statsTop + 2, 90, kEditRowH - 2);
         stemToggle.setBounds (244, statsTop + 2, 70, kEditRowH - 2);
+        analyseBtn.setBounds (322, statsTop + 2, 104, kEditRowH - 2);
     }
 }
 

@@ -112,6 +112,31 @@ private:
     // the last hop into detHistory. Called from the poll gate, not every frame.
     void updateStemReadout();
 
+    // Batch sweep: reads the whole stem offline and fills the pitch trail, so Save take
+    // can write a reference MIDI with no playback and no singing at all. Chunked across
+    // frames rather than run in one go — a 4-minute stem is ~22k detections, and a
+    // blocking loop would freeze REAPER for the duration.
+    juce::TextButton analyseBtn { "Analyse stem" };
+    void startStemSweep();
+    void advanceStemSweep();
+    void cancelStemSweep();
+    void finishStemSweep();
+
+    bool   sweepActive { false };
+    double sweepStart  { 0.0 };   // project seconds: where the sweep began
+    double sweepPos    { 0.0 };   // project seconds: next sample to read
+    double sweepEnd    { 0.0 };   // project seconds: clamped against songEndTime
+    rbpitch::Detector        sweepDetector;   // a third instance, independent of both others
+    std::vector<TrailSample> sweepTrail;      // swapped into pitchTrail on completion
+    std::vector<float>       sweepScratch;
+
+    static constexpr int    kSweepChunk     = 8192;   // samples read per accessor call
+    static constexpr double kSweepBudgetSec = 0.020;  // work per frame; the rest is REAPER's
+
+    // Message-bar flash, shared by the take export and the sweep (4 s, outranks
+    // chartStatus and the frame-drop warning).
+    void flashMsg (const juce::String& msg);
+
     rbstem::AudioReader stemReader;    // one accessor, held open across frames
     rbpitch::Detector   stemDetector;  // separate instance: never shares the live state
     std::vector<float>  stemScratch;   // read buffer, reused between reads

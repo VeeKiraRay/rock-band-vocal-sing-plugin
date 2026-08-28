@@ -378,6 +378,24 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   `lastPaintHeardPitch` joined the idle-repaint gate for the same reason the mode exists:
   nothing reaches the audio thread while stopped, so `currentMidiFloat` never moves while
   the readout changes at every cursor position.
+- **Stem sweep** (**Analyse stem** button beside the Stem toggle): reads the whole stem
+  offline and fills `pitchTrail` from it, so **Save take works unchanged** and writes a
+  reference MIDI with no playback and no singing. Runs on a third `rbpitch::Detector`
+  (`sweepDetector`) configured with the **live settings including the hold decay** — an
+  offline sweep and a real-time pass over the same audio must agree, and a hop whose gate
+  is open but whose clarity was rejected publishes a held pitch that the trail records,
+  so a different `holdCycles` here would silently diverge the two. Trail samples are raw
+  project time anchored at the window centre, like the live path.
+  Sweep bound: `min(accessorEnd, songEndTime)` — the accessor spans every item on the
+  track, so a stray clip far down the timeline would otherwise scan everything up to it.
+  **Both loaders now read the EVENTS `[end]` marker before their no-vocal-track early
+  return**, since charting from scratch is exactly the case with no PART VOCALS track and
+  the failsafe was previously unavailable there.
+  Chunked across `onFrame()` at `kSweepBudgetSec` (20 ms) per frame with a percentage in
+  the message bar and the button doubling as Cancel: a 4-minute stem is ~22k detections,
+  and every REAPER call has to stay on the message thread, so a blocking loop would
+  freeze the host and a background thread would buy nothing without a handoff. Playback
+  starting mid-sweep abandons it rather than blending a half-swept, half-sung trail.
 
 ---
 

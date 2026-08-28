@@ -328,6 +328,32 @@ TEST_CASE ("chartloader solo: songEndTime from [end] event on EVENTS track, trim
     REQUIRE (proc.songEndTime == Catch::Approx (180.0).margin (0.001));
 }
 
+TEST_CASE ("chartloader solo: songEndTime is read even with no PART VOCALS track",
+           "[chartloader][solo]")
+{
+    // The stem analyzer clamps its offline sweep against songEndTime so a stray clip far
+    // down the timeline cannot turn a 4-minute stem into a scan of everything up to it.
+    // Charting from scratch is exactly the case with no vocal track yet, so the [end] read
+    // has to happen before the no-vocal-track bail - it used to sit after it, which left
+    // the failsafe missing precisely when it mattered.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence events;
+    addEndMarker (events, 240.0, "[end]");
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "GUITAR", juce::MidiMessageSequence{} },
+                                              { "EVENTS", events } });
+    proc.loadMidiFile (file);
+
+    // The load still fails as far as the chart is concerned...
+    REQUIRE (proc.getChartNotes().empty());
+    REQUIRE (proc.chartStatus.contains ("No 'PART VOCALS' track found"));
+    // ...but the sweep bound survives it.
+    REQUIRE (proc.songEndTime == Catch::Approx (240.0).margin (0.001));
+}
+
 TEST_CASE ("chartloader solo: songEndTime fallback uses max end time, not last-starting note (2026-07 code review, 1.4)",
            "[chartloader][solo]")
 {

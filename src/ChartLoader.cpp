@@ -336,6 +336,48 @@ void RBVocalSingAudioProcessor::readChartFromReaper()
             eventsTrack = track;
     }
 
+    // Read the EVENTS [end] marker BEFORE the no-vocal-track bail below.
+    // songEndTime is not only the chart's own business: the stem analyzer clamps its
+    // sweep against it, so a stray clip far down the timeline cannot turn a 4-minute
+    // stem into a scan of everything up to it. Charting from scratch is exactly the
+    // case with no PART VOCALS track yet, so reading this after the early return left
+    // the failsafe unavailable precisely when it was needed.
+    // Read [end] event from EVENTS track for total song duration
+    if (eventsTrack != nullptr)
+    {
+        const int numEvItems = reaperApi.CountTrackMediaItems (eventsTrack);
+        char evBuf[256];
+        bool foundEnd = false;
+        for (int i = 0; i < numEvItems && !foundEnd; ++i)
+        {
+            void* item = reaperApi.GetTrackMediaItem (eventsTrack, i);
+            if (!item) continue;
+            void* take = reaperApi.GetActiveTake (item);
+            if (!take || !reaperApi.TakeIsMIDI (take)) continue;
+
+            int notecnt = 0, cccnt = 0, txtsyxcnt = 0;
+            reaperApi.MIDI_CountEvts (take, &notecnt, &cccnt, &txtsyxcnt);
+
+            for (int s = 0; s < txtsyxcnt && !foundEnd; ++s)
+            {
+                bool   sel = false, mute = false;
+                double ppq = 0.0;
+                int    type = 0, msgLen = (int) sizeof (evBuf) - 1;
+                evBuf[0] = '\0';
+                if (reaperApi.MIDI_GetTextSysexEvt (take, s, &sel, &mute, &ppq, &type, evBuf, &msgLen)
+                    && (type == 1 || type == 5) && msgLen > 0)
+                {
+                    evBuf[msgLen] = '\0';
+                    if (juce::String (evBuf).trim() == "[end]")
+                    {
+                        songEndTime = reaperApi.MIDI_GetProjTimeFromPPQPos (take, ppq);
+                        foundEnd = true;
+                    }
+                }
+            }
+        }
+    }
+
     if (mainTrack == nullptr)
     {
         chartStatus = (harmonies ? "No 'HARM1' track found."
@@ -375,41 +417,6 @@ void RBVocalSingAudioProcessor::readChartFromReaper()
         parseTrack (harm3Track, VocalPart::Harm3, false, nullptr, nullptr);
     }
 
-    // Read [end] event from EVENTS track for total song duration
-    if (eventsTrack != nullptr)
-    {
-        const int numEvItems = reaperApi.CountTrackMediaItems (eventsTrack);
-        char evBuf[256];
-        bool foundEnd = false;
-        for (int i = 0; i < numEvItems && !foundEnd; ++i)
-        {
-            void* item = reaperApi.GetTrackMediaItem (eventsTrack, i);
-            if (!item) continue;
-            void* take = reaperApi.GetActiveTake (item);
-            if (!take || !reaperApi.TakeIsMIDI (take)) continue;
-
-            int notecnt = 0, cccnt = 0, txtsyxcnt = 0;
-            reaperApi.MIDI_CountEvts (take, &notecnt, &cccnt, &txtsyxcnt);
-
-            for (int s = 0; s < txtsyxcnt && !foundEnd; ++s)
-            {
-                bool   sel = false, mute = false;
-                double ppq = 0.0;
-                int    type = 0, msgLen = (int) sizeof (evBuf) - 1;
-                evBuf[0] = '\0';
-                if (reaperApi.MIDI_GetTextSysexEvt (take, s, &sel, &mute, &ppq, &type, evBuf, &msgLen)
-                    && (type == 1 || type == 5) && msgLen > 0)
-                {
-                    evBuf[msgLen] = '\0';
-                    if (juce::String (evBuf).trim() == "[end]")
-                    {
-                        songEndTime = reaperApi.MIDI_GetProjTimeFromPPQPos (take, ppq);
-                        foundEnd = true;
-                    }
-                }
-            }
-        }
-    }
     finalizeChart (std::move (notes), std::move (shiftMarkers), minP, maxP);
 
     if (harmonies)
@@ -584,6 +591,24 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
         }
     }
 
+    // Read the [end] marker before the no-vocal-track bail, for the same reason as the
+    // REAPER path above: songEndTime is the stem analyzer's sweep bound, and charting
+    // from scratch is exactly the case with no PART VOCALS track yet.
+    // Read [end] event from EVENTS track for total song duration
+    if (eventsIdx >= 0)
+    {
+        const auto* seq = midi.getTrack (eventsIdx);
+        for (int i = 0; i < seq->getNumEvents(); ++i)
+        {
+            const auto& msg = seq->getEventPointer (i)->message;
+            if (msg.isTextMetaEvent() && msg.getTextFromTextMetaEvent().trim() == "[end]")
+            {
+                songEndTime = msg.getTimeStamp();  // already in seconds (convertTimestampTicksToSeconds called)
+                break;
+            }
+        }
+    }
+
     if (mainIdx < 0)
     {
         chartStatus = (harmonies ? "No 'HARM1' track found in:\n"
@@ -681,20 +706,6 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
         parseSeq (harm3Idx, VocalPart::Harm3, false, nullptr, nullptr);
     }
 
-    // Read [end] event from EVENTS track for total song duration
-    if (eventsIdx >= 0)
-    {
-        const auto* seq = midi.getTrack (eventsIdx);
-        for (int i = 0; i < seq->getNumEvents(); ++i)
-        {
-            const auto& msg = seq->getEventPointer (i)->message;
-            if (msg.isTextMetaEvent() && msg.getTextFromTextMetaEvent().trim() == "[end]")
-            {
-                songEndTime = msg.getTimeStamp();  // already in seconds (convertTimestampTicksToSeconds called)
-                break;
-            }
-        }
-    }
     finalizeChart (std::move (notes), std::move (shiftMarkers), minP, maxP);
 
     chartStatus = "Loaded " + juce::String ((int) chartNotes.size())

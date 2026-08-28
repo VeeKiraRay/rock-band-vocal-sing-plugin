@@ -65,6 +65,9 @@ rock-band-vocal-sing-plugin/          (repo root)
     PitchDetection.cpp            — rbpitch::Detector implementation + Autocorrelation/YIN/MPM
     ChartLoader.cpp               — readChartFromReaper / loadMidiFile / parseChartNotes +
                                     MIDI-text decode, pitch sections, harmony post-passes
+    StemAudioReader.h / .cpp      — rbstem::AudioReader: RAII wrapper over one REAPER
+                                    AudioAccessor, reading a track's item audio at any
+                                    project time with no transport running
     TakeExport.h / .cpp           — rbtake::segmentPitchTrail: pure pitch-trail → MIDI-note
                                     segmentation (JUCE-free; unit-tested directly)
     HighwayRange.h                — rbhighway::visibleRange: pure pitch-axis rules (pad,
@@ -132,7 +135,9 @@ Editor onFrame() — VBlankAttachment, ≈ display refresh
 pointers loaded from `IReaperHostApplication::getReaperApi()`; the inner
 `Vst3Ext : VST3ClientExtensions` overrides `setIHostApplication` to do the load.
 `reaperApi.canEdit()` additionally checks the write-side pointers (note editing), and
-`canExportTake()` the take-export set on top of that. The processor also **retains the
+`canExportTake()` the take-export set on top of that; `canAnalyzeOffline()` covers the
+AudioAccessor set and is independent of the write side, since reading a stem needs no
+write access at all. The processor also **retains the
 host interface** (`reaperHost`, add-ref'd at handover, released in the destructor) so
 the plugin's own `MediaTrack*` can be queried at point of use via `getReaperParent(1)`
 — a handover-time capture comes back null because the FX isn't attached to its track
@@ -425,7 +430,10 @@ Catch2 unit tests (`RBVocalSingTests` target, `tests/*.cpp`) exercise the proces
 public API directly — pitch detection, chart loading (Solo + Harmonies), settings
 persistence — plus the take-export segmenter (pure functions in `src/TakeExport.h`,
 tested without any plugin scaffolding) and the highway pitch-axis rules
-(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`) and the extracted
+(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the offline stem
+reader (`tests/StemAudioReaderTests.cpp`, driven through a fake REAPER API — the
+null-guards, accessor lifetime and double-to-float read path are all checkable without
+REAPER, but the function-pointer *signatures* are not) and the extracted
 detection front end (`tests/PitchDetectorTests.cpp`, which pins a standalone
 `rbpitch::Detector` bit-for-bit against the `processBlock` path — if those ever diverge, an
 offline stem sweep would disagree with a real-time pass over the same audio). Piece A is

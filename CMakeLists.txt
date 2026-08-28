@@ -56,6 +56,7 @@ target_sources(RBVocalSing
         src/NsdfPeak.cpp
         src/ChartLoader.cpp
         src/TakeExport.cpp
+        src/StemAudioReader.cpp
         src/PluginEditor.cpp
         src/PluginEditorHighway.cpp
         src/PluginEditorLyrics.cpp
@@ -94,12 +95,14 @@ if (RBVS_BUILD_TESTS)
             src/NsdfPeak.cpp
             src/ChartLoader.cpp
             src/TakeExport.cpp
+            src/StemAudioReader.cpp
             src/PluginEditor.cpp
             src/PluginEditorHighway.cpp
             src/PluginEditorLyrics.cpp
             tests/TestMain.cpp
             tests/PitchDetectionTests.cpp
             tests/PitchDetectorTests.cpp
+            tests/StemAudioReaderTests.cpp
             tests/DetectionLatencyTests.cpp
             tests/NsdfPeakTests.cpp
             tests/ChartLoaderTests.cpp

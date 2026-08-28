@@ -12,6 +12,12 @@
 //        namespace reaper { using namespace Steinberg; DEF_CLASS_IID(IReaperHostApplication) }
 //   3. Call reaperApi.isLoaded() before using any function pointer.
 
+// JuceHeader for the JUCE_*_IGNORE_WARNINGS macros below and for the VST3 SDK headers
+// JUCE bundles. Included here rather than assumed: until StemAudioReader.h this file
+// was only ever reached through PluginProcessor.h, which includes JUCE first, so the
+// dependency was real but invisible.
+#include <JuceHeader.h>
+
 JUCE_BEGIN_IGNORE_WARNINGS_MSVC (4100)
 JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wzero-as-null-pointer-constant", "-Wnon-virtual-dtor")
 
@@ -96,6 +102,31 @@ struct ReaperApi
     void   (*UpdateArrange)               ()                                      = nullptr;
     void   (*TrackList_AdjustWindows)     (bool isMinor)                          = nullptr;
 
+    // ── Offline audio read (stem analyzer) ────────────────────────────────────
+    // Reads a track's media-item audio at any project time with no transport running.
+    // Message thread only, like the rest of this struct.
+    //
+    // Two properties that decide how a reading should be read: a *track* accessor sees
+    // the media items only, so it is PRE track FX, and it is indexed in project time, so
+    // the play rate cannot affect it.
+    //
+    // GetAudioAccessorSamples writes **doubles**, interleaved across numchannels, and
+    // returns 0 when the requested range holds no audio at all. As with the take-export
+    // pointers above, these signatures are transcribed from the REAPER API and must match
+    // exactly: a wrong name resolves to nullptr and is caught by canAnalyzeOffline(), but
+    // a wrong *signature* is not caught by anything.
+    void*  (*CreateTrackAudioAccessor)   (void* track)                           = nullptr;
+    void   (*DestroyAudioAccessor)       (void* accessor)                        = nullptr;
+    int    (*GetAudioAccessorSamples)    (void* accessor, int samplerate, int numchannels,
+                                          double starttime_sec, int numsamplesperchannel,
+                                          double* samplebuffer)                  = nullptr;
+    double (*GetAudioAccessorStartTime)  (void* accessor)                        = nullptr;
+    double (*GetAudioAccessorEndTime)    (void* accessor)                        = nullptr;
+    bool   (*AudioAccessorValidateState) (void* accessor)                        = nullptr;
+    // Forces a reload from the underlying media. Not gated by canAnalyzeOffline() —
+    // null-guard at the call site, like UpdateArrange.
+    void   (*AudioAccessorUpdate)        (void* accessor)                        = nullptr;
+
     bool isLoaded() const { return CountTracks != nullptr; }
 
     // True when every write-side pointer resolved (older REAPER → read-only).
@@ -114,6 +145,16 @@ struct ReaperApi
             && GetMediaTrackInfo_Value != nullptr && CreateNewMIDIItemInProj != nullptr
             && MIDI_InsertNote != nullptr && MIDI_Sort != nullptr
             && MIDI_GetPPQPosFromProjTime != nullptr;
+    }
+
+    // True when the offline audio-read set fully resolved. Independent of canEdit():
+    // reading a stem needs no write access at all. The caller must additionally have a
+    // track to read, which on the plugin path means a non-null retained host interface.
+    bool canAnalyzeOffline() const
+    {
+        return CreateTrackAudioAccessor   != nullptr && DestroyAudioAccessor      != nullptr
+            && GetAudioAccessorSamples    != nullptr && GetAudioAccessorStartTime != nullptr
+            && GetAudioAccessorEndTime    != nullptr && AudioAccessorValidateState != nullptr;
     }
 
     void load (reaper::IReaperHostApplication* app)
@@ -151,6 +192,13 @@ struct ReaperApi
         RLOAD (MIDI_GetPPQPosFromProjTime);
         RLOAD (UpdateArrange);
         RLOAD (TrackList_AdjustWindows);
+        RLOAD (CreateTrackAudioAccessor);
+        RLOAD (DestroyAudioAccessor);
+        RLOAD (GetAudioAccessorSamples);
+        RLOAD (GetAudioAccessorStartTime);
+        RLOAD (GetAudioAccessorEndTime);
+        RLOAD (AudioAccessorValidateState);
+        RLOAD (AudioAccessorUpdate);
         #undef RLOAD
     }
 };

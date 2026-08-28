@@ -77,6 +77,7 @@ private:
     juce::TextButton lyricStaticBtn { "Static" };
 
     juce::TextButton settingsButton { "Settings" };
+    juce::TextButton advancedButton { "Advanced" };
     juce::TextButton rewindBtn      { "<<" };
     juce::TextButton forwardBtn     { ">>" };
 
@@ -419,7 +420,8 @@ private:
     juce::int64   lastHopRateTicks  { 0 };
 
     static constexpr int   kWindowW   = 600;
-    static constexpr int   kControlsH = 40;   // 1 row: three equal thirds
+    static constexpr int   kControlsRowH = 40;                  // one row of buttons
+    static constexpr int   kControlsH    = 2 * kControlsRowH;   // row 1 + row 2
     static constexpr int   kEditRowH  = 22;   // edit-toggle row at the top of the stats band
     static constexpr int   kStatsH    = 70 + kEditRowH;  // edit-toggle row + time/pitch/light row
     static constexpr int   kStatusH   = 22;   // fps / priority / renderer info bar
@@ -429,7 +431,10 @@ private:
     static constexpr double kNoteLookback = 5.0;  // seconds
     // Solo base height; Harmonies adds a second (top) lyric strip. The +kEditRowH keeps
     // the highway height unchanged now that the stats band grew by the edit-toggle row.
-    static constexpr int   kWindowBaseH   = 375 + kMessageH + kEditRowH;  // kControlsH + kStatusH + kMessageH + kStatsH + kLyricBaseH + highway, at 100% lyric scale
+    // The + kControlsRowH keeps the highway the same height now that the controls band
+    // is two rows: getHighwayArea() subtracts the whole band, so growing one without the
+    // other silently shrinks the highway.
+    static constexpr int   kWindowBaseH   = 375 + kMessageH + kEditRowH + kControlsRowH;  // kControlsH + kStatusH + kMessageH + kStatsH + kLyricBaseH + highway, at 100% lyric scale
     // Strip and window heights are computed from lyricScale (2026-07 lyrics-size work): the
     // strips scale and the default window height follows, keeping the highway height
     // constant. At 100% these equal the old kLyricH / kWindowH / kWindowHHarm values.

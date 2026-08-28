@@ -110,7 +110,59 @@ namespace settingsLayout
     constexpr int sectionH (int rows) { return kHdrH + kHdrGap + rows * (kRowH + kRowGap); }
 }
 
-class SettingsPanel : public juce::Component
+// Styling shared by the Settings and Advanced popups. A base class rather than free
+// functions purely so the call sites do not change: both panels build rows the same way,
+// and the point of sharing is that they cannot drift apart visually.
+class PanelBase : public juce::Component
+{
+public:
+    // Both popups paint their own opaque background. Without it the CallOutBox draws its
+    // own lighter, rounded backdrop instead and the panel looks like a different plugin —
+    // which is what happened to the Advanced panel before this moved here from
+    // SettingsPanel (2026-08-28).
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (juce::Colour (0xff1e1e1e));
+    }
+
+protected:
+    void setupHeader (juce::Label& lbl, const juce::String& text)
+    {
+        lbl.setText (text, juce::dontSendNotification);
+        lbl.setFont (juce::Font (11.0f, juce::Font::bold));
+        lbl.setColour (juce::Label::textColourId, juce::Colour (0xffcc8844));
+        lbl.setJustificationType (juce::Justification::centredLeft);
+        addAndMakeVisible (lbl);
+    }
+
+    void setupLabel (juce::Label& lbl, const juce::String& text,
+                     const juce::String& tooltip = {})
+    {
+        lbl.setText (text, juce::dontSendNotification);
+        lbl.setFont (juce::Font (15.0f));
+        lbl.setColour (juce::Label::textColourId, juce::Colour (0xffaaaaaa));
+        lbl.setJustificationType (juce::Justification::centredRight);
+        if (tooltip.isNotEmpty()) lbl.setTooltip (tooltip);
+        addAndMakeVisible (lbl);
+    }
+
+    void setupToggle (juce::ToggleButton& btn, bool state, const juce::String& tip)
+    {
+        btn.setButtonText ("");
+        btn.setToggleState (state, juce::dontSendNotification);
+        btn.setTooltip (tip);
+        addAndMakeVisible (btn);
+    }
+
+    static void styleCombo (juce::ComboBox& cb)
+    {
+        cb.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff2a2a2a));
+        cb.setColour (juce::ComboBox::textColourId,       juce::Colours::white);
+        cb.setColour (juce::ComboBox::arrowColourId,      juce::Colours::lightgrey);
+    }
+};
+
+class SettingsPanel : public PanelBase
 {
 public:
     struct Callbacks
@@ -435,11 +487,6 @@ public:
         }
     }
 
-    void paint (juce::Graphics& g) override
-    {
-        g.fillAll (juce::Colour (0xff1e1e1e));
-    }
-
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
@@ -451,41 +498,6 @@ public:
                             + settingsLayout::kSecGap + settingsLayout::sectionH (6);
 
 private:
-    void setupHeader (juce::Label& lbl, const juce::String& text)
-    {
-        lbl.setText (text, juce::dontSendNotification);
-        lbl.setFont (juce::Font (11.0f, juce::Font::bold));
-        lbl.setColour (juce::Label::textColourId, juce::Colour (0xffcc8844));
-        lbl.setJustificationType (juce::Justification::centredLeft);
-        addAndMakeVisible (lbl);
-    }
-
-    void setupLabel (juce::Label& lbl, const juce::String& text,
-                     const juce::String& tooltip = {})
-    {
-        lbl.setText (text, juce::dontSendNotification);
-        lbl.setFont (juce::Font (15.0f));
-        lbl.setColour (juce::Label::textColourId, juce::Colour (0xffaaaaaa));
-        lbl.setJustificationType (juce::Justification::centredRight);
-        if (tooltip.isNotEmpty()) lbl.setTooltip (tooltip);
-        addAndMakeVisible (lbl);
-    }
-
-    void setupToggle (juce::ToggleButton& btn, bool state, const juce::String& tip)
-    {
-        btn.setButtonText ("");
-        btn.setToggleState (state, juce::dontSendNotification);
-        btn.setTooltip (tip);
-        addAndMakeVisible (btn);
-    }
-
-    static void styleCombo (juce::ComboBox& cb)
-    {
-        cb.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff2a2a2a));
-        cb.setColour (juce::ComboBox::textColourId,       juce::Colours::white);
-        cb.setColour (juce::ComboBox::arrowColourId,      juce::Colours::lightgrey);
-    }
-
     RBVocalSingAudioProcessor& proc;
     Callbacks                  cbs;
 
@@ -530,14 +542,14 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsPanel)
 };
 
-// Wraps the SettingsPanel in a vertical-scroll viewport sized to the space the editor
+// Wraps a settings popup in a vertical-scroll viewport sized to the space the editor
 // can offer: when the panel fits, this renders identically to the bare panel (no
 // scrollbar, same size); when it doesn't (small window, or the panel outgrew the
 // default height as settings rows were added), it scrolls instead of clipping.
 class SettingsScroller : public juce::Component
 {
 public:
-    SettingsScroller (std::unique_ptr<SettingsPanel> panel, int maxHeight)
+    SettingsScroller (std::unique_ptr<juce::Component> panel, int maxHeight)
     {
         const int panelW = panel->getWidth();
         const int panelH = panel->getHeight();
@@ -556,6 +568,215 @@ private:
     juce::Viewport viewport;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsScroller)
+};
+
+// ─── Advanced popup ───────────────────────────────────────────────────────────
+// Expert detection and segmentation tuning, behind a master switch that is off by
+// default. Separate from Settings for two reasons: these can make detection worse, and
+// the Settings panel's height is a hand-maintained row count that four more rows would
+// push into permanent scrolling.
+//
+// Unlike SettingsPanel this needs no Callbacks struct — every value it edits lives on the
+// processor as an atomic, so it reads and writes them directly.
+
+class AdvancedPanel : public PanelBase
+{
+public:
+    explicit AdvancedPanel (RBVocalSingAudioProcessor& p) : proc (p)
+    {
+        using namespace settingsLayout;
+
+        static const juce::String kTipEnable =
+            "Master switch for everything below. While this is off the plugin uses its "
+            "standard, tested detection settings no matter what the sliders say.";
+        static const juce::String kTipRestore =
+            "Put the sliders below back to the values the plugin ships with. Leaves the "
+            "switch above alone.";
+        static const juce::String kTipClarity =
+            "How clean a sound has to be before it counts as a sung note. Lower lets more "
+            "through - breathy notes and consonants - at the cost of more false pitches. "
+            "Raise it if a rough stem produces spikes between words.";
+        static const juce::String kTipMinNote =
+            "Shortest note the take export will keep. Lower it to catch fast syllables; "
+            "raise it to drop detection blips.";
+        static const juce::String kTipGapMerge =
+            "Gaps shorter than this inside a held note are bridged instead of splitting it. "
+            "Raise it if consonants are breaking one word into several notes.";
+        static const juce::String kTipSplit =
+            "How far the pitch must move before the export starts a new note. Lower splits "
+            "more readily; raise it to keep vibrato as one note.";
+
+        setupHeader (advHeader, "ADVANCED TUNING");
+
+        noteLabel.setText ("Expert controls for rough audio. Nothing here applies until "
+                           "the switch below is on.",
+                           juce::dontSendNotification);
+        noteLabel.setFont (juce::Font (15.0f));
+        noteLabel.setColour (juce::Label::textColourId, juce::Colour (0xffaaaaaa));
+        noteLabel.setJustificationType (juce::Justification::topLeft);
+        addAndMakeVisible (noteLabel);
+
+        setupLabel (enableLabel, "Enable advanced tuning", kTipEnable);
+        setupToggle (enableToggle,
+                     proc.advTuningEnabled.load (std::memory_order_relaxed), kTipEnable);
+        enableToggle.onClick = [this]
+        {
+            proc.advTuningEnabled.store (enableToggle.getToggleState(),
+                                         std::memory_order_relaxed);
+            refreshEnablement();
+        };
+
+        setupLabel (restoreLabel, "Defaults", kTipRestore);
+        restoreBtn.setButtonText ("Restore");
+        // Same colours as the Load MIDI File button in Settings - the only other
+        // TextButton living inside a popup.
+        restoreBtn.setColour (juce::TextButton::buttonColourId,  juce::Colour (0xff2a2a2a));
+        restoreBtn.setColour (juce::TextButton::textColourOffId, juce::Colours::lightgrey);
+        restoreBtn.setTooltip (kTipRestore);
+        restoreBtn.onClick = [this]
+        {
+            proc.restoreAdvancedDefaults();
+            pullFromProcessor();
+        };
+        addAndMakeVisible (restoreBtn);
+
+        // Clarity as a percentage, matching how Octave Threshold presents its 0-1 ratio.
+        setupLabel (clarityLabel, "Clarity Gate", kTipClarity);
+        claritySlider.setSliderStyle (juce::Slider::IncDecButtons);
+        claritySlider.setRange (50, 95, 5);
+        claritySlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        claritySlider.setTextValueSuffix (" %");
+        claritySlider.setTooltip (kTipClarity);
+        claritySlider.onValueChange = [this]
+        {
+            proc.advClarityThreshold.store ((float) (claritySlider.getValue() / 100.0),
+                                            std::memory_order_relaxed);
+        };
+        addAndMakeVisible (claritySlider);
+
+        setupLabel (minNoteLabel, "Min Note Length", kTipMinNote);
+        minNoteSlider.setSliderStyle (juce::Slider::IncDecButtons);
+        minNoteSlider.setRange (20, 500, 10);
+        minNoteSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        minNoteSlider.setTextValueSuffix (" ms");
+        minNoteSlider.setTooltip (kTipMinNote);
+        minNoteSlider.onValueChange = [this]
+        {
+            proc.advMinNoteLen.store (minNoteSlider.getValue() / 1000.0,
+                                      std::memory_order_relaxed);
+        };
+        addAndMakeVisible (minNoteSlider);
+
+        setupLabel (gapLabel, "Gap Merge", kTipGapMerge);
+        gapSlider.setSliderStyle (juce::Slider::IncDecButtons);
+        gapSlider.setRange (0, 500, 10);
+        gapSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        gapSlider.setTextValueSuffix (" ms");
+        gapSlider.setTooltip (kTipGapMerge);
+        gapSlider.onValueChange = [this]
+        {
+            proc.advMaxGapMerge.store (gapSlider.getValue() / 1000.0,
+                                       std::memory_order_relaxed);
+        };
+        addAndMakeVisible (gapSlider);
+
+        setupLabel (splitLabel, "Split Hysteresis", kTipSplit);
+        splitSlider.setSliderStyle (juce::Slider::IncDecButtons);
+        splitSlider.setRange (0.10, 2.00, 0.05);
+        splitSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        splitSlider.setNumDecimalPlacesToDisplay (2);
+        splitSlider.setTextValueSuffix (" st");
+        splitSlider.setTooltip (kTipSplit);
+        splitSlider.onValueChange = [this]
+        {
+            proc.advSplitHysteresis.store (splitSlider.getValue(), std::memory_order_relaxed);
+        };
+        addAndMakeVisible (splitSlider);
+
+        pullFromProcessor();
+        setSize (kW, kH);
+    }
+
+    ~AdvancedPanel() override = default;
+
+    static constexpr int kW = 360;
+    // Header + note line + 6 rows (enable, restore, and the four values), padded.
+    static constexpr int kH = 2 * settingsLayout::kPad
+                            + settingsLayout::kHdrH + settingsLayout::kHdrGap
+                            + 2 * settingsLayout::kRowH + settingsLayout::kRowGap  // note, 2 lines
+                            + 6 * (settingsLayout::kRowH + settingsLayout::kRowGap);
+
+    void resized() override
+    {
+        using namespace settingsLayout;
+
+        auto area      = getLocalBounds().reduced (kPad);
+        const int w    = area.getWidth();
+        const int lblW = w * 42 / 100;
+        const int ctrlW = w - lblW - kLblGap;
+
+        auto layoutRow = [&] (juce::Label& lbl, juce::Component& ctrl, int ctrlWOvr = -1)
+        {
+            auto row = area.removeFromTop (kRowH);
+            lbl.setBounds (row.removeFromLeft (lblW));
+            row.removeFromLeft (kLblGap);
+            ctrl.setBounds (row.removeFromLeft (ctrlWOvr > 0 ? ctrlWOvr : ctrlW));
+            area.removeFromTop (kRowGap);
+        };
+
+        advHeader.setBounds (area.removeFromTop (kHdrH));
+        area.removeFromTop (kHdrGap);
+
+        noteLabel.setBounds (area.removeFromTop (2 * kRowH));
+        area.removeFromTop (kRowGap);
+
+        layoutRow (enableLabel,  enableToggle, 24);
+        layoutRow (restoreLabel, restoreBtn,   90);
+        layoutRow (clarityLabel, claritySlider);
+        layoutRow (minNoteLabel, minNoteSlider);
+        layoutRow (gapLabel,     gapSlider);
+        layoutRow (splitLabel,   splitSlider);
+    }
+
+private:
+    // Reads every value back out of the processor. Used at construction and after
+    // Restore, which changes the processor values behind the sliders.
+    void pullFromProcessor()
+    {
+        claritySlider.setValue (juce::roundToInt (
+                                   proc.advClarityThreshold.load (std::memory_order_relaxed) * 100.0f),
+                                juce::dontSendNotification);
+        minNoteSlider.setValue (proc.advMinNoteLen.load (std::memory_order_relaxed) * 1000.0,
+                                juce::dontSendNotification);
+        gapSlider.setValue     (proc.advMaxGapMerge.load (std::memory_order_relaxed) * 1000.0,
+                                juce::dontSendNotification);
+        splitSlider.setValue   (proc.advSplitHysteresis.load (std::memory_order_relaxed),
+                                juce::dontSendNotification);
+        refreshEnablement();
+    }
+
+    // The sliders grey out while the switch is off, so "does nothing until enabled" is
+    // visible rather than something the user has to read and remember. Restore stays
+    // live: resetting before switching on is a reasonable thing to want.
+    void refreshEnablement()
+    {
+        const bool on = proc.advTuningEnabled.load (std::memory_order_relaxed);
+        claritySlider.setEnabled (on);
+        minNoteSlider.setEnabled (on);
+        gapSlider.setEnabled     (on);
+        splitSlider.setEnabled   (on);
+    }
+
+    RBVocalSingAudioProcessor& proc;
+
+    juce::Label        advHeader, noteLabel;
+    juce::Label        enableLabel,  restoreLabel, clarityLabel,
+                       minNoteLabel, gapLabel,     splitLabel;
+    juce::ToggleButton enableToggle;
+    juce::TextButton   restoreBtn;
+    juce::Slider       claritySlider, minNoteSlider, gapSlider, splitSlider;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AdvancedPanel)
 };
 
 // ─── Playrate step helpers ────────────────────────────────────────────────────
@@ -726,6 +947,25 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
             this);
     };
     addAndMakeVisible (settingsButton);
+
+    // ── Advanced button (expert tuning popup) ─────────────────────────────────
+    // Its own popup rather than more Settings rows: these can make detection worse, and
+    // four more rows would push the Settings panel into permanent scrolling.
+    advancedButton.setColour (juce::TextButton::buttonColourId,  juce::Colour (0xff2a2a2a));
+    advancedButton.setColour (juce::TextButton::textColourOffId, juce::Colours::lightgrey);
+    advancedButton.setTooltip ("Expert detection and segmentation tuning. Off by default - "
+                               "the plugin uses its standard settings until you switch it on.");
+    advancedButton.onClick = [this]()
+    {
+        auto panel   = std::make_unique<AdvancedPanel> (audioProcessor);
+        auto content = std::make_unique<SettingsScroller> (std::move (panel),
+                                                           juce::jmax (100, getHeight() - 50));
+        // Editor-parented, exactly like the Settings popup — see the CallOutBox gotcha.
+        juce::CallOutBox::launchAsynchronously (std::move (content),
+                                                advancedButton.getBoundsInParent(),
+                                                this);
+    };
+    addAndMakeVisible (advancedButton);
 
     // ── Transport buttons (rewind / forward) ─────────────────────────────────
     rewindBtn.setTooltip ("Rewind 5 s (or press Left arrow when plugin is focused)");
@@ -1735,7 +1975,9 @@ void RBVocalSingAudioProcessorEditor::resized()
     static constexpr int kBtnW      = 100;
 
     const int thirdW = panelW / 3;
-    const int rowY   = getHeight() - kControlsH + (kControlsH - kRowH) / 2;
+    const int bandTop = getHeight() - kControlsH;
+    const int rowY    = bandTop + (kControlsRowH - kRowH) / 2;                  // row 1
+    const int rowY2   = bandTop + kControlsRowH + (kControlsRowH - kRowH) / 2;  // row 2
 
     // ── Left third: Vocal pair centred ───────────────────────────────────────
     {
@@ -1764,6 +2006,14 @@ void RBVocalSingAudioProcessorEditor::resized()
         rewindBtn     .setBounds (groupX,                                          rowY, kNavW, kRowH);
         settingsButton.setBounds (groupX + kNavW + kNavGap,                        rowY, kBtnW, kRowH);
         forwardBtn    .setBounds (groupX + kNavW + kNavGap + kBtnW + kNavGap,      rowY, kNavW, kRowH);
+    }
+
+    // ── Row 2: Advanced, centred in the window ───────────────────────────────
+    // The middle third rather than under Settings: a lone button reads as deliberate when
+    // it is centred, and it leaves both outer thirds free for later secondary controls.
+    {
+        const auto slot = juce::Rectangle<int> (thirdW, rowY2, thirdW, kRowH);
+        advancedButton.setBounds (slot.withSizeKeepingCentre (kBtnW, kRowH));
     }
 
     // ── "Allow edits" toggle: top row of the stats band, above the time label ──

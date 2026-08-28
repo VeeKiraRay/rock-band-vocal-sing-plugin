@@ -315,7 +315,10 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   offset is non-zero — at 0 ms the mode cannot change anything, so it is left off — and
   ` (stopped)`, since the output offset is not applied while stopped);
   chart status string, overridden by an amber can't-keep-up warning when frames drop.
-- **Controls**: bottom bar (Vocal Mode, Lyric Mode, `<<`/Settings/`>>`) + `SettingsPanel`
+- **Controls**: bottom bar, **two rows** — row 1 (Vocal Mode, Lyric Mode,
+  `<<`/Settings/`>>`), row 2 (Advanced, centred). `kControlsH = 2 * kControlsRowH`, and
+  `kWindowBaseH` includes the extra row: `getHighwayArea()` subtracts the whole band, so
+  growing one without the other silently shrinks the highway + `SettingsPanel`
   CallOutBox (Frame cap 20–60/uncapped default 60; REAPER priority off; Renderer
   CPU/GL-session/GL-persist; Output calib −200..+500 ms step 20 (chart) and Input calib
   −50..+250 ms step 5 (detections — finer, since the analysis chain alone is 5–30 ms);
@@ -391,6 +394,12 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   control users already know, and a second gate would be two controls for one value.
   `detectorParams()` and `segmentationParams()` on the processor are the single place the
   switch turns into numbers, so the three detection paths and the export cannot drift.
+  Lives in its own **Advanced** popup off a second controls row (`AdvancedPanel`), not in
+  Settings: four more rows there would push that panel into permanent scrolling, and
+  these knobs can make detection worse. The four sliders grey out while the switch is
+  off, so "does nothing until enabled" is visible rather than something to remember.
+  Unlike `SettingsPanel` it needs no `Callbacks` struct — every value it edits is a
+  processor atomic, so it reads and writes them directly, and re-reads after Restore.
 - **Stem sweep** (**Analyse stem** button beside the Stem toggle): reads the whole stem
   offline and fills `pitchTrail` from it, so **Save take works unchanged** and writes a
   reference MIDI with no playback and no singing. Runs on a third `rbpitch::Detector`

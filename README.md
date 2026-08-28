@@ -281,6 +281,17 @@ The button is greyed out while playing, when no take is on screen yet, outside R
 
 Notes on the mode: it reads the track's **media items**, so it is unaffected by any FX on that track, and it needs a REAPER new enough to expose the audio-accessor API (the toggle stays greyed out otherwise). It only applies while **stopped** — during playback the stem reaches the plugin as ordinary audio and the normal path is already correct. Silence, or a gap between items, reads as silence rather than holding the previous note.
 
+**Advanced tuning (expert, off by default).** The **Advanced** button on the second row of the bottom bar opens a panel of detection and segmentation controls for rough material — AI-separated stems, mostly, where letting a little too much through beats missing notes. Everything in it sits behind one **Enable advanced tuning** switch that starts off, and while it is off the plugin uses its standard, tested settings no matter what the sliders say. The sliders grey out to make that obvious. **Restore** puts them back to the shipped values and leaves the switch alone.
+
+| Control | What it does |
+| --- | --- |
+| **Clarity Gate** | How clean a sound has to be before it counts as a sung note. Lower lets more through — breathy notes, consonants — at the cost of more false pitches. Raise it if a rough stem produces spikes between words. |
+| **Min Note Length** | Shortest note **Save take** will keep. Lower it to catch fast syllables, raise it to drop detection blips. |
+| **Gap Merge** | Gaps shorter than this inside a held note are bridged instead of splitting it. Raise it if consonants are breaking one word into several notes. |
+| **Split Hysteresis** | How far the pitch must move before the export starts a new note. Lower splits more readily; raise it to keep vibrato as one note. |
+
+The **Mic Gate** in Settings is deliberately not repeated here — it applies to every source whether advanced tuning is on or off. And this panel is unrelated to **Live-mic used**: that one answers whether your input is a microphone and adjusts *timing*, nothing else.
+
 **Analysing the whole stem at once (no playback).** With **Stem** ticked and the transport stopped, **Analyse stem** reads the entire vocal stem on this track and fills the pitch trail from it in one pass — no playing, no singing. A progress percentage appears in the message bar and the button turns into **Cancel**; a four-minute stem takes a second or two. When it finishes, the trail on the highway is the singer's melody, and **Save take** writes it out as a reference MIDI exactly as it would a sung pass.
 
 This is the fastest route to a draft chart: load the stem, press Analyse, press Save take, then refine the notes. The sweep stops at the song end (the `[end]` marker on an `EVENTS` track, or the last charted note) so a stray clip parked far down the timeline does not turn a four-minute stem into a twenty-minute scan. It replaces whatever take was on screen, and starting playback part-way through abandons it rather than mixing a half-analysed pass with a sung one.

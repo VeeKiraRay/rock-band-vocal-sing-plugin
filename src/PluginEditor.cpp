@@ -684,8 +684,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setCalib           = [safe] (int v)    { if (safe) { safe->latencyOffsetMs = v; safe->audioProcessor.savedLatencyOffsetMs = v; safe->repaint(); } };
         cbs.initInputCalib     = inputOffsetMs;
         cbs.setInputCalib      = [safe] (int v)    { if (safe) { safe->inputOffsetMs = v; safe->audioProcessor.savedInputOffsetMs = v; safe->repaint(); } };
-        cbs.initLiveMic        = liveMicInput;
-        cbs.setLiveMic         = [safe] (bool v)   { if (safe) { safe->liveMicInput = v; safe->audioProcessor.savedLiveMicInput = v; safe->repaint(); } };
+        cbs.initLiveMic        = liveMicUsed();
+        cbs.setLiveMic         = [safe] (bool v)   { if (safe) { safe->audioProcessor.savedLiveMicInput = v; safe->repaint(); } };
         cbs.initSpeed          = pixPerSec;
         cbs.setSpeed           = [safe] (float v)  { if (safe) { safe->pixPerSec = v; safe->audioProcessor.savedPixPerSec = v; safe->repaint(); } };
         cbs.initLyricScale     = lyricScale;
@@ -827,7 +827,6 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     stemToggle.setToggleState (stemMode, juce::dontSendNotification);
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     inputOffsetMs       = audioProcessor.savedInputOffsetMs;
-    liveMicInput        = audioProcessor.savedLiveMicInput;
     pixPerSec           = audioProcessor.savedPixPerSec;
     lyricScale          = audioProcessor.savedLyricScale;
     squashGuard         = (SquashMode) juce::jlimit (0, 3, audioProcessor.savedSquashGuard.load());
@@ -1052,7 +1051,8 @@ void RBVocalSingAudioProcessorEditor::saveCurrentTake()
 
     const auto flash = [this] (const juce::String& msg) { flashMsg (msg); };
 
-    const auto notes = rbtake::segmentPitchTrail (pitchTrail);
+    const auto notes = rbtake::segmentPitchTrail (pitchTrail,
+                                                  audioProcessor.segmentationParams());
     if (notes.empty())
     {
         flash ("No take to save - sing a pass first.");
@@ -1255,16 +1255,11 @@ void RBVocalSingAudioProcessorEditor::startStemSweep()
 
     sweepDetector.prepare (rate);
 
-    // The live settings, unchanged — including the hold decay. Matching the live path
-    // exactly is the point: a hop whose gate is open but whose clarity was rejected
-    // publishes a held pitch, and the trail records it, so a different holdCycles here
-    // would make the swept trail disagree with a sung pass over the same stem.
-    rbpitch::DetectorParams p;
-    p.gateThreshold   = audioProcessor.gateThreshold.load   (std::memory_order_relaxed);
-    p.method          = audioProcessor.pitchMethod.load     (std::memory_order_relaxed);
-    p.octaveGuard     = audioProcessor.octaveGuard.load     (std::memory_order_relaxed);
-    p.octaveThreshold = audioProcessor.octaveThreshold.load (std::memory_order_relaxed);
-    sweepDetector.setParams (p);
+    // The hold decay is deliberately left at its default: a hop whose gate is open but
+    // whose clarity was rejected publishes a held pitch and the trail records it, so a
+    // different holdCycles here would make a swept trail disagree with a sung pass over
+    // the same stem.
+    sweepDetector.setParams (audioProcessor.detectorParams());
 
     sweepActive = true;
     analyseBtn.setButtonText ("Cancel");
@@ -1424,15 +1419,11 @@ void RBVocalSingAudioProcessorEditor::updateStemReadout()
     // wherever the cursor was before — the run has to be earned inside this window.
     stemDetector.prepare (rate);
 
-    rbpitch::DetectorParams p;
-    p.gateThreshold   = audioProcessor.gateThreshold.load  (std::memory_order_relaxed);
-    p.method          = audioProcessor.pitchMethod.load    (std::memory_order_relaxed);
-    p.octaveGuard     = audioProcessor.octaveGuard.load    (std::memory_order_relaxed);
-    p.octaveThreshold = audioProcessor.octaveThreshold.load (std::memory_order_relaxed);
+    rbpitch::DetectorParams p = audioProcessor.detectorParams();
     // Hold off: reading a window that *ends* at the cursor, a held value would describe
     // audio that is not under the cursor. Silence must read as silence. This matches the
     // rule the pitch trail already follows (a gap the moment the gate closes).
-    p.holdCycles      = 0;
+    p.holdCycles = 0;
     stemDetector.setParams (p);
 
     // Centre the final hop on the cursor rather than ending the read there: a hop

@@ -4,7 +4,7 @@
 #include <catch2/catch_approx.hpp>
 #include <vector>
 
-TEST_CASE ("state: all 18 persisted fields round-trip through a fresh processor", "[state]")
+TEST_CASE ("state: all 23 persisted fields round-trip through a fresh processor", "[state]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store       ((int) VocalMode::Harmonies, std::memory_order_relaxed);
@@ -25,6 +25,11 @@ TEST_CASE ("state: all 18 persisted fields round-trip through a fresh processor"
     proc.savedLyricMode       = 1;
     proc.savedRenderer        = 2;
     proc.savedStemMode        = true;
+    proc.advTuningEnabled.store    (true,   std::memory_order_relaxed);
+    proc.advClarityThreshold.store (0.55f,  std::memory_order_relaxed);
+    proc.advMinNoteLen.store       (0.070,  std::memory_order_relaxed);
+    proc.advMaxGapMerge.store      (0.140,  std::memory_order_relaxed);
+    proc.advSplitHysteresis.store  (0.400,  std::memory_order_relaxed);
 
     juce::MemoryBlock block;
     proc.getStateInformation (block);
@@ -51,6 +56,11 @@ TEST_CASE ("state: all 18 persisted fields round-trip through a fresh processor"
     REQUIRE (proc2.savedLyricMode       == 1);
     REQUIRE (proc2.savedRenderer        == 2);
     REQUIRE (proc2.savedStemMode        == true);
+    REQUIRE (proc2.advTuningEnabled.load()    == true);
+    REQUIRE (proc2.advClarityThreshold.load() == Catch::Approx (0.55f));
+    REQUIRE (proc2.advMinNoteLen.load()       == Catch::Approx (0.070));
+    REQUIRE (proc2.advMaxGapMerge.load()      == Catch::Approx (0.140));
+    REQUIRE (proc2.advSplitHysteresis.load()  == Catch::Approx (0.400));
 }
 
 TEST_CASE ("state: garbage bytes are rejected without crashing, defaults intact", "[state]")
@@ -164,4 +174,128 @@ TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "
     REQUIRE (proc.savedLyricMode       == 0);
     REQUIRE (proc.savedRenderer        == 0);
     REQUIRE (proc.savedStemMode        == false);
+}
+
+// ─── Advanced tuning (expert, master-switched) ────────────────────────────────
+
+TEST_CASE ("tuning: with the switch off the shipped constants are guaranteed", "[state][tuning]")
+{
+    // The structural safety property. Not "the defaults happen to match" — with the switch
+    // off the tuning values are never read at all, so a future knob added with a wrong
+    // default still cannot change an existing install.
+    RBVocalSingAudioProcessor proc;
+    REQUIRE (proc.advTuningEnabled.load() == false);
+
+    // Values deliberately set to something absurd; none of it may reach the detector.
+    proc.advClarityThreshold.store (0.05f, std::memory_order_relaxed);
+    proc.advMinNoteLen.store       (0.45,  std::memory_order_relaxed);
+
+    REQUIRE (proc.detectorParams().clarityThreshold
+                 == Catch::Approx (rbpitch::kClarityThreshold));
+    REQUIRE (proc.segmentationParams().minNoteLen
+                 == Catch::Approx (rbtake::SegmentationParams{}.minNoteLen));
+}
+
+TEST_CASE ("tuning: the switch turns the values on for detection and export alike",
+           "[state][tuning]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.advClarityThreshold.store (0.40f, std::memory_order_relaxed);
+    proc.advMinNoteLen.store       (0.05,  std::memory_order_relaxed);
+
+    proc.advTuningEnabled.store (true, std::memory_order_relaxed);
+    REQUIRE (proc.detectorParams().clarityThreshold  == Catch::Approx (0.40f));
+    REQUIRE (proc.segmentationParams().minNoteLen    == Catch::Approx (0.05));
+}
+
+TEST_CASE ("tuning: the Mic gate applies whatever the switch says", "[state][tuning]")
+{
+    // The Settings Mic gate is not part of the Advanced panel: it is the one volume
+    // control the user already knows, and a second gate there would be two controls for
+    // one value. It must keep applying in both states.
+    RBVocalSingAudioProcessor proc;
+    proc.gateThreshold.store (0.042f, std::memory_order_relaxed);
+
+    proc.advTuningEnabled.store (false, std::memory_order_relaxed);
+    REQUIRE (proc.detectorParams().gateThreshold == Catch::Approx (0.042f));
+
+    proc.advTuningEnabled.store (true, std::memory_order_relaxed);
+    REQUIRE (proc.detectorParams().gateThreshold == Catch::Approx (0.042f));
+}
+
+TEST_CASE ("tuning: Live-mic used does not touch the tuning", "[state][tuning]")
+{
+    // It answers a question about the rig and gates the calibration offset. Wiring
+    // detection sensitivity to it would mean flipping a timing control silently retuned
+    // the detector, which is exactly why the master switch exists instead.
+    RBVocalSingAudioProcessor proc;
+    proc.advTuningEnabled.store    (true,  std::memory_order_relaxed);
+    proc.advClarityThreshold.store (0.40f, std::memory_order_relaxed);
+
+    proc.savedLiveMicInput = false;
+    const auto offMic = proc.detectorParams().clarityThreshold;
+    proc.savedLiveMicInput = true;
+    const auto onMic  = proc.detectorParams().clarityThreshold;
+
+    REQUIRE (offMic == Catch::Approx (onMic));
+    REQUIRE (onMic  == Catch::Approx (0.40f));
+}
+
+TEST_CASE ("tuning: restore resets the values but leaves the switch alone", "[state][tuning]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.advTuningEnabled.store    (true,  std::memory_order_relaxed);
+    proc.advClarityThreshold.store (0.1f,  std::memory_order_relaxed);
+    proc.advMinNoteLen.store       (0.45,  std::memory_order_relaxed);
+    proc.advMaxGapMerge.store      (0.45,  std::memory_order_relaxed);
+    proc.advSplitHysteresis.store  (1.90,  std::memory_order_relaxed);
+
+    proc.restoreAdvancedDefaults();
+
+    const rbtake::SegmentationParams shipped;
+    REQUIRE (proc.advClarityThreshold.load() == Catch::Approx (rbpitch::kClarityThreshold));
+    REQUIRE (proc.advMinNoteLen.load()       == Catch::Approx (shipped.minNoteLen));
+    REQUIRE (proc.advMaxGapMerge.load()      == Catch::Approx (shipped.maxGapMerge));
+    REQUIRE (proc.advSplitHysteresis.load()  == Catch::Approx (shipped.splitHysteresis));
+
+    // The button restores what the knobs say; switching the panel off underneath the user
+    // would be a surprise rather than a restore.
+    REQUIRE (proc.advTuningEnabled.load() == true);
+}
+
+TEST_CASE ("tuning: a session from before the Advanced panel loads with it off",
+           "[state][tuning]")
+{
+    juce::ValueTree legacy ("RBVocalSingState");
+    legacy.setProperty ("gateThreshold", 0.045, nullptr);
+
+    juce::MemoryBlock block;
+    juce::AudioProcessor::copyXmlToBinary (*legacy.createXml(), block);
+
+    RBVocalSingAudioProcessor proc;
+    proc.setStateInformation (block.getData(), (int) block.getSize());
+
+    REQUIRE (proc.advTuningEnabled.load() == false);
+    REQUIRE (proc.gateThreshold.load()    == Catch::Approx (0.045f));
+    // ...and with it off, detection is exactly what that session had.
+    REQUIRE (proc.detectorParams().clarityThreshold
+                 == Catch::Approx (rbpitch::kClarityThreshold));
+}
+
+TEST_CASE ("tuning: out-of-range stored values are clamped, not trusted", "[state][tuning]")
+{
+    juce::ValueTree bad ("RBVocalSingState");
+    bad.setProperty ("advClarity",   5.0,   nullptr);
+    bad.setProperty ("advMinNote",   99.0,  nullptr);
+    bad.setProperty ("advSplitHyst", -3.0,  nullptr);
+
+    juce::MemoryBlock block;
+    juce::AudioProcessor::copyXmlToBinary (*bad.createXml(), block);
+
+    RBVocalSingAudioProcessor proc;
+    proc.setStateInformation (block.getData(), (int) block.getSize());
+
+    REQUIRE (proc.advClarityThreshold.load() <= 1.0f);
+    REQUIRE (proc.advMinNoteLen.load()       <= 0.50);
+    REQUIRE (proc.advSplitHysteresis.load()  >= 0.10);
 }

@@ -1164,7 +1164,7 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
     juce::String calibStr = signed_ (latencyOffsetMs) + "/" + signed_ (inputOffsetMs) + " ms";
     if (latencyOffsetMs != 0)
     {
-        calibStr += liveMicInput ? " live" : " playback";
+        calibStr += liveMicUsed() ? " live" : " playback";
         if (audioProcessor.reaperApi.isLoaded() && ! lastIsPlaying)
             calibStr += " (stopped)";
     }

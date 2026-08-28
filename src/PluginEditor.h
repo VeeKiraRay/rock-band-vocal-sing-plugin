@@ -277,7 +277,12 @@ private:
     // round trip must be shifted back onto the chart on top of the input offset. Playback
     // (a stem, a recorded take) never made that trip and is already at its true project
     // time. See detectionOffsetSec().
-    bool   liveMicInput   { false };
+    // Lives on the processor now (the audio thread reads it to pick the tuning), so
+    // there is no editor-side copy to keep in sync — read it where it is needed.
+    bool liveMicUsed() const
+    {
+        return audioProcessor.savedLiveMicInput.load();
+    }
     // Session-only scroll rate (px/s) — drives both highway and lyric strips together.
     float  pixPerSec       { 200.0f };
     // Lyric-strip scale (1.0 = 100%) — scales strip text and the strip heights
@@ -440,7 +445,7 @@ private:
     // pre-split behaviour exactly, which is what an old saved session loads as.
     double detectionOffsetSec() const
     {
-        return (inputOffsetMs + (liveMicInput ? latencyOffsetMs : 0)) / 1000.0;
+        return (inputOffsetMs + (liveMicUsed() ? latencyOffsetMs : 0)) / 1000.0;
     }
 
     // Seconds to subtract from cachedPlayTime to get the drawing timeline. Gated on the

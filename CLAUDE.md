@@ -330,7 +330,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   octaveGuard, octaveThresh, frameInterval, reaperPriority, octaveWrap, pitchTolCents,
   pitchTrail, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
-  lyricMode, renderer, stemMode. `octaveGuard`/`octaveThreshold` follow the
+  lyricMode, renderer, stemMode, advEnabled, advClarity, advMinNote, advGapMerge,
+  advSplitHyst. `octaveGuard`/`octaveThreshold` follow the
   `gateThreshold`/`vocalMode` pattern — no `saved*` mirror, because the audio thread reads
   them — and are clamped on read (0..2 and 0.60..0.90).
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
@@ -378,6 +379,18 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   `lastPaintHeardPitch` joined the idle-repaint gate for the same reason the mode exists:
   nothing reaches the audio thread while stopped, so `currentMidiFloat` never moves while
   the readout changes at every cursor position.
+- **Advanced tuning** (`advTuningEnabled` + four values): loosens detection and
+  segmentation for rough material - a clarity-gate override plus the three
+  `rbtake::SegmentationParams` figures. **Gated behind one master switch, off by default.**
+  The switch, not the defaults, is the safety guarantee: with it off the values are never
+  read, so a future knob added with a wrong default still cannot change an existing
+  install. Deliberately *not* keyed on **Live-mic used** - that answers a question about
+  the rig and gates the calibration offset, so wiring detection sensitivity to it would
+  mean flipping a timing control silently retuned the detector. The Settings **Mic gate**
+  stays outside the panel and applies to every source in both states: it is the volume
+  control users already know, and a second gate would be two controls for one value.
+  `detectorParams()` and `segmentationParams()` on the processor are the single place the
+  switch turns into numbers, so the three detection paths and the export cannot drift.
 - **Stem sweep** (**Analyse stem** button beside the Stem toggle): reads the whole stem
   offline and fills `pitchTrail` from it, so **Save take works unchanged** and writes a
   reference MIDI with no playback and no singing. Runs on a third `rbpitch::Detector`

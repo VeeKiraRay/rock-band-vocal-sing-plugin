@@ -6,6 +6,7 @@
 #include "reaper_api.h"
 #include "NsdfPeak.h"       // kOctaveRivalRatio — default for the octave-threshold setting
 #include "PitchDetector.h"  // rbpitch::Detector — the pitch-detection front end
+#include "TakeExport.h"     // rbtake::SegmentationParams — defaults for the tuning below
 
 // Which vocal part a note belongs to. Main = Solo (PART VOCALS) or HARM1 (lead) —
 // both render cyan with lyrics below the highway. Harm2/Harm3 render in their own
@@ -243,6 +244,45 @@ public:
     static constexpr float kOctaveThresholdMin = 0.60f;
     static constexpr float kOctaveThresholdMax = 0.90f;
 
+    // ── Advanced tuning (expert; off by default) ──────────────────────────────
+    // Loosens detection and segmentation for rough material — AI-separated stems, where
+    // letting a little too much through beats missing notes.
+    //
+    // Everything here is gated behind one master switch, deliberately. Relying on the
+    // values simply defaulting to the live constants would make safety a *property* of the
+    // defaults rather than a structural guarantee: one future knob added with a slightly
+    // wrong default would silently change detection for every existing install. With the
+    // switch off, none of these values is read at all.
+    //
+    // Note this is NOT keyed on "Live-mic used". That setting answers a question about the
+    // rig (is the incoming audio a microphone?) and gates the calibration offset; wiring
+    // detection sensitivity to it would mean flipping a *timing* control silently retuned
+    // the detector. Enabling expert tuning is its own, explicit decision.
+    //
+    // The Settings "Mic gate" is untouched by all this and keeps applying to every source:
+    // it already exists, already works, and a second gate here would be two controls for
+    // one value.
+    std::atomic<bool>   advTuningEnabled    { false };
+    std::atomic<float>  advClarityThreshold { rbpitch::kClarityThreshold };
+    std::atomic<double> advMinNoteLen       { rbtake::SegmentationParams{}.minNoteLen };
+    std::atomic<double> advMaxGapMerge      { rbtake::SegmentationParams{}.maxGapMerge };
+    std::atomic<double> advSplitHysteresis  { rbtake::SegmentationParams{}.splitHysteresis };
+
+    // Naming: the group is unprefixed rather than saved* because two of the four values
+    // are read on the audio thread (the switch and the clarity gate, through
+    // detectorParams()). The segmentation three are message-thread only but are named with
+    // them, since they are one panel and are restored as a unit.
+
+    // Resets the tuning *values* to the shipped constants. Deliberately leaves
+    // advTuningEnabled alone: the button restores what the knobs say, and silently
+    // switching the panel off would be a surprise rather than a restore.
+    void restoreAdvancedDefaults();
+
+    // The one place the tuning decision turns into numbers, so processBlock, the cursor
+    // readout, the batch sweep and the take export cannot drift apart.
+    rbpitch::DetectorParams    detectorParams()     const;
+    rbtake::SegmentationParams segmentationParams() const;
+
     // ── Vocal mode (Solo / Harmonies) — set by editor, drives chart re-read ────
     std::atomic<int> vocalMode { (int) VocalMode::Solo };
 
@@ -259,14 +299,16 @@ public:
     std::atomic<int>    savedInputOffsetMs   { 0 };     // input calibration: detection shift.
                                                         // Defaults to 0 so a session saved
                                                         // before the split loads unchanged.
-    std::atomic<bool>   savedLiveMicInput    { false }; // does the *output* offset apply to
-                                                        // detected pitch (live mic) as well
-                                                        // as to the chart (always)?
     std::atomic<float>  savedPixPerSec       { 200.0f };
     std::atomic<float>  savedLyricScale      { 1.0f };
     std::atomic<int>    savedSquashGuard     { 0 };   // 0=Off 1=Spacing 2=Auto-shrink 3=Hybrid
     std::atomic<int>    savedLyricMode       { 0 };   // 0=Scrolling, 1=Static
     std::atomic<int>    savedRenderer        { 0 };   // 0=CPU, 2=OpenGL+persist
+    std::atomic<bool>   savedLiveMicInput    { false }; // does the *output* offset apply to
+                                                        // detected pitch (live mic) as well
+                                                        // as to the chart (always)? Purely
+                                                        // a calibration question - it does
+                                                        // not gate the tuning above.
     std::atomic<bool>   savedStemMode        { false };  // offline stem tools on the
                                                          // editor (cursor readout)
 

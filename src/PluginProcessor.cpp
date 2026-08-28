@@ -94,10 +94,7 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // hop. A settings change is a user action at UI rate, so at most one block (~10 ms)
     // separates the two — and it keeps the detector free of atomics, which is what lets a
     // second instance run at a different sensitivity.
-    detector.setParams ({ gateThreshold.load (std::memory_order_relaxed),
-                          pitchMethod.load (std::memory_order_relaxed),
-                          octaveGuard.load (std::memory_order_relaxed),
-                          octaveThreshold.load (std::memory_order_relaxed) });
+    detector.setParams (detectorParams());
 
     // Per-hop timestamps for the HopSample queue: blockStartTime corresponds to
     // sample 0 of this buffer (currentPlaybackTime, just updated above or carried
@@ -174,6 +171,57 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 #endif
 }
 
+// ─── Tuning selection ─────────────────────────────────────────────────────────
+// One place where "is this a live mic?" turns into concrete numbers, so the three
+// detection paths (processBlock, the cursor readout, the batch sweep) and the take export
+// cannot drift apart.
+
+rbpitch::DetectorParams RBVocalSingAudioProcessor::detectorParams() const
+{
+    rbpitch::DetectorParams p;
+    p.method          = pitchMethod.load     (std::memory_order_relaxed);
+    p.octaveGuard     = octaveGuard.load     (std::memory_order_relaxed);
+    p.octaveThreshold = octaveThreshold.load (std::memory_order_relaxed);
+
+    // The Mic gate applies to every source, tuning or no tuning — it is the one volume
+    // control the user already knows, and duplicating it in the Advanced panel would be
+    // two controls for one value.
+    p.gateThreshold = gateThreshold.load (std::memory_order_relaxed);
+
+    // Read only when the switch is on, so the shipped constant is not merely the default
+    // but the guaranteed value while the panel is off.
+    p.clarityThreshold = advTuningEnabled.load (std::memory_order_relaxed)
+                            ? advClarityThreshold.load (std::memory_order_relaxed)
+                            : rbpitch::kClarityThreshold;
+
+    return p;   // holdCycles left at its default; callers that need 0 set it themselves
+}
+
+rbtake::SegmentationParams RBVocalSingAudioProcessor::segmentationParams() const
+{
+    rbtake::SegmentationParams p;   // the shipped constants
+
+    // Same switch as detection, so the panel has one rule and one visible state.
+    if (advTuningEnabled.load (std::memory_order_relaxed))
+    {
+        p.minNoteLen      = advMinNoteLen.load      (std::memory_order_relaxed);
+        p.maxGapMerge     = advMaxGapMerge.load     (std::memory_order_relaxed);
+        p.splitHysteresis = advSplitHysteresis.load (std::memory_order_relaxed);
+    }
+
+    return p;
+}
+
+void RBVocalSingAudioProcessor::restoreAdvancedDefaults()
+{
+    const rbtake::SegmentationParams seg;   // shipped values, the single source of truth
+
+    advClarityThreshold.store (rbpitch::kClarityThreshold,  std::memory_order_relaxed);
+    advMinNoteLen.store       (seg.minNoteLen,              std::memory_order_relaxed);
+    advMaxGapMerge.store      (seg.maxGapMerge,             std::memory_order_relaxed);
+    advSplitHysteresis.store  (seg.splitHysteresis,         std::memory_order_relaxed);
+}
+
 // ─── Reaper API handover ──────────────────────────────────────────────────────
 
 void RBVocalSingAudioProcessor::Vst3Ext::setIHostApplication (Steinberg::FUnknown* ptr)
@@ -216,6 +264,11 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("latencyMs",      savedLatencyOffsetMs.load(),  nullptr);
     state.setProperty ("inputLatencyMs", savedInputOffsetMs.load(),    nullptr);
     state.setProperty ("liveMic",        savedLiveMicInput.load(),     nullptr);
+    state.setProperty ("advEnabled",     advTuningEnabled.load (std::memory_order_relaxed),             nullptr);
+    state.setProperty ("advClarity",     (double) advClarityThreshold.load (std::memory_order_relaxed), nullptr);
+    state.setProperty ("advMinNote",     advMinNoteLen.load (std::memory_order_relaxed),      nullptr);
+    state.setProperty ("advGapMerge",    advMaxGapMerge.load (std::memory_order_relaxed),     nullptr);
+    state.setProperty ("advSplitHyst",   advSplitHysteresis.load (std::memory_order_relaxed), nullptr);
     state.setProperty ("pixPerSec",      (double) savedPixPerSec.load(), nullptr);
     state.setProperty ("lyricScale",     (double) savedLyricScale.load(), nullptr);
     state.setProperty ("squashGuard",    savedSquashGuard.load(),      nullptr);
@@ -251,6 +304,27 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     // single-slider behaviour exactly, so those sessions load with no visible change.
     savedInputOffsetMs   =        (int)    state.getProperty ("inputLatencyMs", 0);
     savedLiveMicInput    =        (bool)   state.getProperty ("liveMic",        false);
+
+    // Absent key means off, which is the state in which none of the tuning below is read —
+    // so a session from before the Advanced panel loads with detection untouched.
+    advTuningEnabled.store ((bool) state.getProperty ("advEnabled", false),
+                            std::memory_order_relaxed);
+    advClarityThreshold.store (juce::jlimit (0.0f, 1.0f,
+                                (float) (double) state.getProperty ("advClarity",
+                                                    (double) rbpitch::kClarityThreshold)),
+                               std::memory_order_relaxed);
+    advMinNoteLen.store (juce::jlimit (0.02, 0.50,
+                            (double) state.getProperty ("advMinNote",
+                                        rbtake::SegmentationParams{}.minNoteLen)),
+                         std::memory_order_relaxed);
+    advMaxGapMerge.store (juce::jlimit (0.0, 0.50,
+                            (double) state.getProperty ("advGapMerge",
+                                        rbtake::SegmentationParams{}.maxGapMerge)),
+                          std::memory_order_relaxed);
+    advSplitHysteresis.store (juce::jlimit (0.10, 2.00,
+                                (double) state.getProperty ("advSplitHyst",
+                                            rbtake::SegmentationParams{}.splitHysteresis)),
+                              std::memory_order_relaxed);
     savedPixPerSec       = (float)(double) state.getProperty ("pixPerSec",      200.0);
     savedLyricScale      = (float)(double) state.getProperty ("lyricScale",     1.0);
     savedSquashGuard     =        (int)    state.getProperty ("squashGuard",    0);

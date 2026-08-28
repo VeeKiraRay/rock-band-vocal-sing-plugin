@@ -277,7 +277,7 @@ What gets written follows the trail on screen, cleaned up for charting:
 
 The button is greyed out while playing, when no take is on screen yet, outside REAPER, and in REAPER versions without the write API. Each save makes a fresh timestamped track — sing, save, tweak, sing again, and keep whichever take reads best.
 
-**Charting from a stem:** put the plugin on a track with the real singer's vocal stem (see "Review takes offline" in [Tips](#tips)), play it through, stop, and save — the exported notes are a draft chart of the actual melody, ready to refine with [note edits](#editing-note-pitches). Leave **Live-mic used** off (the default) while doing this: the export is written at true project time either way, but with it ticked the trail is drawn — and the gold awarded — early against the notes by your Output calib value, so what you see while working would not match what you save.
+**Charting from a stem:** put the plugin on a track with the real singer's vocal stem (see "Review takes offline" in [Tips](#tips)), play it through, stop, and save — the exported notes are a draft chart of the actual melody, ready to refine with [note edits](#editing-note-pitches). You do not need any notes on `PART VOCALS` first — with an empty chart the highway draws its axis, playhead and trail across the full singable range, so you can watch the take as it is captured. Leave **Live-mic used** off (the default) while doing this: the export is written at true project time either way, but with it ticked the trail is drawn — and the gold awarded — early against the notes by your Output calib value, so what you see while working would not match what you save.
 
 ---
 
@@ -300,8 +300,8 @@ The button is greyed out while playing, when no take is on screen yet, outside R
 
 ## Troubleshooting
 
-**The highway is empty / "no notes" message.**
-Check that your project has a track named `PART VOCALS` (Solo) or `HARM1`/`HARM2`/`HARM3` (Harmonies) — matching is by track name. The diagnostic message lists the tracks the plugin found, which usually points to a naming mismatch. In a non-REAPER host, open **Settings** and click **Load MIDI File** to pick the chart.
+**No notes on the highway / "No chart - capture only".**
+Check that your project has a track named `PART VOCALS` (Solo) or `HARM1`/`HARM2`/`HARM3` (Harmonies) — matching is by track name. The status bar lists the tracks the plugin found, which usually points to a naming mismatch. In a non-REAPER host, open **Settings** and click **Load MIDI File** to pick the chart. Note this is not an error state: with no chart the highway still draws its pitch axis, the playhead and your pitch trail across the full singable range, so you can capture a take and **Save take** it — see "Charting from a stem" above.
 
 **No pitch is detected when I sing.**
 Work through the setup in order: (1) check **Options → Preferences → Device** — your microphone must be selected as the **Input device** there; (2) check the track's input selector (the dropdown below the record-arm button) — it must be set to **Input: Mono → Input 1** (or whichever channel your mic is on), not "No input" or a MIDI input; (3) check that **input monitoring** (the speaker icon) is on — record-arm alone does not route audio into the plugin. You should see the track's level meters move when you speak before the plugin will detect anything. If detection is jumpy once it is working, raise the **Mic Gate**.

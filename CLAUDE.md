@@ -268,7 +268,13 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   animates per Range-Shift section (smoothstep over the marker length); the per-frame
   geometry is cached (`lastHighwayArea`/`lastFMinP`/…) so mouse hit-testing matches the
   screen exactly. The per-section target range comes from `rbhighway::visibleRange`
-  (`HighwayRange.h`) — pad ± 5, clamp into 36–84, minimum 12-semitone span.
+  (`HighwayRange.h`) — pad ± 5, clamp into 36–84, minimum 12-semitone span. **Chart-less
+  capture:** an empty note list no longer returns early — the axis falls back to the whole
+  singable band (`kVocalLow/High`), octave wrapping is forced off (nothing to wrap onto, and
+  the candidate pool is empty), and the old full-area "no notes" banner is demoted to a
+  corner hint, so a reference pass against a stem is visible while it is captured. Every
+  note-driven loop is already inert on an empty list, so nothing else needed gating; the
+  trail and Save take never had a chart-state gate at all.
 - **Stats panel** (`drawStats`): time `MM:SS.ms / end`, live note name + MIDI + Hz,
   traffic light vs the closest active note of any part, scored in cents from
   `currentMidiFloat` (within ±`pitchTolCents` = GREAT, within 2× = CLOSE, else MISS;

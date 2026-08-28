@@ -90,30 +90,34 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 
     const auto& notes = audioProcessor.getChartNotes();
 
-    if (notes.empty())
-    {
-        g.setColour (juce::Colour (0xffffcc44));  // amber/attention
-        g.setFont   (juce::Font (15.0f, juce::Font::bold));
-        const bool apiReady = audioProcessor.reaperApi.isLoaded();
-        const auto& status  = audioProcessor.chartStatus;
-        juce::String msg;
-        if (apiReady)
-            msg = status.isNotEmpty()
-                    ? "No notes found for selected mode - check status bar"
-                    : "Reaper connected - waiting for project to load";
-        else
-            msg = "No MIDI loaded - click \"Load MIDI File\" in Settings";
-        g.drawText (msg, area, juce::Justification::centred, false);
-        return;
-    }
+    // Chart-less capture. With no notes loaded the highway still draws its axis, the
+    // playhead and the sung contour, so a reference pass against a stem can be watched as
+    // it is captured. Nothing outside this function ever depended on a chart — the pitch
+    // trail and Save take have no chart-state gate at all — so the early return that used
+    // to sit here was the only thing making capture look blocked. Every note-driven loop
+    // below is already inert on an empty list (lower_bound returns end(); the section and
+    // separator vectors are empty), so only the pitch axis needs a different source.
+    const bool chartLess = notes.empty();
+
+    // Octave wrapping is a scoring concept: it maps a sung pitch onto the octave the chart
+    // expects. With no chart there is nothing to expect, so out-of-band samples should break
+    // the contour exactly as they do with the setting off. (wrapPitchIntoRange would not
+    // misbehave — an empty candidate pool falls through to its modular wrap — but wrapping
+    // onto a range nothing chose is a fiction.) Reachable rather than theoretical: the
+    // detector band is 60-1200 Hz, MIDI ~34.6-86.1, wider than the drawn 36-84 at both ends.
+    const bool wrapOn = octaveWrap && ! chartLess;
 
     // Compute the visible pitch range for the current section, with a smooth
     // transition on section change driven by playback time (no extra state needed).
     // Smoothstep interpolation over kTransitionDur seconds after each boundary.
     // The pad/clamp/min-span rules live in rbhighway::visibleRange (HighwayRange.h) so
     // they are unit-testable and stated once for both sides of a transition.
-    float fMinP = (float) audioProcessor.chartMinPitch;
-    float fMaxP = (float) audioProcessor.chartMaxPitch;
+    //
+    // Chart-less falls back to the whole singable band: nothing can drop off-screen, and the
+    // axis stays put while a take is captured. The section loop below is inert there (no
+    // sections), so the seed values survive it.
+    float fMinP = chartLess ? (float) rbhighway::kVocalLow  : (float) audioProcessor.chartMinPitch;
+    float fMaxP = chartLess ? (float) rbhighway::kVocalHigh : (float) audioProcessor.chartMaxPitch;
 
     const auto& sections = audioProcessor.getChartPitchSections();
     for (int si = 0; si < (int) sections.size(); ++si)
@@ -453,7 +457,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
 
             const int  rounded = juce::jlimit (0, 127, juce::roundToInt (trailIt->pitch));
             const bool inR     = ((float) rounded >= fMinP && (float) rounded <= fMaxP);
-            if (! inR && ! octaveWrap) { open = false; continue; }
+            if (! inR && ! wrapOn) { open = false; continue; }
 
             const float p = inR ? trailIt->pitch
                                 : (float) wrapPitchIntoRange (rounded, (int) fMinP, (int) fMaxP,
@@ -511,7 +515,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     {
         const int  rounded  = juce::jlimit (0, 127, juce::roundToInt (userPitch));
         const bool inRange  = ((float) rounded >= fMinP && (float) rounded <= fMaxP);
-        const bool doWrap   = octaveWrap && !inRange;
+        const bool doWrap   = wrapOn && !inRange;
         float drawPitch = doWrap
                               ? (float) wrapPitchIntoRange (rounded, (int) fMinP, (int) fMaxP,
                                                             audioProcessor.getPitchClassCandidates())
@@ -580,6 +584,24 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
             g.setColour  (kNoteColour);
             g.strokePath (arrow, juce::PathStrokeType (1.5f));
         }
+    }
+
+    // Chart-less hint, drawn last so the contour cannot cover it. Demoted from the old
+    // full-area banner to a corner label: the highway is showing real content now, and the
+    // full reason already lives in the status bar this points at.
+    if (chartLess)
+    {
+        juce::String msg;
+        if (audioProcessor.reaperApi.isLoaded())
+            msg = audioProcessor.chartStatus.isNotEmpty()
+                    ? "No chart - capture only"
+                    : "Reaper connected - waiting for project";
+        else
+            msg = "No MIDI loaded - see Settings";
+
+        g.setColour (juce::Colour (0xaaffcc44));  // amber/attention, dimmed
+        g.setFont   (juce::Font (11.0f, juce::Font::bold));
+        g.drawText  (msg, area.reduced (6, 4), juce::Justification::topRight, false);
     }
 
 #if RB_PAINT_PROFILE

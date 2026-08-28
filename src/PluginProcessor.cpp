@@ -220,6 +220,7 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("lyricScale",     (double) savedLyricScale.load(), nullptr);
     state.setProperty ("squashGuard",    savedSquashGuard.load(),      nullptr);
     state.setProperty ("lyricMode",      savedLyricMode.load(),        nullptr);
+    state.setProperty ("stemMode",      savedStemMode.load(),         nullptr);
     state.setProperty ("renderer",       savedRenderer.load(),         nullptr);
     auto xml = state.createXml();
     copyXmlToBinary (*xml, destData);
@@ -254,6 +255,7 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     savedLyricScale      = (float)(double) state.getProperty ("lyricScale",     1.0);
     savedSquashGuard     =        (int)    state.getProperty ("squashGuard",    0);
     savedLyricMode       =        (int)    state.getProperty ("lyricMode",      0);
+    savedStemMode        =        (bool)   state.getProperty ("stemMode",      false);
     savedRenderer        =        (int)    state.getProperty ("renderer",       0);
 }
 

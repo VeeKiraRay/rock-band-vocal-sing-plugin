@@ -770,6 +770,27 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     saveTakeBtn.onClick = [this]() { saveCurrentTake(); };
     addAndMakeVisible (saveTakeBtn);
 
+    // ── Stem mode toggle (offline stem tools) ─────────────────────────────────
+    // Sits with the readout it changes the meaning of, rather than in Settings. Starts
+    // disabled; the poll gate enables it once REAPER hands over an accessor-capable API.
+    stemToggle.setTooltip ("Read the vocal stem on this track instead of the microphone. "
+                           "While stopped, move the edit cursor and the pitch readout "
+                           "follows the stem under it - no playback needed.");
+    stemToggle.setColour (juce::ToggleButton::textColourId,   juce::Colour (0xffbbbbbb));
+    stemToggle.setColour (juce::ToggleButton::tickColourId,   juce::Colour (0xff66ccff));
+    stemToggle.setColour (juce::ToggleButton::tickDisabledColourId, juce::Colour (0xff555555));
+    stemToggle.setEnabled (false);
+    stemToggle.onClick = [this]()
+    {
+        stemMode = stemToggle.getToggleState();
+        audioProcessor.savedStemMode = stemMode;
+        lastStemReadTime = -1.0;   // force a read at the current cursor
+        if (! stemMode)
+            stemReader.close();    // do not hold an accessor open for a mode that is off
+        repaint();
+    };
+    addAndMakeVisible (stemToggle);
+
     setWantsKeyboardFocus (true);
 
     // Pitch detection fixed to MPM.
@@ -788,6 +809,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     octaveWrap          = audioProcessor.savedOctaveWrap;
     pitchTolCents       = juce::jlimit (25, 100, audioProcessor.savedPitchTolCents.load());
     pitchTrailOn        = audioProcessor.savedPitchTrail;
+    stemMode            = audioProcessor.savedStemMode;
+    stemToggle.setToggleState (stemMode, juce::dontSendNotification);
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     inputOffsetMs       = audioProcessor.savedInputOffsetMs;
     liveMicInput        = audioProcessor.savedLiveMicInput;
@@ -1146,6 +1169,111 @@ bool RBVocalSingAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
     return false;
 }
 
+// ─── Offline stem readout (cursor-follow) ─────────────────────────────────────
+// While stopped, REAPER delivers no audio to processBlock, so a stem under the cursor
+// reads as nothing. These two read it directly through the accessor instead, so the whole
+// stats band — pitch, note name, Hz, traffic light and the octave chip — describes the
+// stem at the cursor. Nothing in the drawing code changes: the result is filed into
+// detHistory, which heardDetection() already treats as the source of truth.
+
+bool RBVocalSingAudioProcessorEditor::stemReadoutActive() const
+{
+    return stemMode
+        && audioProcessor.reaperApi.isLoaded()
+        && audioProcessor.reaperApi.canAnalyzeOffline()
+        && ! lastIsPlaying;
+}
+
+void RBVocalSingAudioProcessorEditor::updateStemReadout()
+{
+    const auto& api = audioProcessor.reaperApi;
+
+    // The plugin's own track, asked for at point of use — a handover-time capture comes
+    // back null, since the FX is not attached to its track yet during instantiation.
+    void* selfTrack = (audioProcessor.reaperHost != nullptr)
+                          ? audioProcessor.reaperHost->getReaperParent (1)
+                          : nullptr;
+    if (selfTrack == nullptr)
+    {
+        stemReader.close();
+        return;
+    }
+
+    if (! stemReader.isOpen() || stemReader.getTrack() != selfTrack)
+    {
+        if (! stemReader.open (api, selfTrack))
+            return;
+        lastStemReadTime = -1.0;   // new accessor: whatever we read before is not it
+    }
+
+    // Project edits (a trimmed item, a new take) invalidate what the accessor cached.
+    if (stemReader.refresh())
+        lastStemReadTime = -1.0;
+
+    const double rate = audioProcessor.getSampleRate();
+    if (rate <= 0.0)
+        return;
+
+    // Parking the cursor costs nothing; only a move triggers a fresh analysis.
+    if (cachedPlayTime == lastStemReadTime)
+        return;
+    lastStemReadTime = cachedPlayTime;
+
+    // A fresh detector per position, deliberately. Each cursor position is an independent
+    // question, so no median history, hold counter or octave run may carry over from
+    // wherever the cursor was before — the run has to be earned inside this window.
+    stemDetector.prepare (rate);
+
+    rbpitch::DetectorParams p;
+    p.gateThreshold   = audioProcessor.gateThreshold.load  (std::memory_order_relaxed);
+    p.method          = audioProcessor.pitchMethod.load    (std::memory_order_relaxed);
+    p.octaveGuard     = audioProcessor.octaveGuard.load    (std::memory_order_relaxed);
+    p.octaveThreshold = audioProcessor.octaveThreshold.load (std::memory_order_relaxed);
+    // Hold off: reading a window that *ends* at the cursor, a held value would describe
+    // audio that is not under the cursor. Silence must read as silence. This matches the
+    // rule the pitch trail already follows (a gap the moment the gate closes).
+    p.holdCycles      = 0;
+    stemDetector.setParams (p);
+
+    // Centre the final hop on the cursor rather than ending the read there: a hop
+    // describes audio half a window earlier than the sample that completed it, so a read
+    // stopping at the cursor would report audio slightly before it. Hops land every
+    // kPitchHop samples, so the centring is exact to within one hop (~11 ms).
+    const double endSec   = cachedPlayTime + stemDetector.windowCentreSeconds();
+    const double startSec = std::max (0.0, endSec - kStemReadSec);
+    const int    numRead  = (int) std::lround ((endSec - startSec) * rate);
+    if (numRead <= 0)
+        return;
+
+    if (stemScratch.size() < (size_t) numRead)
+        stemScratch.resize ((size_t) numRead);
+
+    // A range with no audio reads as silence (readMono zeroes it) and is pushed through
+    // anyway, so a gap between items blanks the readout instead of leaving the previous
+    // position's pitch on screen.
+    stemReader.readMono (startSec, rate, numRead, stemScratch.data());
+
+    rbpitch::DetectorResult hop, last;
+    bool got = false;
+    for (int i = 0; i < numRead; ++i)
+        if (stemDetector.pushSample (stemScratch[(size_t) i], hop))
+        {
+            last = hop;
+            got  = true;
+        }
+
+    if (! got)
+        return;   // window too short to complete a hop; leave the readout as it was
+
+    // File it where the live path files its hops. Raw project time, like every other
+    // detHistory entry; while stopped the lead is <= 0, so heardDetection() returns this
+    // newest sample and the whole stats band follows it.
+    detHistory[(size_t) detHistoryHead] = { cachedPlayTime, last.midiFloat,
+                                            last.octaveRatio, last.octaveDoubt };
+    detHistoryHead = (detHistoryHead + 1) % kDetHistorySize;
+    if (detHistoryCount < kDetHistorySize) ++detHistoryCount;
+}
+
 // ─── Frame loop (VBlank-driven) ─────────────────────────────────────────────────
 
 void RBVocalSingAudioProcessorEditor::onFrame()
@@ -1263,6 +1391,25 @@ void RBVocalSingAudioProcessorEditor::onFrame()
 
             if (audioProcessor.reaperApi.Master_GetPlayRate)
                 cachedPlayRate = audioProcessor.reaperApi.Master_GetPlayRate (nullptr);
+
+            // Stem mode needs the accessor API, which an older REAPER may not resolve.
+            const bool canStem = audioProcessor.reaperApi.canAnalyzeOffline();
+            if (canStem != stemToggle.isEnabled())
+            {
+                stemToggle.setEnabled (canStem);
+                if (! canStem)
+                {
+                    stemToggle.setToggleState (false, juce::dontSendNotification);
+                    stemMode = false;
+                }
+            }
+
+            // Reads only when the cursor has actually moved, so parking costs nothing;
+            // scrubbing costs one 150 ms analysis per poll tick. Deliberately inside the
+            // poll gate rather than the frame loop — at 60 fps this would be three times
+            // the live detector's work for no extra information.
+            if (stemReadoutActive())
+                updateStemReadout();
         }
 
         if (lastIsPlaying)
@@ -1292,8 +1439,13 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     // otherwise blank the chip entirely). Wall clock, like the message-bar flash: this is a
     // legibility effect, so it belongs on the reader's clock rather than the project's.
     const double nowSec = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    float heardPitch = -1.0f;
     {
         const auto heardNow = heardDetection();
+        // The gate below watches this rather than only currentMidiFloat, because in stem
+        // mode the two diverge completely: nothing reaches the audio thread while stopped,
+        // so the atomic never moves while the readout changes at every cursor position.
+        heardPitch = heardNow.pitch;
         if (heardNow.octaveRatio > 0.0f)
         {
             heldOctRatio = heardNow.octaveRatio;
@@ -1316,6 +1468,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
                       || (octChipVisible  != lastPaintOctVisible)
                       || (octChipDashVisible != lastPaintOctDash)
                       || (livePitch       != lastPaintPitch)
+                      || (heardPitch      != lastPaintHeardPitch)
                       || (lastStateCount  != lastPaintStateCount)
                       || (framesDropping  != lastPaintDropping)
                       || (curLyricMode    != lastPaintLyricMode)
@@ -1327,6 +1480,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     {
         lastPaintTime       = cachedPlayTime;
         lastPaintPitch      = livePitch;
+        lastPaintHeardPitch = heardPitch;
         lastPaintStateCount = lastStateCount;
         lastPaintDropping   = framesDropping;
         lastPaintLyricMode  = curLyricMode;
@@ -1411,6 +1565,7 @@ void RBVocalSingAudioProcessorEditor::resized()
         const int statsTop = getHighwayArea().getBottom() + lyricStripH();
         editToggle.setBounds (8, statsTop + 2, 130, kEditRowH - 2);
         saveTakeBtn.setBounds (146, statsTop + 2, 90, kEditRowH - 2);
+        stemToggle.setBounds (244, statsTop + 2, 70, kEditRowH - 2);
     }
 }
 

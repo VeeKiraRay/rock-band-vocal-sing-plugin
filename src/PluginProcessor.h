@@ -267,6 +267,8 @@ public:
     std::atomic<int>    savedSquashGuard     { 0 };   // 0=Off 1=Spacing 2=Auto-shrink 3=Hybrid
     std::atomic<int>    savedLyricMode       { 0 };   // 0=Scrolling, 1=Static
     std::atomic<int>    savedRenderer        { 0 };   // 0=CPU, 2=OpenGL+persist
+    std::atomic<bool>   savedStemMode        { false };  // offline stem tools on the
+                                                         // editor (cursor readout)
 
 private:
     // VST3ClientExtensions — Reaper calls setIHostApplication to hand over its API

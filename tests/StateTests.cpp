@@ -4,7 +4,7 @@
 #include <catch2/catch_approx.hpp>
 #include <vector>
 
-TEST_CASE ("state: all 17 persisted fields round-trip through a fresh processor", "[state]")
+TEST_CASE ("state: all 18 persisted fields round-trip through a fresh processor", "[state]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store       ((int) VocalMode::Harmonies, std::memory_order_relaxed);
@@ -24,6 +24,7 @@ TEST_CASE ("state: all 17 persisted fields round-trip through a fresh processor"
     proc.savedSquashGuard     = 3;
     proc.savedLyricMode       = 1;
     proc.savedRenderer        = 2;
+    proc.savedStemMode        = true;
 
     juce::MemoryBlock block;
     proc.getStateInformation (block);
@@ -49,6 +50,7 @@ TEST_CASE ("state: all 17 persisted fields round-trip through a fresh processor"
     REQUIRE (proc2.savedSquashGuard     == 3);
     REQUIRE (proc2.savedLyricMode       == 1);
     REQUIRE (proc2.savedRenderer        == 2);
+    REQUIRE (proc2.savedStemMode        == true);
 }
 
 TEST_CASE ("state: garbage bytes are rejected without crashing, defaults intact", "[state]")
@@ -74,6 +76,7 @@ TEST_CASE ("state: garbage bytes are rejected without crashing, defaults intact"
     REQUIRE (proc.savedSquashGuard     == 0);
     REQUIRE (proc.savedLyricMode       == 0);
     REQUIRE (proc.savedRenderer        == 0);
+    REQUIRE (proc.savedStemMode        == false);
 }
 
 TEST_CASE ("state: a session saved before the calibration split loads unchanged", "[state]")
@@ -160,4 +163,5 @@ TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "
     REQUIRE (proc.savedSquashGuard     == 0);
     REQUIRE (proc.savedLyricMode       == 0);
     REQUIRE (proc.savedRenderer        == 0);
+    REQUIRE (proc.savedStemMode        == false);
 }

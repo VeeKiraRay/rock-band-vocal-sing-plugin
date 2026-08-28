@@ -680,15 +680,24 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     const int hopN = audioProcessor.drainHopSamples (hopBuf, RBVocalSingAudioProcessor::kHopQueueCapacity);
     hopScratch.insert (hopScratch.end(), hopBuf, hopBuf + hopN);
 
-    // Feed the marker history here too — unconditionally, so it keeps rolling while the
-    // transport is stopped and while the Pitch Trail setting is off. Raw times, like the
-    // trail; heardDetection() applies the lead when it looks a sample up.
-    for (int i = 0; i < hopN; ++i)
+    // Feed the marker history here too — so it keeps rolling while the transport is
+    // stopped and while the Pitch Trail setting is off. Raw times, like the trail;
+    // heardDetection() applies the lead when it looks a sample up.
+    //
+    // The one exception is the stem readout: while it is active it writes detHistory from
+    // the cursor position instead, and the two sources would otherwise fight at ~94 Hz
+    // (input monitoring keeps delivering mic hops even with the transport stopped). The
+    // hop queue is still drained above, so nothing overflows — only the history write is
+    // skipped, and it resumes the moment playback starts or the mode goes off.
+    if (! stemReadoutActive())
     {
-        detHistory[(size_t) detHistoryHead] = { hopBuf[i].time, hopBuf[i].midiFloat,
-                                                hopBuf[i].octaveRatio, hopBuf[i].octaveDoubt };
-        detHistoryHead = (detHistoryHead + 1) % kDetHistorySize;
-        if (detHistoryCount < kDetHistorySize) ++detHistoryCount;
+        for (int i = 0; i < hopN; ++i)
+        {
+            detHistory[(size_t) detHistoryHead] = { hopBuf[i].time, hopBuf[i].midiFloat,
+                                                    hopBuf[i].octaveRatio, hopBuf[i].octaveDoubt };
+            detHistoryHead = (detHistoryHead + 1) % kDetHistorySize;
+            if (detHistoryCount < kDetHistorySize) ++detHistoryCount;
+        }
     }
 
     const auto& notes = audioProcessor.getChartNotes();

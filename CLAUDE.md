@@ -325,11 +325,12 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
   Octave Wrapping on; Pitch Trail on; Pitch Tolerance ±25/50/75/100 cents default
   ±50; Octave Guard Off/Warn only/Warn + correct default Off; Octave Threshold 60–90%
-  step 5 default 80; Mic gate; Load MIDI File when no REAPER API) + **Allow edits** toggle in the stats band.
+  step 5 default 80; Mic gate; Load MIDI File when no REAPER API) + **Allow edits** and
+  **Stem** toggles in the stats band.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   octaveGuard, octaveThresh, frameInterval, reaperPriority, octaveWrap, pitchTolCents,
   pitchTrail, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
-  lyricMode, renderer. `octaveGuard`/`octaveThreshold` follow the
+  lyricMode, renderer, stemMode. `octaveGuard`/`octaveThreshold` follow the
   `gateThreshold`/`vocalMode` pattern — no `saved*` mirror, because the audio thread reads
   them — and are clamped on read (0..2 and 0.60..0.90).
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
@@ -358,6 +359,25 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   at **raw project time regardless of Calibration** (2026-08-03) — the chart has to line
   up with the audio waveform and stay neutral about the monitoring latency of this rig or
   the target console. Design and findings come from the 2026-07 take-export work.
+
+- **Stem readout** (Stem toggle in the stats band, requires `reaperApi.canAnalyzeOffline()`):
+  while the transport is **stopped**, reads the plugin's own track through a REAPER
+  AudioAccessor (`rbstem::AudioReader`) and reports the pitch of the *stem under the edit
+  cursor* — no playback needed. `updateStemReadout()` runs on the 20 Hz poll gate, and only
+  when the cursor actually moved, so parking costs nothing. Each position gets a
+  **fresh `rbpitch::Detector`** (`stemDetector`, never the live instance) over a 150 ms
+  window centred on the cursor: 150 ms because the octave guard needs `kOctaveRunHops`
+  consecutive voiced hops before it fires, so a single window would leave it silently dead
+  in the one mode built to find octave errors. Hold decay is off (`holdCycles = 0`) so
+  silence reads as silence — the same rule the pitch trail follows.
+  The result is filed into `detHistory`, so the entire stats band, the octave chip and the
+  arrowhead follow it through their existing paths with no new draw code. **The one
+  behaviour change:** while the readout is active, `updateNoteHits()` stops writing
+  `detHistory` from the hop queue (it still drains it), because input monitoring keeps
+  delivering mic hops with the transport stopped and the two sources would fight at ~94 Hz.
+  `lastPaintHeardPitch` joined the idle-repaint gate for the same reason the mode exists:
+  nothing reaches the audio thread while stopped, so `currentMidiFloat` never moves while
+  the readout changes at every cursor position.
 
 ---
 

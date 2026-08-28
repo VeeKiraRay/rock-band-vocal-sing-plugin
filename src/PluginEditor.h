@@ -1,5 +1,6 @@
 #pragma once
 #include "PluginProcessor.h"
+#include "StemAudioReader.h"
 #include "TakeExport.h"   // rbtake::TrailPoint (= TrailSample) + segmentPitchTrail
 
 class RBVocalSingAudioProcessorEditor
@@ -91,6 +92,38 @@ private:
     // (stopping freezes the trail — the button always operates on a finished pass).
     juce::TextButton saveTakeBtn { "Save take" };
 
+    // ── Offline stem tools ────────────────────────────────────────────────────
+    // Stem mode reads the plugin's own track directly, so the pitch readout describes the
+    // *stem under the cursor* rather than the mic. It governs the offline tools only —
+    // what the detection settings do is a separate question, answered by "Live-mic used".
+    //
+    // Persisted through savedStemMode (the audio thread never reads it, so it follows the
+    // mirror pattern rather than living on the processor as an atomic).
+    juce::ToggleButton stemToggle { "Stem" };
+    bool stemMode { false };
+
+    // True when the readout should come from the stem rather than the mic: the mode is on,
+    // REAPER is connected with the accessor API, and the transport is stopped. While
+    // playing, the stem reaches processBlock like any other audio and the live path is
+    // already correct, so this deliberately yields to it.
+    bool stemReadoutActive() const;
+
+    // Reads a window ending at the edit cursor, runs it through stemDetector, and files
+    // the last hop into detHistory. Called from the poll gate, not every frame.
+    void updateStemReadout();
+
+    rbstem::AudioReader stemReader;    // one accessor, held open across frames
+    rbpitch::Detector   stemDetector;  // separate instance: never shares the live state
+    std::vector<float>  stemScratch;   // read buffer, reused between reads
+    double lastStemReadTime { -1.0 };  // cursor position of the last read (skips re-reads)
+
+    // How much audio to analyse per cursor position. The octave guard needs
+    // kOctaveRunHops consecutive voiced hops before it believes a rival, so a single
+    // window would leave it permanently unable to fire — silently dead in the one mode
+    // built to inspect stems for octave errors. 150 ms is ~3600 internal samples: the
+    // window fill plus ~11 hops, comfortably past the 6 required.
+    static constexpr double kStemReadSec = 0.15;
+
     // ── Note drag-edit state (message thread only) ────────────────────────────
     bool  dragActive      { false };
     int   dragNoteIndex   { -1 };   // index into chartNotes of the note being dragged
@@ -142,6 +175,8 @@ private:
     // fractional precision — the arrowhead moves on sub-semitone changes.
     double lastPaintTime       { -1.0e18 };
     float  lastPaintPitch      { -2.0f };
+    float  lastPaintHeardPitch { -2.0f };   // see the gate: in stem mode the heard
+                                            //   sample moves while the atomic does not
     int    lastPaintStateCount { -2 };
     bool   lastPaintDropping   { false };
     int    lastPaintLyricMode  { -1 };

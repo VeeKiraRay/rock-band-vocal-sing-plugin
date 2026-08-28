@@ -277,6 +277,10 @@ What gets written follows the trail on screen, cleaned up for charting:
 
 The button is greyed out while playing, when no take is on screen yet, outside REAPER, and in REAPER versions without the write API. Each save makes a fresh timestamped track — sing, save, tweak, sing again, and keep whichever take reads best.
 
+**Reading the stem while stopped (Stem mode).** Tick **Stem** in the band above the highway and the pitch readout stops listening to your microphone and reads the vocal stem on the plugin's own track instead. Stop the transport, drag the edit cursor through the song, and the note name, Hz, traffic light, arrowhead and octave chip all describe the stem *at the cursor* — no playback, no singing. It is the quickest way to ask "what note is the singer actually on here", and with a chart loaded the arrowhead snaps to the charted note when the stem is within your Pitch Tolerance, so a wrong chart pitch shows up immediately.
+
+Notes on the mode: it reads the track's **media items**, so it is unaffected by any FX on that track, and it needs a REAPER new enough to expose the audio-accessor API (the toggle stays greyed out otherwise). It only applies while **stopped** — during playback the stem reaches the plugin as ordinary audio and the normal path is already correct. Silence, or a gap between items, reads as silence rather than holding the previous note.
+
 **Charting from a stem:** put the plugin on a track with the real singer's vocal stem (see "Review takes offline" in [Tips](#tips)), play it through, stop, and save — the exported notes are a draft chart of the actual melody, ready to refine with [note edits](#editing-note-pitches). You do not need any notes on `PART VOCALS` first — with an empty chart the highway draws its axis, playhead and trail across the full singable range, so you can watch the take as it is captured. Leave **Live-mic used** off (the default) while doing this: the export is written at true project time either way, but with it ticked the trail is drawn — and the gold awarded — early against the notes by your Output calib value, so what you see while working would not match what you save.
 
 ---

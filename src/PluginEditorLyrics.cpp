@@ -21,7 +21,7 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
 
     // Rebuild the strip fonts when the Lyrics size setting changed — they stay
     // members so per-frame typeface-cache lookups are avoided
-    // (PERFORMANCE_IMPROVEMENT.md c6).
+    // (2026-07 paint phase, c6).
     const float s = lyricScale;
     if (lyricFontsScale != s)
     {
@@ -81,7 +81,7 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
 
         // Start at the first note that can reach the left cull margin — everything
         // earlier was an O(elapsed-song) `continue` sweep before
-        // (PERFORMANCE_IMPROVEMENT.md c1). Pills anchor at startTime, so unlike
+        // (2026-07 paint phase, c1). Pills anchor at startTime, so unlike
         // drawNotesForPart no still-sounding backward extension is needed; the
         // left-margin `continue` below stays as a boundary guard. The margin scales
         // with the font — scaled-up text is wider, and a fixed margin would pop
@@ -114,7 +114,7 @@ void RBVocalSingAudioProcessorEditor::drawLyricStrip (juce::Graphics& g,
         }
 
         // ── Pass 2: squash guard — de-overlap per the selected mode ──────────────
-        // (LYRIC_OVERLAP.md). Pills are in time order and per-strip, so neighbours in
+        // (2026-07 squash-guard work). Pills are in time order and per-strip, so neighbours in
         // pillScratch are the only collision candidates. Text boxes must sit 8·s
         // apart: 3·s bg padding each side plus a 2·s visible gap.
         const float pad = 8.0f * s;

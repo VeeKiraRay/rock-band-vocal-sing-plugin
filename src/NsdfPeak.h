@@ -10,7 +10,7 @@
 // reachable by hoping a synthesised signal happened to trigger them.
 //
 // Called once per detection hop on the audio thread: no allocation, no locks, no
-// exceptions. Analysis and rationale: _upcoming/PITCH_DETECTION_FINDINGS.md.
+// exceptions. The constants below come from the 2026-08 detection-range findings.
 
 namespace rbpitch
 {
@@ -26,9 +26,8 @@ struct LagBounds { int minLag, maxLag; };
 // The band is sized around the Rock Band vocal range, MIDI 36-84 (65.4 Hz - 1046.5 Hz),
 // with ~6% headroom at each end. The headroom is not slack: boundary rejection discards
 // a peak landing on either bound, so a bound sitting tight against real content rejects
-// it outright — measured at 1.01x (fails) vs 1.06x (fine) in
-// _upcoming/PITCH_DETECTION_FINDINGS.md §6. The previous 80/1000 Hz band left the top
-// and bottom of the vocal range undetectable.
+// it outright — measured at 1.01x (fails) vs 1.06x (fine), 2026-08. The previous
+// 80/1000 Hz band left the top and bottom of the vocal range undetectable.
 constexpr double kMaxFreqHz = 1200.0;  // top of the scanned band (MIDI 84 + ~9%)
 constexpr double kMinFreqHz =   60.0;  // bottom of the scanned band (MIDI 36 - ~8%)
 

@@ -43,7 +43,7 @@ PeakResult findNsdfPeak (const float* nsdf, const PeakParams& p) noexcept
     // symptom was a peak pinned on minLag. Canonical MPM waits for the first negative
     // crossing from tau = 0; doing it any later (e.g. from minLag) reintroduces the bug
     // for low notes, and starting the *search* there rather than at tau = 0 would hand
-    // high notes their 2x sub-period instead. Full analysis: PITCH_DETECTION_FINDINGS.md §6.
+    // high notes their 2x sub-period instead. Established by the 2026-08 range findings.
     int firstNegative = 1;
     while (firstNegative <= p.maxLag && nsdf[firstNegative] > 0.0f)
         ++firstNegative;

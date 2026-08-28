@@ -180,7 +180,7 @@ static void dedupHarmonyLyrics (std::vector<NoteInfo>& notes)
     }
 }
 
-// ─── Shared loader bookends (CODE_REVIEW.md 3.2) ──────────────────────────────
+// ─── Shared loader bookends (2026-07 code review, 3.2) ───────────────────────
 
 // Resets all chart state to defaults. Both loaders call this first so a failed load
 // never leaves the previous chart half-visible.
@@ -219,7 +219,7 @@ void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&          
         dedupHarmonyLyrics (chartNotes);
     }
 
-    // Content-derived render cache (PERFORMANCE_IMPROVEMENT.md c1/c2): precompute what
+    // Content-derived render cache (2026-07 paint phase, c1/c2): precompute what
     // paint() used to re-derive per frame per visible note. Runs after the harmony
     // passes (they never mutate lyric text). effectiveEnd replicates the editor's old
     // per-frame scan exactly: same-part raw-"+" notes chain the end time forward, any
@@ -239,7 +239,7 @@ void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&          
         }
     }
 
-    // Octave-wrap candidate pool (PERFORMANCE_IMPROVEMENT.md c4): chart pitches grouped
+    // Octave-wrap candidate pool (2026-07 paint phase, c4): chart pitches grouped
     // by pitch class, sorted + deduped once — replaces wrapPitchIntoRange's per-call
     // full-note scan. Chart pitches are 1..95, so plain % 12 is safe.
     for (const auto& n : chartNotes)
@@ -274,7 +274,7 @@ void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&          
 
     // Fallback: the latest note end. chartNotes is sorted by START time, so back()
     // is not necessarily the last-ending note (a long sustain can outlast a short
-    // final stab) — take the max end explicitly. (CODE_REVIEW.md 1.4)
+    // final stab) — take the max end explicitly. (2026-07 code review, 1.4)
     if (songEndTime <= 0.0 && !chartNotes.empty())
         songEndTime = std::max_element (chartNotes.begin(), chartNotes.end(),
                           [] (const NoteInfo& a, const NoteInfo& b) { return a.endTime < b.endTime; })

@@ -1,7 +1,7 @@
 # scripts/run_pluginval.ps1
 # Smoke-tests the built VST3 with Tracktion's pluginval (black-box validator: loads
 # the plugin, exercises processBlock/editor lifecycle/state save-restore across
-# buffer sizes and sample rates). See TEST_PLAN.md section 3.
+# buffer sizes and sample rates). See the project test plan, section 3.
 #
 # Usage: scripts/run_pluginval.ps1   (run after building the RBVocalSing target)
 

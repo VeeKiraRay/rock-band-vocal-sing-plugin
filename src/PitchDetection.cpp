@@ -56,8 +56,7 @@ void Detector::prepare (double hostSampleRate)
     // 88.2/96 kHz ÷ 4, 176.4 kHz ÷ 7, 192 kHz ÷ 8 → detectRate ≈ 22.05–25.2 kHz. The
     // window and lag ranges are in internal samples, so the detection floor and cadence
     // survive every host rate without buffer scaling. 22050 and 24000 measure identically,
-    // so both host families get the same behaviour (see the rate sweep in
-    // _upcoming/PITCH_DETECTION_FINDINGS.md).
+    // so both host families get the same behaviour (measured by the 2026-08 rate sweep).
     decimFactor = std::max (1, (int) std::lround (hostSampleRate / 24000.0));
     detectRate  = hostSampleRate / (double) decimFactor;
 
@@ -223,7 +222,7 @@ float Detector::detectPitchAutocorrelation (const float* samples, int numSamples
 
     // Only needs a non-empty correlation width — requiring numSamples ≥ 2 × maxLag was
     // over-strict and silently disabled this fallback once the lag range widened to
-    // 60 Hz (_upcoming/PITCH_DETECTION_FINDINGS.md §7 measured 0.4× as lossless).
+    // 60 Hz (the 2026-08 findings measured 0.4× of the lag range as lossless).
     if (numSamples <= maxLag) return 0.0f;
 
     float bestCorr = -1.0f;
@@ -239,7 +238,7 @@ float Detector::detectPitchAutocorrelation (const float* samples, int numSamples
         // Mean, not sum: the overlap shrinks as the lag grows, so a raw sum falls off
         // with lag for reasons that have nothing to do with periodicity and biases the
         // search toward short lags — the same defect fixed-width summation addresses in
-        // YIN (_upcoming/PITCH_DETECTION_FINDINGS.md §5). Latent until the scanned band
+        // YIN (2026-08 findings). Latent until the scanned band
         // widened; before that, minLag happened to sit past the crossover.
         corr /= (float) limit;
 

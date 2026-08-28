@@ -45,7 +45,7 @@ namespace
 
     // Writes each (track name, events) pair to its own track (prefixed with a
     // track-name meta event) in an in-memory MIDI file, then to a TemporaryFile, and
-    // returns that file. No binary fixtures are committed to the repo (TEST_PLAN.md sec 4).
+    // returns that file. No binary fixtures are committed to the repo (test plan, sec 4).
     juce::File writeMidiFixture (juce::TemporaryFile& tempFile,
                                   std::vector<std::pair<juce::String, juce::MidiMessageSequence>> tracks)
     {
@@ -210,7 +210,7 @@ TEST_CASE ("chartloader solo: suffix flags classify talkie/hidden lyrics", "[cha
     REQUIRE (notes[2].isHidden == true);
 }
 
-TEST_CASE ("chartloader solo: mixed suffix sets both flags (CODE_REVIEW.md 2.1)", "[chartloader][solo]")
+TEST_CASE ("chartloader solo: mixed suffix sets both flags (2026-07 code review, 2.1)", "[chartloader][solo]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
@@ -328,7 +328,7 @@ TEST_CASE ("chartloader solo: songEndTime from [end] event on EVENTS track, trim
     REQUIRE (proc.songEndTime == Catch::Approx (180.0).margin (0.001));
 }
 
-TEST_CASE ("chartloader solo: songEndTime fallback uses max end time, not last-starting note (CODE_REVIEW.md 1.4)",
+TEST_CASE ("chartloader solo: songEndTime fallback uses max end time, not last-starting note (2026-07 code review, 1.4)",
            "[chartloader][solo]")
 {
     RBVocalSingAudioProcessor proc;
@@ -516,7 +516,7 @@ TEST_CASE ("chartloader harmonies: each part keeps its own phrase grid", "[chart
     REQUIRE (proc.getChartHarm2Phrases()[0].startTime == Catch::Approx (60.0).margin (0.001));
 }
 
-// ─── Render cache (finalizeChart post-pass, PERFORMANCE_IMPROVEMENT.md c1/c2) ───
+// ─── Render cache (finalizeChart post-pass, 2026-07 paint phase) ───────
 
 TEST_CASE ("render cache: effectiveEnd extends through a '+' chain, breaks on other lyrics",
            "[chartloader][rendercache]")

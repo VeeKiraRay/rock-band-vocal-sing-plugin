@@ -7,7 +7,8 @@
 // this header and link TakeExport.cpp without constructing a plugin. The editor's
 // pitchTrail is a std::vector<TrailPoint> (via the TrailSample alias in
 // PluginEditor.h), so it passes straight into segmentPitchTrail with no copy.
-// Design + constant rationale: _upcoming/TAKE_EXPORT.md.
+// Each constant below carries its own rationale; they were settled in the 2026-07
+// take-export work.
 
 namespace rbtake
 {

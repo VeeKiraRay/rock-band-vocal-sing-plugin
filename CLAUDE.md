@@ -15,6 +15,13 @@ This file holds stable project knowledge only. Open work, the planned/completed-
 document index, and other WIP notes live in **CLAUDE.local.md** (gitignored, not part of
 a fresh clone) — check it before starting related tasks.
 
+**Committed files must not cite gitignored paths.** `_upcoming/`, `_old/`, `_dev_tools/`
+and `CLAUDE.local.md` do not exist in a fresh clone, so a comment pointing at
+`_old/SOME_DOC.md §3` is a dead reference for anyone but the author. Keep the *substance*
+in the committed file and name the effort instead of the file — "the 2026-07 code review,
+1.4", not "CODE_REVIEW.md 1.4". Describing that a local-only area exists is fine where it
+is explicitly labelled as such, as this section and the Dev tools section do.
+
 ---
 
 ## Host support (REAPER vs other DAWs)
@@ -153,9 +160,8 @@ note-pitch editor's `MIDI_SetNote` write-back.
   116 = overdrive, ≥ `kFirstReservedPitch` 96 = reserved (all excluded from `chartNotes`).
   `kLyricShiftPitch` 1 = RB3 lyric shift is filtered too, but unlike the others it is
   *dropped* rather than collected — nothing consumes it yet. It has a named constant anyway
-  because charting it dragged the highway floor to C-1
-  (`_upcoming/CHART_REVIEW_FINDINGS.md` §2), and because the pitch-edit drag floor is
-  expressed as `kLyricShiftPitch + 1`.
+  because charting it dragged the highway floor to C-1 (found in the 2026-08 chart
+  review), and because the pitch-edit drag floor is expressed as `kLyricShiftPitch + 1`.
 - Pitch range (`chartMinPitch`/`chartMaxPitch`) = loaded note min/max ± 2 semitones,
   clamped into the singable band (`rbhighway::kVocalLow/High` = 36–84). This pair is the
   **octave-wrap scoring range only** — the highway draws the section min/max through
@@ -223,11 +229,11 @@ Details live in the code; this is the map of what exists and its non-obvious dec
     voiced hops is believed; in Correct mode `detectPitchMPM` then returns the rival lag,
     **before** the median filter, so scoring, the trail and the take export all agree.
     Off passes `octaveRivalRatio = 0`, which skips the search — the detector is then
-    bit-for-bit its pre-guard self. Rationale and the false-positive findings:
-    `_upcoming/OCTAVE_CONFIDENCE.md`.
-  - Design rationale: `_old/ENGINE_V2.md` (original v2),
-    `_upcoming/PITCH_DETECTION_FINDINGS.md` (2026-08 range fix + 24 kHz move, with
-    the measurements behind both).
+    bit-for-bit its pre-guard self. Rationale and the false-positive findings come from
+    the 2026-08 octave-guard work.
+  - Design rationale: the 2026-07 engine-v2 phase (original v2) and the 2026-08
+    detection-range findings (range fix + 24 kHz move), which hold the measurements
+    behind both.
 - **Chart loading**: REAPER path (auto-reload on `GetProjectStateChangeCount` change) and
   `.mid` fallback, per the host-support table above.
 - **Highway** (`drawHighway`): horizontal scroll (`pixPerSec`, default 200 px/s), playhead
@@ -298,7 +304,7 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   (continuous in t, pills glide back onto their anchors), Auto-shrink = proportional
   glyph scaling via AffineTransform (floor 0.5, then fitted-squash to 0.25 + ellipsis;
   no per-frame Font construction), Hybrid = cap at 0.8×width then push the rest. Off
-  renders byte-identically to pre-feature (`_old/LYRIC_OVERLAP.md`).
+  renders byte-identically to pre-feature (2026-07 squash-guard work).
 - **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics
   (the calib field reads `out/in ms`, appending ` live` / ` playback` when the *output*
   offset is non-zero — at 0 ms the mode cannot change anything, so it is left off — and
@@ -346,14 +352,14 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   idle-repaint gate so it appears/expires while the transport is idle. Notes are written
   at **raw project time regardless of Calibration** (2026-08-03) — the chart has to line
   up with the audio waveform and stay neutral about the monitoring latency of this rig or
-  the target console. Design + findings: `_old/TAKE_EXPORT.md`.
+  the target console. Design and findings come from the 2026-07 take-export work.
 
 ---
 
 ## Performance lessons (hard-won — do not relearn)
 
-Full history was in this file's old backlog; the forward-looking plan is now
-PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
+Full history and the forward-looking plan live in the local 2026-07 paint-phase notes.
+The conclusions that must survive:
 
 1. **Polling is decoupled from rendering.** The old 30 fps "message-pump ceiling" was
    actually per-tick REAPER API calls; VBlank repaints + a ~20 Hz API gate fixed it.
@@ -365,8 +371,8 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
 3. **DO NOT cache solid fills into a `juce::Image`.** Tried (highway background/grid) and
    reverted: on JUCE's CPU renderer `drawImageAt` is read+write per pixel while
    `fillRect`/`drawHorizontalLine` are write-only — the cache was slower. Image caching
-   only pays where per-call CPU cost is high (text/glyphs may qualify — see
-   PERFORMANCE_IMPROVEMENT.md §d1 before trying).
+   only pays where per-call CPU cost is high (text/glyphs may qualify — measure before
+   trying; the 2026-07 paint phase ruled it out on the evidence in §7 below).
 4. **JUCE 8 minimal port does not work** (attempted June 2025, reverted). D2D-by-default
    invalidates all the GDI-tuned throttle constants, and JUCE 8's GDI fallback is also
    slower; GL toggle crashed on top of D2D. A future upgrade must rebuild the paint
@@ -386,7 +392,7 @@ PERFORMANCE_IMPROVEMENT.md. The conclusions that must survive:
    per-section paint EMAs + drawHighway sub-timers to the status bar and an 'S'-key
    window-size preset cycle; sub-timers showed the background fill dominates and note
    bars/label text are ≤ 2 ms even in Debug — so §d1 (text image cache) and the
-   Harmonies scan merge are ruled out (`_old/PERFORMANCE_IMPROVEMENT.md`).
+   Harmonies scan merge are ruled out (2026-07 paint phase).
 
 ---
 
@@ -422,8 +428,8 @@ tested without any plugin scaffolding) and the highway pitch-axis rules
 (`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`) and the extracted
 detection front end (`tests/PitchDetectorTests.cpp`, which pins a standalone
 `rbpitch::Detector` bit-for-bit against the `processBlock` path — if those ever diverge, an
-offline stem sweep would disagree with a real-time pass over the same audio). Piece A is a pluginval black-box smoke script. See TEST_PLAN.md for the
-full design rationale.
+offline stem sweep would disagree with a real-time pass over the same audio). Piece A is
+a pluginval black-box smoke script.
 
 `tests/DetectionLatencyTests.cpp` is a *measurement* test rather than a pass/fail one:
 it drives `processBlock` with synthesized onsets, legato pitch steps and gate closes,
@@ -476,7 +482,7 @@ separating singable notes from marker pitches (flagging pitch 1), the pitch rang
 highway would render, and the 50 ms lyric match replayed both as the loader behaves today
 and as it would with type-1 accepted. Use it whenever an imported chart misbehaves — it
 turns "lyrics don't show" into a count. It is also the acceptance check for the two
-chart-loader bugs recorded in CLAUDE.local.md (`_upcoming/CHART_REVIEW_FINDINGS.md` §1.5).
+chart-loader bugs recorded in CLAUDE.local.md.
 
 Drop `.mid` files into `_dev_tools/` or `_upcoming/` to inspect them; both are gitignored,
 so nothing an author sends for review can be committed by accident.

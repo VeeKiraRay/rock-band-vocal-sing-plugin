@@ -31,7 +31,7 @@ inline juce::String stripNotationSuffixes (const juce::String& s)
 // Classifies the full trailing suffix run: '#'/'^' → talkie, '$' → hidden. Walking the
 // whole run (the same run stripNotationSuffixes strips) means "word#$" and "word$#"
 // both set both flags — a last-character check would miss one of them each.
-// (CODE_REVIEW.md 2.1)
+// (2026-07 code review, 2.1)
 inline void classifyNotationSuffixes (const juce::String& s, bool& isTalkie, bool& isHidden)
 {
     isTalkie = isHidden = false;

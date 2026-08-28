@@ -46,7 +46,7 @@ struct NoteInfo {
 
     // ── Render cache — content-derived, filled by finalizeChart(); the parsers leave
     //    these defaulted. Precomputed so paint() never allocates strings or rescans
-    //    the note list per frame (PERFORMANCE_IMPROVEMENT.md c1/c2). Appended at the
+    //    the note list per frame (2026-07 paint phase, c1/c2). Appended at the
     //    end of the struct so the parsers' aggregate push_back({...}) stays valid.
     juce::String displayLyric;            // lyric minus #/^/$ suffixes — pills + highway labels
     juce::String syllable;                // stripLyricSuffix text — static-mode word part
@@ -188,7 +188,7 @@ public:
     // once per frame — a hop-level detection that gets superseded (next hop, hold
     // decay, silence) before the next UI frame reads the atomics was previously
     // invisible to note-hit tracking and the take-export pitch trail, especially
-    // for notes shorter than one UI frame interval (see _upcoming/SHORT_NOTE_HIT_TRACKING.md).
+    // for notes shorter than one UI frame interval (the short-note hit-tracking work).
     struct HopSample { double time; float midiFloat; bool voiced;
                        float octaveRatio; bool octaveDoubt; };
     static constexpr int kHopQueueCapacity = 128;  // ~2s of hops @ ~16ms — UI-stall headroom
@@ -282,7 +282,7 @@ private:
     // the median filter and the hold decay — lives in rbpitch::Detector (PitchDetector.h).
     // It is instance-owned so the offline stem analyzer can run a second one over project
     // audio without racing this one or sharing its median history, hold counter and
-    // octave-guard run counter (_upcoming/STEM_ANALYZER_MODE.md P1).
+    // octave-guard run counter (planned stem-analyzer work, P1).
     //
     // What stays here is publishing: reading the settings atomics into DetectorParams once
     // per block, then storing each hop's result into the atomics above and the hop queue
@@ -324,7 +324,7 @@ private:
                           std::vector<std::pair<double,double>>&      outShiftMarkers,
                           int& minP, int& maxP);
 
-    // Shared bookends of both chart loaders (CODE_REVIEW.md 3.2). clearChart() resets
+    // Shared bookends of both chart loaders (2026-07 code review, 3.2). clearChart() resets
     // all chart state; finalizeChart() is everything after "find source + parse":
     // sort → harmony post-passes → pitch padding → sections/separators → songEndTime
     // fallback. Each loader is then just: clearChart → find + parse → apply any [end]

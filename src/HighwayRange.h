@@ -8,7 +8,7 @@
 // once per section per frame; the rules live here rather than inline because the
 // section-transition branch needs the same computation for two sections at once.
 //
-// Rationale for each rule: _upcoming/CHART_REVIEW_FINDINGS.md §2 (b).
+// Each rule below was settled in the 2026-08 review of imported charts.
 
 namespace rbhighway
 {

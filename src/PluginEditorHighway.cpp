@@ -248,7 +248,7 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         // Include one extra earlier note of this part: a "+" bend note needs its
         // predecessor as the connector's left anchor even after that predecessor has
         // fully scrolled past the visible edge — the anchor's geometry is tracked
-        // without being drawn, so the diagonal still renders. (CODE_REVIEW.md 1.7)
+        // without being drawn, so the diagonal still renders. (2026-07 code review, 1.7)
         for (auto extra = startIt; extra != notes.begin(); )
         {
             --extra;
@@ -664,8 +664,8 @@ RBVocalSingAudioProcessorEditor::heardDetection() const
 // held, or silent), drained here every call. A UI frame can span several hops —
 // point-sampling only the latest atomic made hop-level detections invisible
 // whenever they were superseded before the next UI frame happened to read them,
-// which could hide notes shorter than one frame interval entirely (see
-// _upcoming/SHORT_NOTE_HIT_TRACKING.md, bug #3). lastHopMidiF/lastHopVoiced carry
+// which could hide notes shorter than one frame interval entirely (the short-note
+// hit-tracking investigation, bug #3). lastHopMidiF/lastHopVoiced carry
 // the pitch "in effect" at the end of one frame into the start of the next, so the
 // [t0, t] window is reconstructed as a sequence of hop-bounded sub-intervals
 // instead of one instantaneous sample.
@@ -984,7 +984,7 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     float bestDiffCents = -1.0f;
 
     // Window the scan like drawNotesForPart instead of walking from the first note of
-    // the song every frame (PERFORMANCE_IMPROVEMENT.md c3): jump to the earliest note
+    // the song every frame (2026-07 paint phase, c3): jump to the earliest note
     // within kNoteLookback, then extend backwards while the previous note is still
     // sounding — same non-overlap assumption drawNotesForPart documents.
     const auto& chartNotes = audioProcessor.getChartNotes();

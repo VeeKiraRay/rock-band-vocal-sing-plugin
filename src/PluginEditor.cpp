@@ -92,7 +92,7 @@ static Renderer rendererFromState (bool glAttached, int savedRenderer)
 // "configure-once" controls that were formerly in the always-visible panel.
 
 // Layout constants shared by SettingsPanel::resized() and its height calculation,
-// so the panel height can't drift from the row layout (CODE_REVIEW.md 2.4). File
+// so the panel height can't drift from the row layout (2026-07 code review, 2.4). File
 // scope (not class members) because MSVC won't evaluate an in-class-defined
 // constexpr function inside a static data member initializer.
 namespace settingsLayout
@@ -1000,7 +1000,7 @@ void RBVocalSingAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
 }
 
 // ─── Save take (pitch trail → MIDI on a new track) ────────────────────────────
-// TAKE_EXPORT.md. Message thread (button handler) — REAPER calls are safe here.
+// the 2026-07 take-export work. Message thread (button handler) — REAPER calls are safe here.
 // The trail is frozen: enablement requires a stopped transport, and updateNoteHits()
 // stops appending the moment playback stops.
 // Trail samples are raw project time, so the export deliberately ignores Calibration:
@@ -1207,7 +1207,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
             // The REAPER handover can complete after the editor is constructed, so the
             // constructor's one-time "Allow edits" enablement may have seen a not-yet-
             // loaded API. Re-evaluate here (two pointer checks) so the toggle wakes up
-            // without a close/reopen. (CODE_REVIEW.md 1.3)
+            // without a close/reopen. (2026-07 code review, 1.3)
             const bool canEditNow = audioProcessor.reaperApi.canEdit();
             if (canEditNow != editToggle.isEnabled())
             {
@@ -1407,7 +1407,7 @@ void RBVocalSingAudioProcessorEditor::resized()
     // ── "Allow edits" toggle: top row of the stats band, above the time label ──
     {
         // Chain off getHighwayArea() (highway → lyric strip → stats band) instead of
-        // re-deriving the bottom-band sum (CODE_REVIEW.md 2.6).
+        // re-deriving the bottom-band sum (2026-07 code review, 2.6).
         const int statsTop = getHighwayArea().getBottom() + lyricStripH();
         editToggle.setBounds (8, statsTop + 2, 130, kEditRowH - 2);
         saveTakeBtn.setBounds (146, statsTop + 2, 90, kEditRowH - 2);
@@ -1424,7 +1424,7 @@ void RBVocalSingAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillRect  (juce::Rectangle<int> (0, getHeight() - kControlsH, getWidth(), kControlsH));
 
     // Every band chains off getHighwayArea() so paint() can't drift from the layout
-    // used by resized() and mouse hit-testing (CODE_REVIEW.md 2.6). The top strip is
+    // used by resized() and mouse hit-testing (2026-07 code review, 2.6). The top strip is
     // whatever sits above the highway — empty in Solo mode.
     const auto highwayArea = getHighwayArea();
     const auto topArea     = getLocalBounds().withBottom (highwayArea.getY());

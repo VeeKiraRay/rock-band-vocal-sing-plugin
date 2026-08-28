@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Segmentation pipeline (TAKE_EXPORT.md §1). Every pass operates on sample times,
+// Segmentation pipeline (2026-07 take-export work). Every pass operates on sample times,
 // never sample counts — frame spacing is ~16 ms at 60 fps but ~50 ms at the 20 fps
 // frame cap, and irregular under dropped frames.
 

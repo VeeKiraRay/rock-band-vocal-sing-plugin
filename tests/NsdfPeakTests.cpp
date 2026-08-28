@@ -480,7 +480,7 @@ TEST_CASE ("nsdf: notes above the scanned band fold to an exact sub-period", "[n
 
 // ─── Analysis-rate sweep (hidden — run with: RBVocalSingTests.exe "[sweep]") ───
 //
-// Re-measures PITCH_DETECTION_FINDINGS.md finding 1 against MPM/NSDF. That finding
+// Re-measures finding 1 of the 2026-08 detection-range work against MPM/NSDF. That finding
 // ("16 kHz is measurably lossy; 24 kHz is the lowest lossless rate") was measured on
 // YIN/CMND in Lua, and its own caveats flag the rate floor as the result most needing
 // re-measurement here — MPM picks an integer lag and interpolates a different curve.

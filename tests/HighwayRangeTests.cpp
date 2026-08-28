@@ -2,7 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 // rbhighway::visibleRange — the highway's pitch axis rules. Pure, so these run without
-// an editor or a Graphics context. Background: _upcoming/CHART_REVIEW_FINDINGS.md §2.
+// an editor or a Graphics context. Background: the 2026-08 chart review.
 
 using rbhighway::visibleRange;
 using rbhighway::kVocalLow;

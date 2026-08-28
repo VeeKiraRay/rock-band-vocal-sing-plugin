@@ -297,7 +297,7 @@ TEST_CASE ("pitch: hold-decay keeps the note through kPitchHoldCycles then reset
     REQUIRE (proc.currentMidiFloat.load() == -1.0f);
 }
 
-TEST_CASE ("pitch: prepareToPlay clears a stale partial accumulation (CODE_REVIEW.md 1.6)", "[pitch]")
+TEST_CASE ("pitch: prepareToPlay clears a stale partial accumulation (2026-07 code review, 1.6)", "[pitch]")
 {
     RBVocalSingAudioProcessor proc;
 
@@ -316,7 +316,7 @@ TEST_CASE ("pitch: prepareToPlay clears a stale partial accumulation (CODE_REVIE
     REQUIRE (proc.currentFrequency.load() == Catch::Approx (440.0f).epsilon (0.01));
 }
 
-TEST_CASE ("pitch: 192 kHz, 110 Hz sine detects MIDI 45 (CODE_REVIEW.md 1.2)", "[pitch]")
+TEST_CASE ("pitch: 192 kHz, 110 Hz sine detects MIDI 45 (2026-07 code review, 1.2)", "[pitch]")
 {
     RBVocalSingAudioProcessor proc;
     proc.pitchMethod.store (0);   // Autocorrelation — the fallback whose guard this covers
@@ -578,7 +578,7 @@ TEST_CASE ("octave guard: the rival evidence rides the hop queue", "[pitch][octa
     REQUIRE (buf[n - 1].octaveRatio >= rbpitch::kOctaveRivalRatio);
 }
 
-// ─── Hop-sample queue (bug #3 fix, see _upcoming/SHORT_NOTE_HIT_TRACKING.md) ────
+// ─── Hop-sample queue (short-note hit-tracking, bug #3) ────────────────────────
 // The audio thread queues one HopSample per detection hop instead of only ever
 // publishing the latest atomics, so the UI thread can see every hop-level
 // estimate instead of point-sampling once per frame.

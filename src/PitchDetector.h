@@ -5,11 +5,10 @@
 // The pitch-detection front end: raw host-rate samples in, one estimate per hop out.
 //
 // Instance-owned rather than living on the processor so more than one can exist at a
-// time. The audio thread runs one; the offline stem analyzer
-// (_upcoming/STEM_ANALYZER_MODE.md) runs a second over audio read straight from the
-// project. Sharing a single instance would race the audio thread and — worse — let the
-// two cross-contaminate the median history, the hold counter and octaveRunHops, so the
-// octave guard would report runs that never happened.
+// time. The audio thread runs one; the planned offline stem analyzer runs a second over
+// audio read straight from the project. Sharing a single instance would race the audio
+// thread and — worse — let the two cross-contaminate the median history, the hold
+// counter and octaveRunHops, so the octave guard would report runs that never happened.
 //
 // Not JUCE-free (juce::dsp::FFT computes the NSDF autocorrelation), but processor-free:
 // a test can construct one and push samples with no plugin scaffolding. The decision
@@ -31,7 +30,7 @@ namespace rbpitch
 // kPitchWindow = 768 internal samples ≈ 32 ms at 24 kHz.
 //
 // The rate was 16 kHz until 2026-08-03. Measured at 24 kHz (sweeps in
-// tests/NsdfPeakTests.cpp, tabulated in _upcoming/PITCH_DETECTION_FINDINGS.md):
+// tests/NsdfPeakTests.cpp, tabulated in the 2026-08 detection-range findings):
 // ~14% fewer dropouts on noisy input at equal accuracy, high-range (MIDI 72-84) error
 // 3.6 -> 1.5 cents, and — because the window is a fixed *sample count* — the analysis
 // window shortens 48 -> 32 ms. 24 kHz is also the ceiling: integer decimation from a
@@ -44,8 +43,7 @@ constexpr int kPitchHoldCycles = 24;   // ≈ 260 ms of hold at the ~11 ms hop c
 // Must exceed the largest lag, detectRate / kMinFreqHz (60 Hz); the worst case is a host
 // rate just under 36 kHz (decimFactor 1 -> lag ≈ 599), hence 640. Note kPitchWindow >=
 // 2 x maxLag does not hold there — the correlation width only has to be a fraction of the
-// lag range, not exceed it (measured down to 0.4x with no loss,
-// PITCH_DETECTION_FINDINGS.md §7).
+// lag range, not exceed it (measured down to 0.4x with no loss, 2026-08).
 constexpr int kMaxLagBuf = 640;
 
 // Frames whose NSDF peak is below this are unvoiced (breath, consonants, noise): they

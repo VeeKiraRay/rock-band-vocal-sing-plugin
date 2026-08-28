@@ -37,11 +37,11 @@ private:
     void drawStatusBar   (juce::Graphics&, juce::Rectangle<int>);   // fps / priority / renderer info
     void drawMessageBar  (juce::Graphics&, juce::Rectangle<int>);   // chart status + frame-skip warning
     // "Save take" button handler: segments pitchTrail and writes the notes as a MIDI
-    // item on a new timestamped track below the plugin's track (TAKE_EXPORT.md).
+    // item on a new timestamped track below the plugin's track (2026-07 take-export work).
     void saveCurrentTake ();
     void openMidiFile    ();
     // Settings-popup callback for the Lyrics size row: stores + persists the scale,
-    // then re-applies window geometry (delta-based resize; see FONT_SCALING.md).
+    // then re-applies window geometry (delta-based resize; see 2026-07 lyrics-size work).
     void applyLyricScale (float newScale);
 
     void mouseDown  (const juce::MouseEvent&) override;
@@ -60,7 +60,7 @@ private:
     enum class LyricMode { Scrolling, Static };
     LyricMode lyricMode { LyricMode::Scrolling };
 
-    // Squash guard — scrolling-strip overlap handling (LYRIC_OVERLAP.md).
+    // Squash guard — scrolling-strip overlap handling (2026-07 squash-guard work).
     // Persisted as int (savedSquashGuard); order is part of the saved state.
     enum class SquashMode { Off, Spacing, Shrink, Hybrid };
     SquashMode squashGuard { SquashMode::Off };
@@ -221,7 +221,7 @@ private:
     // Session-only scroll rate (px/s) — drives both highway and lyric strips together.
     float  pixPerSec       { 200.0f };
     // Lyric-strip scale (1.0 = 100%) — scales strip text and the strip heights
-    // themselves (FONT_SCALING.md). Highway inline labels are not covered.
+    // themselves (2026-07 lyrics-size work). Highway inline labels are not covered.
     float  lyricScale      { 1.0f };
     // Session-only playback rate (1.0 = normal). Owned locally since GetPlayRate doesn't
     // load in this REAPER version; stepped by Up/Down keys and passed to CSurf_OnPlayRateChange.
@@ -305,13 +305,13 @@ private:
     int                lyricWidthCacheVersion { -1 };
     float              lyricWidthCacheFontH   { -1.0f };
 
-    // Scrolling-pill scratch for the squash-guard passes (LYRIC_OVERLAP.md): refilled
+    // Scrolling-pill scratch for the squash-guard passes (2026-07 squash-guard work): refilled
     // per strip per frame (collect → adjust → draw). A member so its capacity persists
     // across frames — after warm-up paint does no allocation.
     struct ScrollPill { int noteIdx; float anchorX, x, tw, drawW; };
     std::vector<ScrollPill> pillScratch;
 
-    // Static-lyric-mode phrase layout cache (PERFORMANCE_IMPROVEMENT.md c5): the
+    // Static-lyric-mode phrase layout cache (2026-07 paint phase, c5): the
     // collected syllable list + measured widths for one (strip, role) slot, rebuilt
     // only when the chart, phrase index, or font changes — while inside a phrase,
     // drawing does no collecting or measuring. Colour stays per-frame (depends on t).
@@ -337,7 +337,7 @@ private:
 
     // Lyric-strip fonts, constructed once per lyricScale value — juce::Font
     // construction does typeface-cache lookups, so building them per frame in paint
-    // was wasted work (PERFORMANCE_IMPROVEMENT.md c6). Rebuilt lazily at the top of
+    // was wasted work (2026-07 paint phase, c6). Rebuilt lazily at the top of
     // drawLyricStrip when the Lyrics size setting changes; base sizes 15 / 11 pt.
     juce::Font lyricFontCurrent { 15.0f, juce::Font::bold };  // pills + static current row
     juce::Font lyricFontPreview { 11.0f, juce::Font::bold };  // static preview row
@@ -365,7 +365,7 @@ private:
     // Solo base height; Harmonies adds a second (top) lyric strip. The +kEditRowH keeps
     // the highway height unchanged now that the stats band grew by the edit-toggle row.
     static constexpr int   kWindowBaseH   = 375 + kMessageH + kEditRowH;  // kControlsH + kStatusH + kMessageH + kStatsH + kLyricBaseH + highway, at 100% lyric scale
-    // Strip and window heights are computed from lyricScale (FONT_SCALING.md): the
+    // Strip and window heights are computed from lyricScale (2026-07 lyrics-size work): the
     // strips scale and the default window height follows, keeping the highway height
     // constant. At 100% these equal the old kLyricH / kWindowH / kWindowHHarm values.
     int lyricStripH() const { return juce::roundToInt (kLyricBaseH * lyricScale); }

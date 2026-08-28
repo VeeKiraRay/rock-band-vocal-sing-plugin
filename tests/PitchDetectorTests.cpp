@@ -7,7 +7,7 @@
 #include <vector>
 
 // rbpitch::Detector — the pitch-detection front end after it was lifted out of the
-// processor (_upcoming/STEM_ANALYZER_MODE.md P1).
+// processor (planned stem-analyzer work, P1).
 //
 // The extraction exists so a second instance can run over project audio without racing
 // the audio thread or sharing its median history, hold counter and octave-guard run
@@ -20,7 +20,7 @@
 //
 // The tolerance-based half of the comparison (offline sweep vs a real-time pass over a
 // real stem, where block boundaries put the hop phase somewhere different) is a manual
-// in-REAPER check — see the doc.
+// in-REAPER check.
 
 namespace
 {
@@ -168,9 +168,9 @@ TEST_CASE ("detector: two instances do not share state", "[pitch]")
 
 TEST_CASE ("detector: holdCycles 0 drops to silence with no hold tail", "[pitch]")
 {
-    // What the stem analyzer's cursor readout needs (STEM_ANALYZER_MODE.md P3): reading a
-    // window that ends at the cursor, a held value would describe audio that is not under
-    // the cursor. Default holdCycles keeps republishing; 0 must not.
+    // What the stem analyzer's cursor readout will need: reading a window that ends at
+    // the cursor, a held value would describe audio that is not under the cursor.
+    // Default holdCycles keeps republishing; 0 must not.
     const auto runWithHold = [] (int holdCycles)
     {
         rbpitch::Detector det;

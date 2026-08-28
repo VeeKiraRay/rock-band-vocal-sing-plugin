@@ -1,24 +1,192 @@
 #define NOMINMAX
-#include "PluginProcessor.h"
-#include "NsdfPeak.h"
+#include "PitchDetector.h"
 #include <cmath>
 #include <algorithm>
 
-// Monophonic pitch detectors for processBlock. detectPitch() applies the RMS gate
-// then dispatches to the algorithm chosen by pitchMethod. All members of
-// RBVocalSingAudioProcessor; processBlock (in PluginProcessor.cpp) calls detectPitch
-// across the TU boundary. The detectors operate on the decimated ~16 kHz stream —
-// all lag/frequency maths uses detectRate, never the host rate.
+// Implementation of rbpitch::Detector — the monophonic pitch-detection front end.
+//
+// pushSample() is the whole pipeline: condition at the host rate, decimate to the fixed
+// internal rate, fill the analysis ring, and once per kPitchHop run detectPitch() over it
+// and fold the result through the median filter and hold decay. detectPitch() applies the
+// RMS gate then dispatches to the algorithm chosen by params.method; the detectors operate
+// on the decimated stream, so all lag/frequency maths uses detectRate, never the host rate.
+//
+// Nothing here touches the plugin: the caller owns publishing (atomics, hop queue,
+// timestamps), which is what lets the offline stem analyzer run a second instance over
+// project audio and file the results somewhere else entirely.
+
+namespace rbpitch
+{
+
+// ─── Filter design ────────────────────────────────────────────────────────────
+
+void Detector::setBiquadLP (Biquad& f, double sampleRate, double freq)
+{
+    const double w0    = juce::MathConstants<double>::twoPi
+                             * std::min (freq, sampleRate * 0.45) / sampleRate;
+    const double cosw  = std::cos (w0);
+    const double alpha = std::sin (w0) / juce::MathConstants<double>::sqrt2;
+    const double a0    = 1.0 + alpha;
+    f.b0 = (float) ((1.0 - cosw) * 0.5 / a0);
+    f.b1 = (float) ((1.0 - cosw)       / a0);
+    f.b2 = f.b0;
+    f.a1 = (float) (-2.0 * cosw        / a0);
+    f.a2 = (float) ((1.0 - alpha)      / a0);
+}
+
+void Detector::setBiquadHP (Biquad& f, double sampleRate, double freq)
+{
+    const double w0    = juce::MathConstants<double>::twoPi
+                             * std::min (freq, sampleRate * 0.45) / sampleRate;
+    const double cosw  = std::cos (w0);
+    const double alpha = std::sin (w0) / juce::MathConstants<double>::sqrt2;
+    const double a0    = 1.0 + alpha;
+    f.b0 = (float) ((1.0 + cosw) * 0.5 / a0);
+    f.b1 = (float) (-(1.0 + cosw)      / a0);
+    f.b2 = f.b0;
+    f.a1 = (float) (-2.0 * cosw        / a0);
+    f.a2 = (float) ((1.0 - alpha)      / a0);
+}
+
+// ─── Preparation ──────────────────────────────────────────────────────────────
+
+void Detector::prepare (double hostSampleRate)
+{
+    // Fixed ~24 kHz internal detection rate by integer decimation: 44.1/48 kHz ÷ 2,
+    // 88.2/96 kHz ÷ 4, 176.4 kHz ÷ 7, 192 kHz ÷ 8 → detectRate ≈ 22.05–25.2 kHz. The
+    // window and lag ranges are in internal samples, so the detection floor and cadence
+    // survive every host rate without buffer scaling. 22050 and 24000 measure identically,
+    // so both host families get the same behaviour (see the rate sweep in
+    // _upcoming/PITCH_DETECTION_FINDINGS.md).
+    decimFactor = std::max (1, (int) std::lround (hostSampleRate / 24000.0));
+    detectRate  = hostSampleRate / (double) decimFactor;
+
+    // Front-end conditioning at the host rate: high-pass against rumble/plosives, two
+    // cascaded low-passes as the decimator's anti-alias filter (the internal Nyquist is
+    // ≥ 7.35 kHz at the rates above; NSDF needs nothing past ~2 kHz). The high-pass tracks
+    // the bottom of the searched band rather than sitting at a fixed frequency — a cutoff
+    // above the lowest expected pitch attenuates the very fundamentals the detector is
+    // meant to find, and the old fixed 70 Hz sat above MIDI 36 (65.4 Hz). Deriving it
+    // keeps the two from drifting apart again.
+    setBiquadHP (hpFilter,  hostSampleRate, kMinFreqHz);
+    setBiquadLP (lpFilter1, hostSampleRate, 6000.0);
+    setBiquadLP (lpFilter2, hostSampleRate, 6000.0);
+    hpFilter.reset();
+    lpFilter1.reset();
+    lpFilter2.reset();
+
+    // Drop any partial accumulation from before a stop/start or sample-rate change so
+    // stale samples never bleed into the first detection window.
+    decimPhase      = 0;
+    ringPos         = 0;
+    ringFilled      = 0;
+    hopCount        = 0;
+    pitchHoldFrames = 0;
+    medianCount     = 0;
+    octaveRunHops   = 0;
+
+    pubFrequency = 0.0f;
+    pubMidiFloat = -1.0f;
+    pubMidiNote  = -1;
+}
+
+// ─── The push path ────────────────────────────────────────────────────────────
+
+bool Detector::pushSample (float raw, DetectorResult& out)
+{
+    // Condition at the host rate, then keep every decimFactor-th sample for the internal
+    // detection pipeline (see the front-end block in the header).
+    const float conditioned = lpFilter2.process (lpFilter1.process (hpFilter.process (raw)));
+
+    if (++decimPhase < decimFactor)
+        return false;
+    decimPhase = 0;
+
+    pitchRing[ringPos] = conditioned;
+    if (++ringPos == kPitchWindow) ringPos = 0;
+    if (ringFilled < kPitchWindow) ++ringFilled;
+
+    // hopCount deliberately keeps climbing while the ring is still filling, so the first
+    // full window analyses immediately rather than waiting another kPitchHop samples.
+    if (++hopCount < kPitchHop || ringFilled < kPitchWindow)
+        return false;
+    hopCount = 0;
+
+    // Linearise the ring (the oldest sample sits at ringPos) so the detectors see one
+    // contiguous window.
+    const int tail = kPitchWindow - ringPos;
+    std::copy (pitchRing + ringPos, pitchRing + kPitchWindow, windowScratch);
+    std::copy (pitchRing, pitchRing + ringPos, windowScratch + tail);
+
+    const float hz = detectPitch (windowScratch, kPitchWindow);
+
+    // Clarity and octave-rival evidence are zeroed on a rejected or held hop: a held pitch
+    // is not fresh evidence of anything, so it must not keep re-flagging after the audio
+    // that produced it has gone.
+    out.aboveGate   = lastAboveGate;
+    out.clarity     = (hz > 0.0f) ? lastDetectClarity : 0.0f;
+    out.octaveRatio = (hz > 0.0f) ? lastDetectOctaveRatio : 0.0f;
+    out.octaveDoubt = (hz > 0.0f) && lastDetectOctaveDoubt;
+
+    if (hz > 0.0f)
+    {
+        // Median-of-3 over the accepted estimates (see medianHist); until the history
+        // fills, the newest value passes through unfiltered.
+        if (medianCount == 3)
+        {
+            medianHist[0] = medianHist[1];
+            medianHist[1] = medianHist[2];
+            medianHist[2] = hz;
+        }
+        else
+        {
+            medianHist[medianCount++] = hz;
+        }
+        const float pubHz = (medianCount == 3)
+            ? std::max (std::min (medianHist[0], medianHist[1]),
+                        std::min (std::max (medianHist[0], medianHist[1]),
+                                  medianHist[2]))
+            : hz;
+
+        const float midi = 69.0f + 12.0f * std::log2f (pubHz / 440.0f);
+        pubFrequency    = pubHz;
+        pubMidiFloat    = std::clamp (midi, 0.0f, 127.0f);
+        pubMidiNote     = std::clamp (static_cast<int> (std::roundf (midi)), 0, 127);
+        pitchHoldFrames = params.holdCycles;
+    }
+    else
+    {
+        // Unvoiced frame: restart the median history so no stale estimate bridges across
+        // a gap into the next onset.
+        medianCount = 0;
+
+        if (pitchHoldFrames > 0)
+        {
+            --pitchHoldFrames;
+        }
+        else
+        {
+            pubFrequency = 0.0f;
+            pubMidiFloat = -1.0f;
+            pubMidiNote  = -1;
+        }
+    }
+
+    out.hz        = pubFrequency;
+    out.midiFloat = pubMidiFloat;
+    out.midiNote  = pubMidiNote;
+    return true;
+}
 
 // ─── Pitch dispatcher ─────────────────────────────────────────────────────────
 
-float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSamples)
+float Detector::detectPitch (const float* samples, int numSamples)
 {
     float sum = 0.0f;
     for (int i = 0; i < numSamples; ++i)
         sum += samples[i] * samples[i];
-    const bool aboveGate = std::sqrtf (sum / (float) numSamples) >= gateThreshold.load (std::memory_order_relaxed);
-    audioAboveGate.store (aboveGate, std::memory_order_relaxed);
+    const bool aboveGate = std::sqrtf (sum / (float) numSamples) >= params.gateThreshold;
+    lastAboveGate = aboveGate;
     if (!aboveGate)
     {
         octaveRunHops = 0;   // silence ends any run — see kOctaveRunHops
@@ -30,17 +198,17 @@ float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSampl
     lastDetectOctaveDoubt = false;
 
     float hz = 0.0f;
-    switch (pitchMethod.load (std::memory_order_relaxed))
+    switch (params.method)
     {
         case 1:  hz = detectPitchYIN             (samples, numSamples); break;
         case 2:  hz = detectPitchMPM             (samples, numSamples); break;
         default: hz = detectPitchAutocorrelation (samples, numSamples); break;
     }
 
-    // The fallback detectors have no confidence measure — a successful detection
-    // counts as fully voiced so the clarity consumers behave sanely under them. They
-    // have no octave-rival measure either, and lastDetectOctaveRatio stays 0 for them:
-    // "no evidence of an octave error" rather than a fabricated reassurance.
+    // The fallback detectors have no confidence measure — a successful detection counts as
+    // fully voiced so the clarity consumers behave sanely under them. They have no
+    // octave-rival measure either, and lastDetectOctaveRatio stays 0 for them: "no evidence
+    // of an octave error" rather than a fabricated reassurance.
     if (hz > 0.0f && lastDetectClarity <= 0.0f)
         lastDetectClarity = 1.0f;
 
@@ -49,9 +217,9 @@ float RBVocalSingAudioProcessor::detectPitch (const float* samples, int numSampl
 
 // ─── Autocorrelation ──────────────────────────────────────────────────────────
 
-float RBVocalSingAudioProcessor::detectPitchAutocorrelation (const float* samples, int numSamples)
+float Detector::detectPitchAutocorrelation (const float* samples, int numSamples)
 {
-    const auto [minLag, maxLag] = rbpitch::lagBounds (detectRate, kMaxLagBuf);
+    const auto [minLag, maxLag] = lagBounds (detectRate, kMaxLagBuf);
 
     // Only needs a non-empty correlation width — requiring numSamples ≥ 2 × maxLag was
     // over-strict and silently disabled this fallback once the lag range widened to
@@ -83,9 +251,9 @@ float RBVocalSingAudioProcessor::detectPitchAutocorrelation (const float* sample
 
 // ─── YIN ──────────────────────────────────────────────────────────────────────
 
-float RBVocalSingAudioProcessor::detectPitchYIN (const float* samples, int numSamples)
+float Detector::detectPitchYIN (const float* samples, int numSamples)
 {
-    const auto [minLag, maxLag] = rbpitch::lagBounds (detectRate, kMaxLagBuf);
+    const auto [minLag, maxLag] = lagBounds (detectRate, kMaxLagBuf);
     const int  W                = numSamples - maxLag;
 
     if (W <= 0) return 0.0f;
@@ -138,9 +306,9 @@ float RBVocalSingAudioProcessor::detectPitchYIN (const float* samples, int numSa
 
 // ─── MPM ──────────────────────────────────────────────────────────────────────
 
-float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSamples)
+float Detector::detectPitchMPM (const float* samples, int numSamples)
 {
-    const auto [minLag, maxLag] = rbpitch::lagBounds (detectRate, kMaxLagBuf);
+    const auto [minLag, maxLag] = lagBounds (detectRate, kMaxLagBuf);
 
     // nsdf(τ) = 2·acf(τ) / m(τ), same values as the direct O(N × maxLag) loop this
     // replaced — only the computation route changed. acf(τ) for all lags at once is
@@ -180,12 +348,11 @@ float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSa
     //
     // The octave guard rides along as one extra parameter: 0 skips the rival search, so
     // Off costs nothing and returns exactly what it always did.
-    const int   guard      = octaveGuard.load (std::memory_order_relaxed);
-    const float rivalRatio = (guard != 0) ? octaveThreshold.load (std::memory_order_relaxed)
-                                          : 0.0f;
+    const int   guard      = params.octaveGuard;
+    const float rivalRatio = (guard != 0) ? params.octaveThreshold : 0.0f;
 
-    const auto peak = rbpitch::findNsdfPeak (nsdf, { minLag, maxLag, 0.93f, kClarityThreshold,
-                                                     rivalRatio });
+    const auto peak = findNsdfPeak (nsdf, { minLag, maxLag, 0.93f, params.clarityThreshold,
+                                            rivalRatio });
     lastDetectClarity     = peak.clarity;
     lastDetectOctaveRatio = peak.octaveRatio;
 
@@ -215,3 +382,5 @@ float RBVocalSingAudioProcessor::detectPitchMPM (const float* samples, int numSa
 
     return (float) detectRate / peak.tau;
 }
+
+} // namespace rbpitch

@@ -51,7 +51,11 @@ rock-band-vocal-sing-plugin/          (repo root)
     PluginProcessor.h             — RBVocalSingAudioProcessor decl + chart data types
     PluginProcessor.cpp           — lifecycle, processBlock, REAPER API handover,
                                     DEF_CLASS_IID (must stay in this one TU)
-    PitchDetection.cpp            — detectPitch + Autocorrelation/YIN/MPM (processor members)
+    PitchDetector.h               — rbpitch::Detector: the whole pitch-detection front end
+                                    (conditioning, decimation, ring, detectors, median, hold)
+                                    as an instance-owned type, so a second one can run
+                                    offline without racing or sharing the live one's state
+    PitchDetection.cpp            — rbpitch::Detector implementation + Autocorrelation/YIN/MPM
     ChartLoader.cpp               — readChartFromReaper / loadMidiFile / parseChartNotes +
                                     MIDI-text decode, pitch sections, harmony post-passes
     TakeExport.h / .cpp           — rbtake::segmentPitchTrail: pure pitch-trail → MIDI-note
@@ -190,8 +194,8 @@ note-pitch editor's `MIDI_SetNote` write-back.
 
 Details live in the code; this is the map of what exists and its non-obvious decisions.
 
-- **Pitch detection** (`PitchDetection.cpp` + `NsdfPeak.cpp` + the front end in
-  `processBlock`): MPM fixed as the algorithm (processor default `pitchMethod = 2`;
+- **Pitch detection** (`rbpitch::Detector` in `PitchDetector.h`/`PitchDetection.cpp` +
+  `NsdfPeak.cpp`; `processBlock` owns only publishing): MPM fixed as the algorithm (processor default `pitchMethod = 2`;
   Autocorrelation and YIN remain code-level fallbacks). Pipeline: high-pass at the
   band floor + 2× 6 kHz low-pass → integer decimation to a fixed **~24 kHz** internal
   rate (`detectRate` — all window/lag maths is host-rate-independent by construction,
@@ -415,7 +419,10 @@ Catch2 unit tests (`RBVocalSingTests` target, `tests/*.cpp`) exercise the proces
 public API directly — pitch detection, chart loading (Solo + Harmonies), settings
 persistence — plus the take-export segmenter (pure functions in `src/TakeExport.h`,
 tested without any plugin scaffolding) and the highway pitch-axis rules
-(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`). Piece A is a pluginval black-box smoke script. See TEST_PLAN.md for the
+(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`) and the extracted
+detection front end (`tests/PitchDetectorTests.cpp`, which pins a standalone
+`rbpitch::Detector` bit-for-bit against the `processBlock` path — if those ever diverge, an
+offline stem sweep would disagree with a real-time pass over the same audio). Piece A is a pluginval black-box smoke script. See TEST_PLAN.md for the
 full design rationale.
 
 `tests/DetectionLatencyTests.cpp` is a *measurement* test rather than a pass/fail one:

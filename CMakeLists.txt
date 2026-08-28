@@ -99,6 +99,7 @@ if (RBVS_BUILD_TESTS)
             src/PluginEditorLyrics.cpp
             tests/TestMain.cpp
             tests/PitchDetectionTests.cpp
+            tests/PitchDetectorTests.cpp
             tests/DetectionLatencyTests.cpp
             tests/NsdfPeakTests.cpp
             tests/ChartLoaderTests.cpp

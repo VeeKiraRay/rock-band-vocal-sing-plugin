@@ -4,7 +4,8 @@
 #include <atomic>
 #include <vector>
 #include "reaper_api.h"
-#include "NsdfPeak.h"   // kOctaveRivalRatio — default for the octave-threshold setting
+#include "NsdfPeak.h"       // kOctaveRivalRatio — default for the octave-threshold setting
+#include "PitchDetector.h"  // rbpitch::Detector — the pitch-detection front end
 
 // Which vocal part a note belongs to. Main = Solo (PART VOCALS) or HARM1 (lead) —
 // both render cyan with lyrics below the highway. Harm2/Harm3 render in their own
@@ -276,113 +277,21 @@ private:
         RBVocalSingAudioProcessor& proc;
     } vst3Ext { *this };
 
-    float detectPitch                (const float*, int);
-    float detectPitchAutocorrelation (const float*, int);
-    float detectPitchYIN             (const float*, int);
-    float detectPitchMPM             (const float*, int);
-
-    // ── Pitch-detection front end ─────────────────────────────────────────────
-    // Detection runs at a fixed ~24 kHz internal rate: processBlock conditions the
-    // input (high-pass at the band floor against rumble/plosives, 6 kHz low-pass
-    // anti-alias), keeps every decimFactor-th sample into a ring of the last
-    // kPitchWindow samples, and analyses the ring every kPitchHop new samples —
-    // overlapping windows, one estimate every ~11 ms (~94/s). All window/lag maths
-    // uses detectRate, never the host rate, so the constants below hold at every host
-    // rate by construction. kPitchWindow = 768 internal samples ≈ 32 ms at 24 kHz.
+    // ── Pitch detection ───────────────────────────────────────────────────────
+    // The whole front end — conditioning, decimation, the analysis ring, the detectors,
+    // the median filter and the hold decay — lives in rbpitch::Detector (PitchDetector.h).
+    // It is instance-owned so the offline stem analyzer can run a second one over project
+    // audio without racing this one or sharing its median history, hold counter and
+    // octave-guard run counter (_upcoming/STEM_ANALYZER_MODE.md P1).
     //
-    // The rate was 16 kHz until 2026-08-03. Measured at 24 kHz (sweeps in
-    // tests/NsdfPeakTests.cpp, tabulated in _upcoming/PITCH_DETECTION_FINDINGS.md):
-    // ~14% fewer dropouts on noisy input at equal accuracy, high-range (MIDI 72-84)
-    // error 3.6 -> 1.5 cents, and — because the window is a fixed *sample count* — the
-    // analysis window shortens 48 -> 32 ms, which is SHORT_NOTE_HIT_TRACKING §1's
-    // short-note improvement arriving for free. 24 kHz is also the ceiling: integer
-    // decimation from a 48 kHz host reaches only 48000/24000/16000, and a higher
-    // internal rate would push kPitchWindow + maxLag past kFftSize.
-    //
-    // kMaxLagBuf must exceed the largest lag, detectRate / rbpitch::kMinFreqHz (60 Hz);
-    // the worst case is a host rate just under 36 kHz (decimFactor 1 → lag ≈ 599),
-    // hence 640. Note kPitchWindow ≥ 2 × maxLag does not hold there — the correlation
-    // width only has to be a fraction of the lag range, not exceed it (measured down to
-    // 0.4× with no loss, PITCH_DETECTION_FINDINGS.md §7), so
-    // detectPitchAutocorrelation's guard was relaxed to match YIN's. Only hosts in the
-    // 34-36 kHz band go below that measured 0.4 ratio, and none are in common use.
-    static constexpr int kPitchWindow     = 768;
-    static constexpr int kPitchHop        = 256;  // 3 hops per window
-    static constexpr int kPitchHoldCycles = 24;   // ≈ 260 ms of hold at the ~11 ms hop cadence
-    static constexpr int kMaxLagBuf       = 640;
+    // What stays here is publishing: reading the settings atomics into DetectorParams once
+    // per block, then storing each hop's result into the atomics above and the hop queue
+    // below with a project timestamp attached.
+    rbpitch::Detector detector;
 
-    // Frames whose NSDF peak is below this are unvoiced (breath, consonants, noise):
-    // they feed the hold decay instead of publishing a garbage pitch.
-    static constexpr float kClarityThreshold = 0.80f;
-
-    // Consecutive voiced hops a rival must survive before the octave guard believes it.
-    //
-    // A peak near half the chosen lag is evidence of *period ambiguity*, which an octave
-    // error causes but so do two benign, common things: a pitch transition (the 768-sample
-    // window spans two notes, so consecutive periods differ and nsdf(T) is damped) and a
-    // vowel whose first formant sits near the 2nd harmonic (H2 exceeds H1, so the waveform
-    // genuinely has a strong quasi-period at T/2). Both are brief — a transition
-    // contaminates about kPitchWindow / kPitchHop = 3 hops — while a real octave error
-    // persists for most of the note. 6 hops (~64 ms) clears the transition case with
-    // margin and still fires well inside a short note.
-    //
-    // Found by a user testing Warn mode on a real vocal: glides and mid-sustain moments
-    // lit up red on a passage whose neighbouring notes made an octave jump implausible.
-    static constexpr int kOctaveRunHops = 6;
-
-    // MPM's NSDF autocorrelation term is computed as IFFT(|FFT(x)|²) — O(N log N)
-    // instead of the direct O(N × maxLag) form. kFftSize must be ≥ kPitchWindow +
-    // maxLag (≤ 1087) so the circular correlation is linear over the scanned lags.
-    static constexpr int kFftOrder = 11;
-    static constexpr int kFftSize  = 1 << kFftOrder;   // 2048
-
-    // One transposed-direct-form-II biquad section. Coefficients are written by
-    // setBiquadLP/HP in prepareToPlay only; process() runs on the audio thread.
-    struct Biquad
-    {
-        float b0 {}, b1 {}, b2 {}, a1 {}, a2 {};
-        float z1 {}, z2 {};
-        float process (float x) noexcept
-        {
-            const float y = b0 * x + z1;
-            z1 = b1 * x - a1 * y + z2;
-            z2 = b2 * x - a2 * y;
-            return y;
-        }
-        void reset() noexcept { z1 = z2 = 0.0f; }
-    };
-    static void setBiquadLP (Biquad&, double sampleRate, double freq);
-    static void setBiquadHP (Biquad&, double sampleRate, double freq);
-
-    double detectRate     { 16000.0 };  // internal detection rate = host rate / decimFactor
     double hostSampleRate { 48000.0 };  // set in prepareToPlay; used for hop timestamping
-                                         // (getSampleRate() isn't reliably set outside a real host)
-    int    decimFactor { 3 };
-    int    decimPhase  { 0 };
-    Biquad hpFilter;                 // 70 Hz high-pass (rumble / plosive rejection)
-    Biquad lpFilter1, lpFilter2;     // 2 × 6 kHz low-pass (decimation anti-alias)
-
-    // Ring of the most recent kPitchWindow internal samples, linearised into
-    // windowScratch for each detection so the detectors see contiguous memory.
-    float pitchRing[kPitchWindow]     = {};
-    float windowScratch[kPitchWindow] = {};
-    int   ringPos         { 0 };   // next write index == oldest sample once filled
-    int   ringFilled      { 0 };   // saturates at kPitchWindow
-    int   hopCount        { 0 };   // internal samples since the last detection
-    int   pitchHoldFrames { 0 };
-    float lastDetectClarity { 0.0f };   // written by detectPitch, published by processBlock
-    float lastDetectOctaveRatio { 0.0f };   // ditto — see currentOctaveRatio
-    bool  lastDetectOctaveDoubt { false };  // ditto — see currentOctaveDoubt
-    int   octaveRunHops         { 0 };      // consecutive voiced hops with a rival above
-                                            //   threshold; reset by silence and by any hop
-                                            //   without one, so a run never bridges a gap
-
-    // The published pitch is the median of the last 3 accepted estimates once the
-    // history is full — a single-frame octave/subharmonic error (note onsets, tone
-    // transitions) never reaches the UI, at the cost of one hop ≈ 16 ms of latency.
-    // Reset on every unvoiced frame so a fresh onset publishes immediately.
-    float medianHist[3] = {};
-    int   medianCount { 0 };
+                                        // (getSampleRate() isn't reliably set outside a
+                                        // real host)
 
     // SPSC queue backing drainHopSamples() above — written here (audio thread),
     // drained on the message thread. Drop-newest on overflow: the fifo only fills
@@ -392,11 +301,6 @@ private:
     std::array<HopSample, kHopQueueCapacity> hopBuffer;
     void pushHopSample (double time, float midiFloat, bool voiced,
                         float octaveRatio, bool octaveDoubt) noexcept;
-
-    // Constructed once with the processor (allocation happens off the audio thread);
-    // fftScratch is the in-place real-FFT workspace (2 × kFftSize floats).
-    juce::dsp::FFT pitchFft { kFftOrder };
-    float fftScratch[2 * kFftSize] = {};
 
     std::vector<NoteInfo>    chartNotes;
     std::vector<PhraseInfo>  chartPhrases;       // HARM1 / Solo phrase grid (bottom strip + static)

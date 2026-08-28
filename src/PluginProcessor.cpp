@@ -22,69 +22,14 @@ JUCE_END_IGNORE_WARNINGS_MSVC
 
 // RBJ-cookbook biquad coefficients, Q = 1/√2. The cutoff is clamped below Nyquist so
 // a degenerate host rate can't produce an unstable filter.
-void RBVocalSingAudioProcessor::setBiquadLP (Biquad& f, double sampleRate, double freq)
-{
-    const double w0    = juce::MathConstants<double>::twoPi
-                             * std::min (freq, sampleRate * 0.45) / sampleRate;
-    const double cosw  = std::cos (w0);
-    const double alpha = std::sin (w0) / juce::MathConstants<double>::sqrt2;
-    const double a0    = 1.0 + alpha;
-    f.b0 = (float) ((1.0 - cosw) * 0.5 / a0);
-    f.b1 = (float) ((1.0 - cosw)       / a0);
-    f.b2 = f.b0;
-    f.a1 = (float) (-2.0 * cosw        / a0);
-    f.a2 = (float) ((1.0 - alpha)      / a0);
-}
-
-void RBVocalSingAudioProcessor::setBiquadHP (Biquad& f, double sampleRate, double freq)
-{
-    const double w0    = juce::MathConstants<double>::twoPi
-                             * std::min (freq, sampleRate * 0.45) / sampleRate;
-    const double cosw  = std::cos (w0);
-    const double alpha = std::sin (w0) / juce::MathConstants<double>::sqrt2;
-    const double a0    = 1.0 + alpha;
-    f.b0 = (float) ((1.0 + cosw) * 0.5 / a0);
-    f.b1 = (float) (-(1.0 + cosw)      / a0);
-    f.b2 = f.b0;
-    f.a1 = (float) (-2.0 * cosw        / a0);
-    f.a2 = (float) ((1.0 - alpha)      / a0);
-}
-
 void RBVocalSingAudioProcessor::prepareToPlay (double sampleRate, int)
 {
-    // Fixed ~24 kHz internal detection rate by integer decimation: 44.1/48 kHz ÷ 2,
-    // 88.2/96 kHz ÷ 4, 176.4 kHz ÷ 7, 192 kHz ÷ 8 → detectRate ≈ 22.05–25.2 kHz. The
-    // window and lag ranges are in internal samples, so the detection floor and
-    // cadence survive every host rate without buffer scaling. 22050 and 24000 measure
-    // identically, so both host families get the same behaviour (see the rate sweep
-    // in _upcoming/PITCH_DETECTION_FINDINGS.md).
-    decimFactor    = std::max (1, (int) std::lround (sampleRate / 24000.0));
-    detectRate     = sampleRate / (double) decimFactor;
+    // Every front-end decision — decimation factor, filter design, and clearing the
+    // partial accumulation so stale samples cannot bleed across a stop/start or a
+    // sample-rate change — belongs to the detector now.
+    detector.prepare (sampleRate);
     hostSampleRate = sampleRate;
 
-    // Front-end conditioning at the host rate: high-pass against rumble/plosives,
-    // two cascaded low-passes as the decimator's anti-alias filter (the internal
-    // Nyquist is ≥ 7.35 kHz at the rates above; NSDF needs nothing past ~2 kHz).
-    // The high-pass tracks the bottom of the searched band rather than sitting at a
-    // fixed frequency — a cutoff above the lowest expected pitch attenuates the very
-    // fundamentals the detector is meant to find, and the old fixed 70 Hz sat above
-    // MIDI 36 (65.4 Hz). Deriving it keeps the two from drifting apart again.
-    setBiquadHP (hpFilter,  sampleRate, rbpitch::kMinFreqHz);
-    setBiquadLP (lpFilter1, sampleRate, 6000.0);
-    setBiquadLP (lpFilter2, sampleRate, 6000.0);
-    hpFilter.reset();
-    lpFilter1.reset();
-    lpFilter2.reset();
-
-    // Drop any partial accumulation from before a stop/start or sample-rate change so
-    // stale samples never bleed into the first detection window.
-    decimPhase      = 0;
-    ringPos         = 0;
-    ringFilled      = 0;
-    hopCount        = 0;
-    pitchHoldFrames = 0;
-    medianCount     = 0;
-    octaveRunHops   = 0;
     hopFifo.reset();
 }
 
@@ -145,6 +90,15 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const float* src        = buffer.getReadPointer (0);
     const int    numSamples = buffer.getNumSamples();
 
+    // Snapshot the settings atomics into the detector once per block rather than once per
+    // hop. A settings change is a user action at UI rate, so at most one block (~10 ms)
+    // separates the two — and it keeps the detector free of atomics, which is what lets a
+    // second instance run at a different sensitivity.
+    detector.setParams ({ gateThreshold.load (std::memory_order_relaxed),
+                          pitchMethod.load (std::memory_order_relaxed),
+                          octaveGuard.load (std::memory_order_relaxed),
+                          octaveThreshold.load (std::memory_order_relaxed) });
+
     // Per-hop timestamps for the HopSample queue: blockStartTime corresponds to
     // sample 0 of this buffer (currentPlaybackTime, just updated above or carried
     // over from a previous block), offset by the sample index within the block.
@@ -157,118 +111,56 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // the geometric half of the analysis delay; the rest (how much of the window the new
     // content must fill before the NSDF locks onto it) is inherent to the method and
     // stays. Measured before/after in tests/DetectionLatencyTests.cpp.
-    const double windowCentreOffset = 0.5 * (double) kPitchWindow / detectRate;
+    const double windowCentreOffset = detector.windowCentreSeconds();
 
     for (int i = 0; i < numSamples; ++i)
     {
-        // Condition at the host rate, then keep every decimFactor-th sample for the
-        // ~16 kHz detection pipeline (see the front-end block in the header).
-        const float conditioned = lpFilter2.process (lpFilter1.process (hpFilter.process (src[i])));
-
-        if (++decimPhase < decimFactor)
+#if RB_PITCH_PROFILE
+        const juce::int64 profDetStart = juce::Time::getHighResolutionTicks();
+#endif
+        rbpitch::DetectorResult det;
+        if (! detector.pushSample (src[i], det))
             continue;
-        decimPhase = 0;
 
-        pitchRing[ringPos] = conditioned;
-        if (++ringPos == kPitchWindow) ringPos = 0;
-        if (ringFilled < kPitchWindow) ++ringFilled;
-
-        if (++hopCount >= kPitchHop && ringFilled == kPitchWindow)
+#if RB_PITCH_PROFILE
         {
-            hopCount = 0;
-
-            // Linearise the ring (the oldest sample sits at ringPos) so the
-            // detectors see one contiguous window.
-            const int tail = kPitchWindow - ringPos;
-            std::copy (pitchRing + ringPos, pitchRing + kPitchWindow, windowScratch);
-            std::copy (pitchRing, pitchRing + ringPos, windowScratch + tail);
-
-#if RB_PITCH_PROFILE
-            const juce::int64 profDetStart = juce::Time::getHighResolutionTicks();
-#endif
-            const float hz = detectPitch (windowScratch, kPitchWindow);
-#if RB_PITCH_PROFILE
-            {
-                const double ms = (juce::Time::getHighResolutionTicks() - profDetStart) * 1000.0
-                                      / (double) juce::Time::getHighResolutionTicksPerSecond();
-                profDetectMs.store (0.9 * profDetectMs.load (std::memory_order_relaxed) + 0.1 * ms,
-                                    std::memory_order_relaxed);
-                profDetectCount.fetch_add (1, std::memory_order_relaxed);
-            }
-#endif
-            currentClarity.store (hz > 0.0f ? lastDetectClarity : 0.0f,
-                                  std::memory_order_relaxed);
-
-            // Octave-rival evidence for this hop. Zero on a rejected or held hop, like
-            // clarity: a held pitch is not fresh evidence of anything, so it must not
-            // keep re-flagging after the audio that produced it has gone.
-            const float hopOctaveRatio = (hz > 0.0f) ? lastDetectOctaveRatio : 0.0f;
-            const bool  hopOctaveDoubt = (hz > 0.0f) && lastDetectOctaveDoubt;
-            currentOctaveRatio.store (hopOctaveRatio, std::memory_order_relaxed);
-            currentOctaveDoubt.store (hopOctaveDoubt, std::memory_order_relaxed);
-
-            if (hz > 0.0f)
-            {
-                // Median-of-3 over the accepted estimates (see medianHist); until
-                // the history fills, the newest value passes through unfiltered.
-                if (medianCount == 3)
-                {
-                    medianHist[0] = medianHist[1];
-                    medianHist[1] = medianHist[2];
-                    medianHist[2] = hz;
-                }
-                else
-                {
-                    medianHist[medianCount++] = hz;
-                }
-                const float pubHz = (medianCount == 3)
-                    ? std::max (std::min (medianHist[0], medianHist[1]),
-                                std::min (std::max (medianHist[0], medianHist[1]),
-                                          medianHist[2]))
-                    : hz;
-
-                const float midi = 69.0f + 12.0f * std::log2f (pubHz / 440.0f);
-                const int   note = std::clamp (static_cast<int> (std::roundf (midi)), 0, 127);
-                currentFrequency.store (pubHz, std::memory_order_relaxed);
-                currentMidiFloat.store (std::clamp (midi, 0.0f, 127.0f), std::memory_order_relaxed);
-                currentMidiNote .store (note,  std::memory_order_relaxed);
-                pitchHoldFrames = kPitchHoldCycles;
-            }
-            else
-            {
-                // Unvoiced frame: restart the median history so no stale estimate
-                // bridges across a gap into the next onset.
-                medianCount = 0;
-
-                if (pitchHoldFrames > 0)
-                {
-                    --pitchHoldFrames;
-                }
-                else
-                {
-                    currentFrequency.store (0.0f,  std::memory_order_relaxed);
-                    currentMidiFloat.store (-1.0f, std::memory_order_relaxed);
-                    currentMidiNote .store (-1,    std::memory_order_relaxed);
-                }
-            }
-
-            // Publish this hop's result (voiced, held, or silent) so the UI thread
-            // can see every estimate instead of point-sampling the latest atomics
-            // once per frame — see the HopSample comment in the header.
-            // Clamped so a hop near the very start of a project can't be dated before it.
-            // Several hops can share the clamped value there; consumers already tolerate
-            // repeated hop times (a stopped transport reports the same time every block).
-            const double hopTime = std::max (0.0, blockStartTime + (double) i / hostSampleRate
-                                                      - windowCentreOffset);
-            pushHopSample (hopTime, currentMidiFloat.load (std::memory_order_relaxed),
-                           audioAboveGate.load (std::memory_order_relaxed),
-                           hopOctaveRatio, hopOctaveDoubt);
+            // Times the whole hop-completing pushSample call, so it now includes one
+            // sample of front-end filtering on top of the analysis it used to measure —
+            // tens of nanoseconds against a figure in the hundreds of microseconds.
+            //
+            // Note the clock is now read once per *sample* rather than once per hop,
+            // because whether a hop completed is only known after the call. That costs
+            // ~512 extra timer reads per block, which lands in profBlockLoad below at
+            // roughly 0.1% of the deadline — immaterial, but it is a floor under that
+            // number that did not exist before. RB_PITCH_PROFILE is off by default.
+            const double ms = (juce::Time::getHighResolutionTicks() - profDetStart) * 1000.0
+                                  / (double) juce::Time::getHighResolutionTicksPerSecond();
+            profDetectMs.store (0.9 * profDetectMs.load (std::memory_order_relaxed) + 0.1 * ms,
+                                std::memory_order_relaxed);
+            profDetectCount.fetch_add (1, std::memory_order_relaxed);
         }
+#endif
+
+        audioAboveGate    .store (det.aboveGate,   std::memory_order_relaxed);
+        currentClarity    .store (det.clarity,     std::memory_order_relaxed);
+        currentOctaveRatio.store (det.octaveRatio, std::memory_order_relaxed);
+        currentOctaveDoubt.store (det.octaveDoubt, std::memory_order_relaxed);
+        currentFrequency  .store (det.hz,          std::memory_order_relaxed);
+        currentMidiFloat  .store (det.midiFloat,   std::memory_order_relaxed);
+        currentMidiNote   .store (det.midiNote,    std::memory_order_relaxed);
+
+        // Publish this hop's result (voiced, held, or silent) so the UI thread can see
+        // every estimate instead of point-sampling the latest atomics once per frame —
+        // see the HopSample comment in the header.
+        // Clamped so a hop near the very start of a project can't be dated before it.
+        // Several hops can share the clamped value there; consumers already tolerate
+        // repeated hop times (a stopped transport reports the same time every block).
+        const double hopTime = std::max (0.0, blockStartTime + (double) i / hostSampleRate
+                                                  - windowCentreOffset);
+        pushHopSample (hopTime, det.midiFloat, det.aboveGate,
+                       det.octaveRatio, det.octaveDoubt);
     }
 
-    // Block cost as a fraction of the deadline this block had to meet. Blocks that
-    // ran a detection cost far more than those that didn't, so the EMA is a duty-cycle
-    // average across both — which is the number that matters for dropout headroom.
 #if RB_PITCH_PROFILE
     {
         const double sec = (juce::Time::getHighResolutionTicks() - profBlockStart)

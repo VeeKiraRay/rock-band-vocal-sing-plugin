@@ -14,18 +14,22 @@
 // "the picture is not keeping up", they want opposite advice, and only measurement at the
 // point of delivery can tell them apart:
 //
-//   PaintTooSlow  — our own paint() cannot fit in the frame budget. Every frame we ask for
-//                   arrives; there are just not many of them. Shrink the window, lower the
-//                   Frame cap, enable REAPER priority.
-//   StarvedPaint  — paint() is fast and we ask for frames that never arrive. JUCE defers
-//                   editor repaints to Windows' WM_PAINT, which is only delivered when the
-//                   host's message queue is empty; a busy REAPER UI thread can starve it
-//                   indefinitely. The OpenGL renderer bypasses that path entirely.
-//   StarvedThread — the stage before that: REAPER stops dispatching our VBlank callback, so
-//                   we never even ask. Requested and delivered then agree perfectly and the
-//                   delivery ratio sees nothing — only the tick rate witnesses it. Same
-//                   advice, different sentence, because "N of M frames drawn" would report
-//                   "4 of 4" here and read as no fault at all.
+//   PaintTooSlow — our own paint() cannot fit in the frame budget. Every frame we ask for
+//                  arrives; there are just not many of them. Shrink the window, lower the
+//                  Frame cap, enable REAPER priority.
+//   Starved      — paint() is fast and we ask for frames that never arrive. JUCE defers
+//                  editor repaints to Windows' WM_PAINT, which is only delivered when the
+//                  host's message queue is empty; a busy REAPER UI thread can starve it
+//                  indefinitely.
+//
+// There was briefly a third, StarvedThread, keyed on the tick rate: REAPER dispatching our
+// VBlank callback so rarely that we never even asked for the frames. It was **removed once
+// the forced redraw shipped** (see onFrame), because that changed what a tick means — every
+// tick we do get now produces a real frame on screen, so a low tick rate no longer predicts
+// a bad picture. Left in, it fired through every scrub on a rig whose highway was tracking
+// the drag perfectly well, and on the OpenGL renderer too, where its advice ("switch to
+// OpenGL") was nonsense. Do not reintroduce it without a symptom that the delivery test
+// misses.
 
 namespace rbperf
 {
@@ -43,29 +47,19 @@ constexpr double kDeliveryRatio = 0.6;
 // is measurement quantisation rather than a fault.
 constexpr double kMinRequestedFps = 10.0;
 
-// onFrame() runs on the display's VBlank whatever the picture is doing, so its rate is the
-// one signal here that does not depend on wanting frames. Falling this far under the Frame
-// cap means the host is not dispatching to us at all — a different stage of the same
-// problem, and one that nothing inside onFrame() could fix.
-constexpr double kTickStarveRatio = 0.5;
-
 struct FrameStats
 {
     double capFps        = 60.0;  // the Frame cap (60 when uncapped) — the rate asked for
     double achievableFps = 60.0;  // best rate paint() and the REAPER-priority budget allow
     double requestedFps  = 0.0;   // measured repaint() calls/s — frames the idle gate wanted
     double deliveredFps  = 0.0;   // measured paint() calls/s — frames that reached the screen
-    double tickFps       = 0.0;   // measured onFrame() calls/s — how often we run at all
+    // Measured onFrame() calls/s. No longer a fault signal in its own right (see the
+    // StarvedThread note above) — kept because it is the "have we measured anything yet"
+    // witness, and because the profile build's drawn/wanted/ticks readout needs it.
+    double tickFps       = 0.0;
 };
 
-enum class FrameVerdict { Healthy, PaintTooSlow, StarvedPaint, StarvedThread };
-
-// Both starved states want the same fix (the OpenGL renderer) and differ only in which
-// stage lost the frame, so the message bar branches on this rather than on the enum.
-inline bool isStarved (FrameVerdict v) noexcept
-{
-    return v == FrameVerdict::StarvedPaint || v == FrameVerdict::StarvedThread;
-}
+enum class FrameVerdict { Healthy, PaintTooSlow, Starved };
 
 inline FrameVerdict classifyFrames (const FrameStats& s) noexcept
 {
@@ -79,14 +73,11 @@ inline FrameVerdict classifyFrames (const FrameStats& s) noexcept
     if (s.achievableFps < s.capFps / kSlowFactor)
         return FrameVerdict::PaintTooSlow;
 
-    if (s.tickFps < kTickStarveRatio * s.capFps)
-        return FrameVerdict::StarvedThread;
-
     if (s.requestedFps < kMinRequestedFps)
         return FrameVerdict::Healthy;
 
     if (s.deliveredFps < kDeliveryRatio * s.requestedFps)
-        return FrameVerdict::StarvedPaint;
+        return FrameVerdict::Starved;
 
     return FrameVerdict::Healthy;
 }

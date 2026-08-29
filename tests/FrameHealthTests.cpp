@@ -109,31 +109,29 @@ TEST_CASE ("frame health: repaints asked for and not delivered read as starved",
     s.requestedFps  = 19.0;
     s.deliveredFps  = 3.0;
     s.tickFps       = 58.0;
-    REQUIRE (classifyFrames (s) == FrameVerdict::StarvedPaint);
+    REQUIRE (classifyFrames (s) == FrameVerdict::Starved);
 }
 
-TEST_CASE ("frame health: onFrame itself being starved is caught too", "[frames]")
+TEST_CASE ("frame health: a low tick rate on its own is not a fault", "[frames]")
 {
-    // The other stage of the same fault: REAPER stops dispatching our VBlank callback
-    // during the drag, so we never even ask. Requested and delivered then agree perfectly
-    // and the delivery ratio sees nothing - the tick rate is the only witness.
+    // Regression for a rule that was deliberately REMOVED (2026-08-29). There used to be a
+    // StarvedThread verdict keyed on tickFps < 0.5 * capFps: REAPER dispatching our VBlank
+    // callback so rarely that we never even asked for frames.
+    //
+    // The forced redraw in onFrame() changed what a tick means. Every tick we do get now
+    // produces a real frame on screen, so a low tick rate no longer predicts a bad picture -
+    // and left in, the rule fired through every playhead drag on a rig whose highway was
+    // tracking the drag perfectly well, on the OpenGL renderer too, where its advice
+    // ("switch to OpenGL") was nonsense.
+    //
+    // So: ticks far below the cap, every requested frame delivered, must be Healthy.
     FrameStats s;
     s.capFps        = 60.0;
     s.achievableFps = 60.0;
-    s.requestedFps  = 4.0;
-    s.deliveredFps  = 4.0;
+    s.requestedFps  = 15.0;
+    s.deliveredFps  = 15.0;
     s.tickFps       = 4.0;
-    REQUIRE (classifyFrames (s) == FrameVerdict::StarvedThread);
-}
-
-TEST_CASE ("frame health: both starved stages answer isStarved", "[frames]")
-{
-    // The message bar branches on this rather than on the enum: the two stages differ only
-    // in which one lost the frame, and both want the same fix.
-    REQUIRE      (rbperf::isStarved (FrameVerdict::StarvedPaint));
-    REQUIRE      (rbperf::isStarved (FrameVerdict::StarvedThread));
-    REQUIRE_FALSE(rbperf::isStarved (FrameVerdict::PaintTooSlow));
-    REQUIRE_FALSE(rbperf::isStarved (FrameVerdict::Healthy));
+    REQUIRE (classifyFrames (s) == FrameVerdict::Healthy);
 }
 
 TEST_CASE ("frame health: slow paint outranks starvation when both are true", "[frames]")

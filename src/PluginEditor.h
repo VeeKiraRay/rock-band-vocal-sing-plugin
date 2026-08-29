@@ -486,7 +486,6 @@ private:
     rbperf::FrameVerdict warnVerdict   { rbperf::FrameVerdict::Healthy };
     double warnDelivered  { 0.0 };
     double warnRequested  { 0.0 };
-    double warnTicks      { 0.0 };
     double warnAchievable { 0.0 };
 
     // The rate the user asked for: the Frame cap, or 60 when uncapped. Both the health

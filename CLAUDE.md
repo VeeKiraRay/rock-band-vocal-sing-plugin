@@ -325,8 +325,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   The **fps field is measured, not modelled** (2026-08-29): three counters — `onFrame`
   entries before the throttle, `repaint()` calls the idle gate approved, and `paint()` calls
   — differentiated over a ~1 s window and classified by `rbperf::classifyFrames`
-  (`FrameHealth.h`, pure + unit-tested) into Healthy / PaintTooSlow / StarvedPaint /
-  StarvedThread. The field shows **delivered frames only**, and `--` when nothing is asking
+  (`FrameHealth.h`, pure + unit-tested) into Healthy / PaintTooSlow / Starved.
+  The field shows **delivered frames only**, and `--` when nothing is asking
   for frames — a parked transport left the last busy second's number on screen, which reads
   as a fault that isn't there. The full `drawn/wanted/ticks` triple is **`RB_PAINT_PROFILE`-
   only**: it is the diagnosis, not a user-facing number, and the flag is the right home
@@ -525,7 +525,7 @@ The conclusions that must survive:
    message queue is empty, so a REAPER playhead drag froze the highway while the bar
    reported a serene 60. Delivery can only be counted at `paint()`; when a new perf signal
    is about what the user *sees*, measure it there rather than inferring it (2026-08-29
-   scrub-redraw work, which also documents the deferred forced-redraw fix).
+   scrub-redraw work).
 9. **The Frame cap quantises to the display's refresh rate.** `onFrame` is VBlank-driven, so
    an accepted frame interval is always a *whole number of refreshes*: the gate delivers
    `refresh / ceil(refresh / cap)`. A 60 fps cap gives 60 on a 60 Hz panel but
@@ -543,6 +543,23 @@ The conclusions that must survive:
    at the cost of uneven pacing, which is exactly the 2:3:2:3 judder pattern. A scrolling
    highway is the worst case for that, so evenly-paced 48 is the better picture and
    "Uncapped" already exists for anyone who wants all 144. Documented in README instead.
+10. **Force the paint; do not wait for `WM_PAINT`.** `repaint()` only queues a region — the
+    peer flushes it at the next VBlank and the drawing then waits for `WM_PAINT`, which
+    Windows synthesizes only once the thread's queue is otherwise empty. Our editor is a
+    child window on REAPER's UI thread, so dragging the playhead froze the highway for the
+    length of the drag. `getPeer()->performAnyPendingRepaintsNow()` as the **last statement**
+    of `onFrame()` fixes it: it flushes the deferred region and retrieves the paint with a
+    *filtered* `PeekMessage`, which is not subject to that ordering. JUCE documents the
+    method for exactly this ("audio plugins where the host's event loop is out of our
+    control"). It sits inside the idle gate and downstream of the throttle, so it can only
+    force frames already decided on. Skipped under OpenGL (own thread, never waits on
+    `WM_PAINT`) and under **REAPER priority** — that switch means "yield the shared UI
+    thread", and this is the one thing that takes host time back, so it is the escape hatch
+    instead of a new setting. Last statement is not stylistic: `PeekMessage` can dispatch
+    sent messages, so the editor can be destroyed inside the call. Measured 9→14 of 15
+    wanted frames during a scrub, with no REAPER lag (2026-08-29).
+    Removing the tick-rate starvation verdict was part of the same change: once every tick
+    that happens produces a real frame, a low tick rate no longer predicts a bad picture.
 
 ---
 

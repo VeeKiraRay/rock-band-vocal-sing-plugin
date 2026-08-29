@@ -1253,39 +1253,31 @@ void RBVocalSingAudioProcessorEditor::drawMessageBar (juce::Graphics& g,
     }
     else if (frameWarnActive)
     {
-        // Three faults, two remedies. "Paint too slow" is about what this plugin can manage,
-        // so it quotes the achievable rate and the things that reduce our own cost. Both
-        // starved states are about frames going missing between asking and drawing, so they
-        // point at the renderer that skips the path they go missing on - but they must say
-        // different sentences: in the thread-starved case requested and delivered agree
-        // perfectly, so "N of M drawn" would report "4 of 4" and read as no fault at all.
+        // Two faults, two remedies. "Paint too slow" is about what this plugin can manage,
+        // so it quotes the achievable rate and the things that reduce our own cost.
+        // "Starved" is about frames going missing between asking and drawing, so it quotes
+        // the shortfall - and its advice is renderer-aware, because telling someone already
+        // on the GPU renderer to switch to the GPU renderer is nonsense, which is exactly
+        // what shipped for a day (2026-08-29).
         //
         // Every figure comes from the latched warn* copies, not the live rates. The warning
         // is held for kFrameWarnHoldSec after the fault clears so it can actually be read,
         // and by then the live numbers have recovered and would contradict the message.
         juce::String msg;
-        switch (warnVerdict)
+        if (warnVerdict == rbperf::FrameVerdict::Starved)
         {
-            case rbperf::FrameVerdict::StarvedPaint:
-                msg = "[!] Redraws starved - only " + juce::String (juce::roundToInt (warnDelivered))
-                    + " of " + juce::String (juce::roundToInt (warnRequested))
-                    + " frames drawn; REAPER's UI thread is busy. Switch Renderer to OpenGL in Settings";
-                break;
-
-            case rbperf::FrameVerdict::StarvedThread:
-                msg = "[!] Redraws starved - REAPER is running the plugin only "
-                    + juce::String (juce::roundToInt (warnTicks))
-                    + " times/sec. Switch Renderer to OpenGL in Settings";
-                break;
-
-            case rbperf::FrameVerdict::PaintTooSlow:
-            case rbperf::FrameVerdict::Healthy:
-            default:
-                msg = "[!] Can't keep up (~" + juce::String ((int) std::lround (warnAchievable))
-                    + " fps) - ";
-                msg += reaperPriority ? "shrink window or lower Frame cap"
-                                      : "REAPER may lag; shrink window, lower Frame cap, or enable REAPER priority";
-                break;
+            msg = "[!] Redraws starved - only " + juce::String (juce::roundToInt (warnDelivered))
+                + " of " + juce::String (juce::roundToInt (warnRequested))
+                + " frames drawn; REAPER's UI thread is busy. ";
+            msg += glContext.isAttached() ? "Try a smaller window or a lower Frame cap"
+                                          : "Switch Renderer to OpenGL in Settings";
+        }
+        else
+        {
+            msg = "[!] Can't keep up (~" + juce::String ((int) std::lround (warnAchievable))
+                + " fps) - ";
+            msg += reaperPriority ? "shrink window or lower Frame cap"
+                                  : "REAPER may lag; shrink window, lower Frame cap, or enable REAPER priority";
         }
         g.setColour (juce::Colour (0xffffb030));
         g.drawText (msg, text, juce::Justification::centredLeft, true);

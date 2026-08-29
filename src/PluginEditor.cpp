@@ -236,7 +236,7 @@ public:
 
         // ── Performance ───────────────────────────────────────────────────────
         static const juce::String kTipRate     = "Limit redraws per second. Lower values reduce CPU load on REAPER's UI thread. Your monitor's refresh rate is the real clock: a frame lasts a whole number of refreshes, so a 60 fps cap draws 48 on a 144 Hz monitor (3 refreshes each) and a clean 60 on a 60 Hz one. Pick Uncapped, or a cap that divides your refresh rate.";
-        static const juce::String kTipPriority = "Skips frames when paint takes too long, keeping REAPER's UI responsive. Recommended at large window sizes.";
+        static const juce::String kTipPriority = "Yields the shared UI thread to REAPER: skips frames when paint takes too long, and stops the plugin forcing its redraws through while REAPER is busy. Recommended at large window sizes. Leave it off for the smoothest playhead dragging.";
         static const juce::String kTipRenderer = "CPU: software renderer (default). OpenGL: GPU rendering, may help at large window sizes. 'session only' reverts on next load; 'persist' saves the choice.";
         static const juce::String kTipCalib    = "Shifts the chart to compensate for how late the song reaches your ears (audio output latency). Positive = notes appear later, negative = earlier. Applies only while playing, so parking the edit cursor on a note start always puts that note on the playhead line.";
         static const juce::String kTipInCalib  = "Shifts your detected pitch to compensate for how late it is measured: your mic/interface input latency plus the analysis window (about 5 ms into a note, 30 ms on a mid-phrase syllable). Raise this until the pitch trail sits on the notes - do not use Output calibration for that, or the chart will drift off the song.";
@@ -2003,7 +2003,6 @@ void RBVocalSingAudioProcessorEditor::onFrame()
             warnVerdict    = frameVerdict;
             warnDelivered  = displayFps;
             warnRequested  = requestedFps;
-            warnTicks      = tickFps;
             warnAchievable = achievableFps;
         }
     }
@@ -2209,6 +2208,41 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         // Dirty only the dynamic areas — controls panel is static widgets that repaint themselves
         ++paintsRequested;
         repaint (getLocalBounds().withBottom (getHeight() - kControlsH));
+
+        // Draw it now instead of waiting for Windows to feel like it.
+        //
+        // repaint() only queues the region; the peer flushes it to InvalidateRect at the next
+        // VBlank and the drawing then waits for WM_PAINT, which Windows synthesizes only once
+        // the thread's message queue is otherwise empty. Our editor is a child window on
+        // REAPER's UI thread, so dragging the playhead floods that queue and the highway can
+        // sit frozen for the length of the drag. performAnyPendingRepaintsNow() flushes the
+        // deferred region and then retrieves the paint with a *filtered* PeekMessage, which
+        // is not subject to that ordering. JUCE documents the method for precisely this case:
+        // "mainly for special purposes like supporting audio plugins where the host's event
+        // loop is out of our control".
+        //
+        // This is inside the idle gate and downstream of the frame throttle, so it forces at
+        // most the frames we had already decided to draw — the Frame cap and the
+        // REAPER-priority budget still govern the rate. What changes is that a frame we asked
+        // for actually happens, instead of being coalesced away while the host is busy.
+        //
+        // Skipped under OpenGL, which renders from its own thread and never waits on
+        // WM_PAINT.
+        //
+        // Also skipped under **REAPER priority**, which is the escape hatch rather than a
+        // new setting. That switch already means "yield the shared UI thread to the host",
+        // and forcing a paint is the one thing here that takes host time back — so the two
+        // belong together. Measured on one rig as costing REAPER nothing, but that is one
+        // rig, and a user whose machine does suffer already has the switch they would reach
+        // for. A dedicated toggle was considered and dropped: a fix that only works for
+        // people who find and enable it is mostly a fix nobody gets.
+        //
+        // MUST BE THE LAST STATEMENT. PeekMessage can dispatch sent messages, so the editor
+        // can be destroyed inside this call — JUCE guards its own component with a
+        // WeakReference. Touch no member afterwards.
+        if (! reaperPriority && ! glContext.isAttached())
+            if (auto* peer = getPeer())
+                peer->performAnyPendingRepaintsNow();
     }
 }
 

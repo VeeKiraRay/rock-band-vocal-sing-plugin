@@ -159,6 +159,28 @@ protected:
         addAndMakeVisible (btn);
     }
 
+    // An IncDecButtons value stepper — the shape every numeric row in both popups uses.
+    //
+    // THE TOOLTIP MUST BE SET FIRST. A slider is not one component: setSliderStyle and
+    // setTextBoxStyle each recreate the value box and the +/- buttons as child components
+    // and copy the slider's tooltip *as it is at that moment*
+    // (juce::Slider::Pimpl::lookAndFeelChanged). Setting it afterwards leaves those three
+    // children with an empty tooltip — and on an IncDecButtons stepper they cover the
+    // whole control, so the mouse never touches the slider body that has the text. The
+    // tooltip then only appeared on the row's Label, which is what gave it away
+    // (found 2026-08-29). Ordering it here rather than at each call site means a row added
+    // later cannot reintroduce it; any further recreation re-copies the tooltip correctly.
+    void setupStepper (juce::Slider& s, double lo, double hi, double interval,
+                       const juce::String& suffix, const juce::String& tip)
+    {
+        s.setTooltip (tip);
+        s.setSliderStyle (juce::Slider::IncDecButtons);
+        s.setRange (lo, hi, interval);
+        s.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        s.setTextValueSuffix (suffix);
+        addAndMakeVisible (s);
+    }
+
     static void styleCombo (juce::ComboBox& cb)
     {
         cb.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff2a2a2a));
@@ -275,32 +297,22 @@ public:
 
         // ── Highway ───────────────────────────────────────────────────────────
         setupLabel (calibLabel, "Output calib", kTipCalib);
-        calibSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        calibSlider.setRange (-200, 500, 20);
+        setupStepper (calibSlider, -200, 500, 20, " ms", kTipCalib);
         calibSlider.setValue (this->cbs.initCalib, juce::dontSendNotification);
-        calibSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        calibSlider.setTextValueSuffix (" ms");
-        calibSlider.setTooltip (kTipCalib);
         calibSlider.onValueChange = [this]
         {
             this->cbs.setCalib ((int) calibSlider.getValue());
         };
-        addAndMakeVisible (calibSlider);
 
         // Finer steps than the output slider: the analysis chain alone accounts for
         // 5-30 ms, so a 20 ms step could not resolve it.
         setupLabel (inCalibLabel, "Input calib", kTipInCalib);
-        inCalibSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        inCalibSlider.setRange (-50, 250, 5);
+        setupStepper (inCalibSlider, -50, 250, 5, " ms", kTipInCalib);
         inCalibSlider.setValue (this->cbs.initInputCalib, juce::dontSendNotification);
-        inCalibSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        inCalibSlider.setTextValueSuffix (" ms");
-        inCalibSlider.setTooltip (kTipInCalib);
         inCalibSlider.onValueChange = [this]
         {
             this->cbs.setInputCalib ((int) inCalibSlider.getValue());
         };
-        addAndMakeVisible (inCalibSlider);
 
         setupLabel (liveMicLabel, "Live-mic used", kTipLiveMic);
         setupToggle (liveMicToggle, this->cbs.initLiveMic, kTipLiveMic);
@@ -310,31 +322,21 @@ public:
         };
 
         setupLabel (speedLabel, "Note Speed", kTipSpeed);
-        noteSpeedSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        noteSpeedSlider.setRange (100, 400, 25);
+        setupStepper (noteSpeedSlider, 100, 400, 25, " px/s", kTipSpeed);
         noteSpeedSlider.setValue (this->cbs.initSpeed, juce::dontSendNotification);
-        noteSpeedSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        noteSpeedSlider.setTextValueSuffix (" px/s");
-        noteSpeedSlider.setTooltip (kTipSpeed);
         noteSpeedSlider.onValueChange = [this]
         {
             this->cbs.setSpeed ((float) noteSpeedSlider.getValue());
         };
-        addAndMakeVisible (noteSpeedSlider);
 
         setupLabel (lyricSizeLabel, "Lyrics Size", kTipLyricSize);
-        lyricSizeSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        lyricSizeSlider.setRange (50, 200, 10);
+        setupStepper (lyricSizeSlider, 50, 200, 10, " %", kTipLyricSize);
         lyricSizeSlider.setValue (juce::roundToInt (this->cbs.initLyricScale * 100.0f),
                                   juce::dontSendNotification);
-        lyricSizeSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        lyricSizeSlider.setTextValueSuffix (" %");
-        lyricSizeSlider.setTooltip (kTipLyricSize);
         lyricSizeSlider.onValueChange = [this]
         {
             this->cbs.setLyricScale ((float) lyricSizeSlider.getValue() / 100.0f);
         };
-        addAndMakeVisible (lyricSizeSlider);
 
         setupLabel (squashLabel, "Squash Guard", kTipSquash);
         squashCombo.addItem ("Off",         1);
@@ -366,17 +368,12 @@ public:
         };
 
         setupLabel (pitchTolLabel, "Pitch Tolerance", kTipPitchTol);
-        pitchTolSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        pitchTolSlider.setRange (25, 100, 25);
+        setupStepper (pitchTolSlider, 25, 100, 25, " cents", kTipPitchTol);
         pitchTolSlider.setValue (this->cbs.initPitchTol, juce::dontSendNotification);
-        pitchTolSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        pitchTolSlider.setTextValueSuffix (" cents");
-        pitchTolSlider.setTooltip (kTipPitchTol);
         pitchTolSlider.onValueChange = [this]
         {
             this->cbs.setPitchTol ((int) pitchTolSlider.getValue());
         };
-        addAndMakeVisible (pitchTolSlider);
 
         setupLabel (octGuardLabel, "Octave Guard", kTipOctGuard);
         octGuardCombo.addItem ("Off",            1);
@@ -392,26 +389,24 @@ public:
         addAndMakeVisible (octGuardCombo);
 
         setupLabel (octThreshLabel, "Octave Threshold", kTipOctThresh);
-        octThreshSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        octThreshSlider.setRange (60, 90, 5);
+        setupStepper (octThreshSlider, 60, 90, 5, " %", kTipOctThresh);
         octThreshSlider.setValue (this->cbs.initOctaveThresh, juce::dontSendNotification);
-        octThreshSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        octThreshSlider.setTextValueSuffix (" %");
-        octThreshSlider.setTooltip (kTipOctThresh);
         octThreshSlider.onValueChange = [this]
         {
             this->cbs.setOctaveThresh ((int) octThreshSlider.getValue());
         };
-        addAndMakeVisible (octThreshSlider);
 
+        // The one slider that isn't a stepper, so it can't use setupStepper — but the
+        // tooltip still has to be set before setTextBoxStyle, or its value box (a child
+        // component, like a stepper's) is created without one. See setupStepper.
         setupLabel (gateLabel, "Mic Gate", kTipGate);
+        gateSlider.setTooltip (kTipGate);
         gateSlider.setRange (0.001, 0.05, 0.0);
         gateSlider.setValue (proc.gateThreshold.load (std::memory_order_relaxed),
                              juce::dontSendNotification);
         gateSlider.setSliderStyle (juce::Slider::LinearHorizontal);
         gateSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 55, 28);
         gateSlider.setNumDecimalPlacesToDisplay (3);
-        gateSlider.setTooltip (kTipGate);
         gateSlider.onValueChange = [this]
         {
             this->proc.gateThreshold.store ((float) gateSlider.getValue(),
@@ -647,56 +642,36 @@ public:
 
         // Clarity as a percentage, matching how Octave Threshold presents its 0-1 ratio.
         setupLabel (clarityLabel, "Clarity Gate", kTipClarity);
-        claritySlider.setSliderStyle (juce::Slider::IncDecButtons);
-        claritySlider.setRange (50, 95, 5);
-        claritySlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        claritySlider.setTextValueSuffix (" %");
-        claritySlider.setTooltip (kTipClarity);
+        setupStepper (claritySlider, 50, 95, 5, " %", kTipClarity);
         claritySlider.onValueChange = [this]
         {
             proc.advClarityThreshold.store ((float) (claritySlider.getValue() / 100.0),
                                             std::memory_order_relaxed);
         };
-        addAndMakeVisible (claritySlider);
 
         setupLabel (minNoteLabel, "Min Note Length", kTipMinNote);
-        minNoteSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        minNoteSlider.setRange (20, 500, 10);
-        minNoteSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        minNoteSlider.setTextValueSuffix (" ms");
-        minNoteSlider.setTooltip (kTipMinNote);
+        setupStepper (minNoteSlider, 20, 500, 10, " ms", kTipMinNote);
         minNoteSlider.onValueChange = [this]
         {
             proc.advMinNoteLen.store (minNoteSlider.getValue() / 1000.0,
                                       std::memory_order_relaxed);
         };
-        addAndMakeVisible (minNoteSlider);
 
         setupLabel (gapLabel, "Gap Merge", kTipGapMerge);
-        gapSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        gapSlider.setRange (0, 500, 10);
-        gapSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
-        gapSlider.setTextValueSuffix (" ms");
-        gapSlider.setTooltip (kTipGapMerge);
+        setupStepper (gapSlider, 0, 500, 10, " ms", kTipGapMerge);
         gapSlider.onValueChange = [this]
         {
             proc.advMaxGapMerge.store (gapSlider.getValue() / 1000.0,
                                        std::memory_order_relaxed);
         };
-        addAndMakeVisible (gapSlider);
 
         setupLabel (splitLabel, "Split Hysteresis", kTipSplit);
-        splitSlider.setSliderStyle (juce::Slider::IncDecButtons);
-        splitSlider.setRange (0.10, 2.00, 0.05);
-        splitSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
+        setupStepper (splitSlider, 0.10, 2.00, 0.05, " st", kTipSplit);
         splitSlider.setNumDecimalPlacesToDisplay (2);
-        splitSlider.setTextValueSuffix (" st");
-        splitSlider.setTooltip (kTipSplit);
         splitSlider.onValueChange = [this]
         {
             proc.advSplitHysteresis.store (splitSlider.getValue(), std::memory_order_relaxed);
         };
-        addAndMakeVisible (splitSlider);
 
         pullFromProcessor();
         setSize (kW, kH);

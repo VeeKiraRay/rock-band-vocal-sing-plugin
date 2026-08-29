@@ -528,7 +528,9 @@ tested without any plugin scaffolding) and the highway pitch-axis rules
 (`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the tooltip
 placement rule (`src/TooltipBounds.h` — `tests/TooltipBoundsTests.cpp`, which sweeps every
 cursor position over a minimum-width editor against the widest tooltips the layout can
-produce and asserts the box never contains the cursor), the offline stem
+produce and asserts the box never contains the cursor), the slider-tooltip ordering rule
+(`tests/SliderTooltipTests.cpp` — pins that a `juce::Slider`'s children inherit its tooltip
+only when it is set before the style calls), the offline stem
 reader (`tests/StemAudioReaderTests.cpp`, driven through a fake REAPER API — the
 null-guards, accessor lifetime and double-to-float read path are all checkable without
 REAPER, but the function-pointer *signatures* are not) and the extracted
@@ -724,3 +726,15 @@ so nothing an author sends for review can be committed by accident.
   `windowIgnoresMouseClicks` on a *desktop*-parented tooltip: ours is an editor child, so
   it is given `setInterceptsMouseClicks (false, false)` explicitly, or it would swallow a
   click on whatever it covers.
+- **A `juce::Slider`'s tooltip must be set *before* `setSliderStyle`/`setTextBoxStyle`.**
+  A slider is not one component: those two calls recreate the value box — and, for
+  `IncDecButtons`, the `+`/`-` buttons — as children, copying the slider's tooltip *as it
+  is at that moment* (`Slider::Pimpl::lookAndFeelChanged`). Set it afterwards and only the
+  slider *body* has it, which on a stepper is the one part the mouse never touches, so the
+  tooltip appears solely on the row's `Label`. Every stepper in Settings and Advanced
+  shipped that way (found 2026-08-29). `PanelBase::setupStepper` now owns the ordering for
+  the ten stepper rows; Mic Gate is `LinearHorizontal` so it cannot use the helper and
+  fixes the ordering at its call site. `tests/SliderTooltipTests.cpp` pins the JUCE
+  behaviour both directions, so an upgrade that changed it fails there rather than
+  silently costing the tooltips again. Note this is unrelated to the placement gotcha
+  above — same symptom area, different cause.

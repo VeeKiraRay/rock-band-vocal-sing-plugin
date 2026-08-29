@@ -110,6 +110,7 @@ if (RBVS_BUILD_TESTS)
             tests/TakeExportTests.cpp
             tests/HighwayRangeTests.cpp
             tests/TooltipBoundsTests.cpp
+            tests/SliderTooltipTests.cpp
     )
 
     target_compile_definitions(RBVocalSingTests

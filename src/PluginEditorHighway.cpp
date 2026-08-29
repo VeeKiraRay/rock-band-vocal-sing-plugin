@@ -174,17 +174,14 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         g.setColour (juce::Colour (0x99ffffff));
         const int maxP = (int) std::round (fMaxP);
         const int minP = (int) std::round (fMinP);
-        const auto makeName = [&] (int p) -> juce::String {
-            return juce::String (kNoteNames[p % 12]) + juce::String (p / 12 - 1);
-        };
         // Top label: centre on the top note's Y, clamp inside area
         const float topY = pitchY ((float) maxP);
-        g.drawText (makeName (maxP),
+        g.drawText (noteNameFor (maxP),
                     area.getX() + 3, juce::jmax (area.getY(), (int) topY - 5), 28, 10,
                     juce::Justification::centredLeft, false);
         // Bottom label: centre on the bottom note's Y, clamp inside area
         const float botY = pitchY ((float) minP);
-        g.drawText (makeName (minP),
+        g.drawText (noteNameFor (minP),
                     area.getX() + 3, juce::jmin (area.getBottom() - 10, (int) botY - 5), 28, 10,
                     juce::Justification::centredLeft, false);
     }
@@ -202,7 +199,41 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
     // the z-order (Harm3 → Harm2 → Main) keeps the lead on top.
     g.saveState();
     g.reduceClipRegion (area);
-    g.setFont (juce::Font (10.0f, juce::Font::bold));
+    const juce::Font labelFont (10.0f, juce::Font::bold);
+    g.setFont (labelFont);
+
+    // Note markings — the labels above the bars. Collected here and placed after every part
+    // has been drawn, because the yield rule runs Main-first while the bars run Main-last
+    // (z-order), and because a label must be able to see bars belonging to parts that have
+    // not been drawn yet.
+    const bool wantLyricMarks = (noteMarkings == NoteMarkings::Lyric
+                                 || noteMarkings == NoteMarkings::Both);
+    const bool wantPitchMarks = (noteMarkings == NoteMarkings::Pitch
+                                 || noteMarkings == NoteMarkings::Both);
+
+    // Text widths. Needed for the yield rule, not only for drawing: a label's collision
+    // extent is the real width of its text, whereas drawText is handed the
+    // jmax(40, barW) box the inline lyric has always used.
+    if (wantLyricMarks || wantPitchMarks)
+    {
+        if (hwLabelWidthCacheVersion != audioProcessor.getChartVersion()
+            || hwLabelWidthCacheFontH != labelFont.getHeight()
+            || hwLabelWidthCache.size() != notes.size())
+        {
+            hwLabelWidthCache.assign (notes.size(), -1.0f);
+            hwLabelWidthCacheVersion = audioProcessor.getChartVersion();
+            hwLabelWidthCacheFontH   = labelFont.getHeight();
+        }
+
+        if (hwPitchMarkWidthsFontH != labelFont.getHeight())
+        {
+            for (int p = 0; p < 128; ++p)
+                hwPitchMarkWidths[(size_t) p] = labelFont.getStringWidthFloat (pitchMarkFor (p));
+            hwPitchMarkWidthsFontH = labelFont.getHeight();
+        }
+    }
+
+    markScratch.clear();
 
     // Visible time window. Notes are sorted by startTime, so each part can binary-search
     // to the first potentially-visible note and stop once notes scroll past the right
@@ -332,30 +363,57 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
                 }
             }
 
-            // Inline bar labels: Main part only — HARM2/HARM3 lyrics live in the top strip.
-            if (part == VocalPart::Main
-                && !bend && n.lyric.isNotEmpty()
-                && x1 >= (float) area.getX() && (x2 - x1) > 4.0f)
+            // Note markings: collect the label this note wants, if any. Placement and
+            // drawing happen once every part is done — see the pass below the z-order calls.
+            //
+            // The lyric half keeps its original conditions exactly (Main only; HARM2/HARM3
+            // lyrics live in the top strip). The pitch half applies to every part, since the
+            // reason harmony lyrics are excluded does not apply to a pitch, and is the point
+            // of Harmonies mode: reading the interval off the screen.
+            const bool hasLyric = wantLyricMarks
+                               && part == VocalPart::Main
+                               && !bend && n.lyric.isNotEmpty()
+                               && n.displayLyric.isNotEmpty()
+                               && x1 >= (float) area.getX() && (x2 - x1) > 4.0f;
+
+            // A talkie has no meaningful pitch — it is spoken, and its bar is a full-height
+            // column rather than a lane. It keeps its lyric and gets no pitch mark.
+            const bool hasPitch = wantPitchMarks && ! n.isTalkie
+                               && x1 >= (float) area.getX() && (x2 - x1) > 4.0f;
+
+            if (hasLyric || hasPitch)
             {
-#if RB_PAINT_PROFILE
-                const juce::int64 lblStart = juce::Time::getHighResolutionTicks();
-#endif
-                const juce::String& displayLyric = n.displayLyric;
-                if (displayLyric.isNotEmpty())
+                const auto noteIdx = (size_t) (it - notes.begin());
+
+                float lyricW = 0.0f;
+                if (hasLyric)
                 {
-                    const float labelY = n.isTalkie ? (float) area.getY() + 2.0f
-                                                     : (int) (cy - barH * 0.5f) - 13.0f;
-                    g.setColour (juce::Colour (0xffcce8ff));
-                    g.drawText  (displayLyric,
-                                 (int) x1,
-                                 (int) labelY,
-                                 juce::jmax (40, (int) (x2 - x1)),
-                                 12,
-                                 juce::Justification::centredLeft, false);
+                    float& cached = hwLabelWidthCache[noteIdx];
+                    if (cached < 0.0f) cached = labelFont.getStringWidthFloat (n.displayLyric);
+                    lyricW = cached;
                 }
-#if RB_PAINT_PROFILE
-                msText += (juce::Time::getHighResolutionTicks() - lblStart) * msPerTick;
-#endif
+
+                const float pitchW = hasPitch ? hwPitchMarkWidths[(size_t) juce::jlimit (0, 127, n.pitch)]
+                                              : 0.0f;
+                const float totalW = lyricW + (hasLyric && hasPitch ? kMarkGap : 0.0f) + pitchW;
+
+                const float labelY = n.isTalkie ? (float) area.getY() + 2.0f
+                                                : (float) ((int) (cy - barH * 0.5f) - 13.0f);
+
+                // A talkie's obstacle rect is deliberately empty. Its column is a 25 %
+                // translucent wash that text reads through perfectly well, and handing over
+                // the column itself would suppress every harmony label sharing that stretch
+                // of time — which is the talkie's whole width.
+                const rbmark::Rect barRect = n.isTalkie
+                    ? rbmark::Rect { 0.0f, 0.0f, 0.0f, 0.0f }
+                    : rbmark::Rect { drawX1, cy - barH * 0.5f, drawX2, cy + barH * 0.5f };
+
+                markScratch.push_back ({
+                    { x1, labelY, x1 + totalW, labelY + kMarkH },
+                    barRect,
+                    (int) part,
+                    (int) noteIdx
+                });
             }
         }
     };
@@ -366,6 +424,79 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         drawNotesForPart (VocalPart::Harm2);
     }
     drawNotesForPart (VocalPart::Main);
+
+    // ── Note markings: place, then draw ───────────────────────────────────────
+    // Bars are drawn Harm3 → Harm2 → Main so the lead lands on top; labels are placed in
+    // the opposite order, because the lead's label is the one that must never yield.
+    //
+    // Deferring every label to here is the one way "Lyric only" differs from the build
+    // before note markings existed, where labels drew interleaved with their own part's
+    // bars. On a short note the label box overruns the bar (jmax(40, barW)), so the *next*
+    // Main note used to paint over the tail of it; now it does not. Labels reading over bars
+    // rather than under them is the better picture, and the harmony placement needs the
+    // deferral regardless — a label has to be able to see bars not yet drawn.
+    if (! markScratch.empty())
+    {
+#if RB_PAINT_PROFILE
+        const juce::int64 lblStart = juce::Time::getHighResolutionTicks();
+#endif
+        // Stable, and on priority alone: within a part the notes were collected in time
+        // order already, and placeMarkings needs that order preserved so the winner of a
+        // contested pair does not change as the highway scrolls.
+        std::stable_sort (markScratch.begin(), markScratch.end(),
+                          [] (const rbmark::Candidate& a, const rbmark::Candidate& b)
+                          { return a.priority < b.priority; });
+
+        rbmark::placeMarkings (markScratch, markAccepted);
+
+        for (size_t i = 0; i < markScratch.size(); ++i)
+        {
+            if (! markAccepted[i]) continue;
+
+            const auto& c = markScratch[i];
+            const auto& n = notes[(size_t) c.noteIndex];
+
+            // Recomputed rather than carried on the Candidate: these are drawing details,
+            // and keeping them out of the struct is what keeps NoteMarkings.h JUCE-free.
+            const bool bend     = (n.displayLyric == "+");
+            const bool hasLyric = wantLyricMarks && n.part == VocalPart::Main && !bend
+                               && n.lyric.isNotEmpty() && n.displayLyric.isNotEmpty();
+            const bool hasPitch = wantPitchMarks && ! n.isTalkie;
+
+            const float x1 = c.label.x1;
+            const float x2 = phX + (float) (n.endTime - t) * pixPerSec;
+            float       tx = x1;
+
+            if (hasLyric)
+            {
+                // Unchanged from before note markings existed: same colour, same box, same
+                // justification. "Lyric only" has to be indistinguishable from the old build.
+                g.setColour (juce::Colour (0xffcce8ff));
+                g.drawText  (n.displayLyric,
+                             (int) tx,
+                             (int) c.label.y1,
+                             juce::jmax (40, (int) (x2 - x1)),
+                             (int) kMarkH,
+                             juce::Justification::centredLeft, false);
+
+                tx += hwLabelWidthCache[(size_t) c.noteIndex] + kMarkGap;
+            }
+
+            if (hasPitch)
+            {
+                g.setColour (kPitchMarkColour);
+                g.drawText  (pitchMarkFor (n.pitch),
+                             (int) tx,
+                             (int) c.label.y1,
+                             (int) std::ceil (hwPitchMarkWidths[(size_t) juce::jlimit (0, 127, n.pitch)]) + 4,
+                             (int) kMarkH,
+                             juce::Justification::centredLeft, false);
+            }
+        }
+#if RB_PAINT_PROFILE
+        msText += (juce::Time::getHighResolutionTicks() - lblStart) * msPerTick;
+#endif
+    }
 
     g.restoreState();
 
@@ -1117,12 +1248,9 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     // ── Note display ─────────────────────────────────────────────────────────
     if (note >= 0)
     {
-        const int   oct  = (note / 12) - 1;
-        const char* name = kNoteNames[note % 12];
-
         g.setColour (juce::Colours::limegreen);
         g.setFont   (juce::Font (26.0f, juce::Font::bold));
-        g.drawText  (juce::String (name) + juce::String (oct),
+        g.drawText  (noteNameFor (note),
                      row.withHeight (38), juce::Justification::centred, false);
 
         g.setColour (juce::Colours::grey);

@@ -77,6 +77,10 @@ rock-band-vocal-sing-plugin/          (repo root)
                                     frames we ask for arriving, and if not, is it our paint
                                     or the host's message queue?). Header-only, JUCE-free,
                                     unit-tested
+    NoteMarkings.h                — rbmark::placeMarkings: pure yield rule for the per-note
+                                    highway labels (Main never yields; a lower part's label
+                                    is dropped where it would cover a higher part's bar or
+                                    label). Header-only, JUCE-free, unit-tested
     TooltipBounds.h               — rbtip::tooltipBounds: pure tooltip placement (flip past
                                     each midpoint, then clamp). Header-only, JUCE-free,
                                     unit-tested; the box must never contain the cursor
@@ -250,8 +254,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   `.mid` fallback, per the host-support table above.
 - **Highway** (`drawHighway`): horizontal scroll (`pixPerSec`, default 200 px/s), playhead
   at 30 % from left, per-part z-order Harm3 → Harm2 → Main (Main cyan / Harm2 amber /
-  Harm3 brown), `+`-lyric bend connectors, talkie notes as translucent columns, inline
-  lyric labels Main-only, Range-Shift section boundaries with direction arrows, phrase
+  Harm3 brown), `+`-lyric bend connectors, talkie notes as translucent columns,
+  **note markings** (see below), Range-Shift section boundaries with direction arrows, phrase
   separator lines, white (or amber-when-octave-wrapped) live-pitch arrowhead — drawn at
   the fractional pitch (glides, no semitone stepping) and snapped onto the closest
   active note's lane when within the Pitch Tolerance (b2 visual snap; the idle-repaint
@@ -297,6 +301,34 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   corner hint, so a reference pass against a stem is visible while it is captured. Every
   note-driven loop is already inert on an empty list, so nothing else needed gating; the
   trail and Save take never had a chart-state gate at all.
+- **Note markings** (`noteMarkings` setting: Off / Lyric only / Pitch only / Both, default
+  **Both**): what the highway writes above each bar. The lyric half is the inline label the
+  highway always had — Main only, since HARM2/HARM3 lyrics live in the top strip. The pitch
+  half (`[D#4]`, `pitchMarkFor` in `EditorVisuals.h`) applies to **every part**, because the
+  reason harmony lyrics are excluded does not apply to a pitch and reading the interval off
+  the screen is the point of Harmonies mode. Both halves share **one** label above the bar
+  rather than one above and one below: two rows per note doubles the ink, and the space under
+  a bar is exactly where the next harmony bar sits. The pitch is always bracketed — a lyric
+  can be a bare note letter (`A`, `Be`), so an unbracketed pitch beside one is ambiguous.
+  Talkies get no pitch mark (spoken, and their bar is a full-height column, not a lane);
+  `"+"` bend notes do, since a slide's pitch steps are the thing worth reading.
+  - **Placement** is a collect → place → draw pass over `markScratch` (the squash guard's
+    `pillScratch` pattern), because bars run Main-*last* for z-order while labels must be
+    placed Main-*first*, and because a label has to see bars of parts not yet drawn. The rule
+    itself is `rbmark::placeMarkings` (`NoteMarkings.h`, pure + unit-tested): Main is accepted
+    unconditionally, anything else only when its label clears every accepted label and every
+    higher-priority *bar*. Testing labels against labels alone is not enough — since a label
+    sits above its own bar, what a lower part usually runs into is the bar above it.
+  - The clearance is **geometry, not a semitone count**: a label wants 12 px above its own
+    bar, and the gap between two bars `k` semitones apart is `(k-1) × noteH + 1`. So a
+    harmony one semitone under Main can never be labelled at any lane height, while two
+    semitones apart depends on the chart's pitch range. `NoteMarkingsTests.cpp` pins both.
+  - Widths come from `hwLabelWidthCache` (chartVersion + font-height keyed, the strip cache's
+    twin at the highway's fixed 10 pt) and a 128-entry pitch-mark width table, so paint
+    neither allocates a string nor re-measures.
+  - Deferring labels to after every bar is the **one** way `Lyric only` differs from the
+    pre-feature build: a label overrunning a short bar now reads over the next Main bar
+    instead of under it.
 - **Stats panel** (`drawStats`): time `MM:SS.ms / end`, live note name + MIDI + Hz,
   traffic light vs the closest active note of any part, scored in cents from
   `currentMidiFloat` (within ±`pitchTolCents` = GREAT, within 2× = CLOSE, else MISS;
@@ -360,7 +392,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   CPU/GL-session/GL-persist; Output calib −200..+500 ms step 20 (chart) and Input calib
   −50..+250 ms step 5 (detections — finer, since the analysis chain alone is 5–30 ms);
   **Live-mic used** off — whether the *output* calibration also shifts detected pitch, see
-  the calibration gotcha; Note Speed 100–400 px/s; Lyrics
+  the calibration gotcha; Note Speed 100–400 px/s; Note markings
+  Off/Lyric only/Pitch only/Both default Both; Lyrics
   Size 50–200% — applyLyricScale does a delta-based window resize so a user-resized
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
   Octave Wrapping on; Pitch Trail on; Pitch Tolerance ±25/50/75/100 cents default
@@ -389,8 +422,10 @@ Details live in the code; this is the map of what exists and its non-obvious dec
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   octaveGuard, octaveThresh, frameInterval, reaperPriority, octaveWrap, pitchTolCents,
   pitchTrail, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
-  lyricMode, renderer, stemMode, advEnabled, advClarity, advMinNote, advGapMerge,
-  advSplitHyst. `octaveGuard`/`octaveThreshold` follow the
+  noteMarkings, lyricMode, renderer, stemMode, advEnabled, advClarity, advMinNote,
+  advGapMerge, advSplitHyst. `noteMarkings` is the one key whose absent-property default is
+  not the quiet option — a pre-feature session opens on Both, because the pitch is the
+  reason the setting exists. `octaveGuard`/`octaveThreshold` follow the
   `gateThreshold`/`vocalMode` pattern — no `saved*` mirror, because the audio thread reads
   them — and are clamped on read (0..2 and 0.60..0.90).
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
@@ -602,7 +637,11 @@ Catch2 unit tests (`RBVocalSingTests` target, `tests/*.cpp`) exercise the proces
 public API directly — pitch detection, chart loading (Solo + Harmonies), settings
 persistence — plus the take-export segmenter (pure functions in `src/TakeExport.h`,
 tested without any plugin scaffolding) and the highway pitch-axis rules
-(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the frame-health rule
+(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the note-marking yield
+rule (`src/NoteMarkings.h` — `tests/NoteMarkingsTests.cpp`, whose load-bearing cases are the
+two that show the clearance is geometry rather than a semitone count: a harmony one semitone
+under Main is unlabelable at *any* lane height, while at two semitones the same pair resolves
+differently on a tall axis than a short one), the frame-health rule
 (`src/FrameHealth.h` — `tests/FrameHealthTests.cpp`, whose load-bearing cases are the two
 *non*-faults: a low Frame cap being honoured, and the REAPER-priority budget throttling on
 purpose, either of which misreported would make the warning noise), the tooltip

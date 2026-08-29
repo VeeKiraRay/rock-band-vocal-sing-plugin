@@ -22,6 +22,7 @@ TEST_CASE ("state: all 23 persisted fields round-trip through a fresh processor"
     proc.savedPixPerSec       = 275.0f;
     proc.savedLyricScale      = 1.5f;
     proc.savedSquashGuard     = 3;
+    proc.savedNoteMarkings    = 1;   // not the default, so a round-trip failure shows up
     proc.savedLyricMode       = 1;
     proc.savedRenderer        = 2;
     proc.savedStemMode        = true;
@@ -53,6 +54,7 @@ TEST_CASE ("state: all 23 persisted fields round-trip through a fresh processor"
     REQUIRE (proc2.savedPixPerSec       == Catch::Approx (275.0f));
     REQUIRE (proc2.savedLyricScale      == Catch::Approx (1.5f));
     REQUIRE (proc2.savedSquashGuard     == 3);
+    REQUIRE (proc2.savedNoteMarkings    == 1);
     REQUIRE (proc2.savedLyricMode       == 1);
     REQUIRE (proc2.savedRenderer        == 2);
     REQUIRE (proc2.savedStemMode        == true);
@@ -84,6 +86,7 @@ TEST_CASE ("state: garbage bytes are rejected without crashing, defaults intact"
     REQUIRE (proc.savedPixPerSec       == Catch::Approx (200.0f));
     REQUIRE (proc.savedLyricScale      == Catch::Approx (1.0f));
     REQUIRE (proc.savedSquashGuard     == 0);
+    REQUIRE (proc.savedNoteMarkings    == 3);   // Both, unlike its neighbours here
     REQUIRE (proc.savedLyricMode       == 0);
     REQUIRE (proc.savedRenderer        == 0);
     REQUIRE (proc.savedStemMode        == false);
@@ -113,6 +116,11 @@ TEST_CASE ("state: a session saved before the calibration split loads unchanged"
     // the mode at which the detector is bit-for-bit its pre-guard self. An old session
     // must never come back with pitches being silently rewritten.
     REQUIRE (proc.octaveGuard.load()   == 0);
+
+    // Note markings go the other way, and deliberately: an absent property means Both, not
+    // the Lyric-only behaviour such a session was saved with. The pitch is the point of the
+    // setting, so an old project shows it rather than hiding it behind a menu.
+    REQUIRE (proc.savedNoteMarkings    == 3);
 }
 
 TEST_CASE ("state: out-of-range octave guard values are clamped, not trusted", "[state]")
@@ -171,6 +179,7 @@ TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "
     REQUIRE (proc.savedPixPerSec       == Catch::Approx (200.0f));
     REQUIRE (proc.savedLyricScale      == Catch::Approx (1.0f));
     REQUIRE (proc.savedSquashGuard     == 0);
+    REQUIRE (proc.savedNoteMarkings    == 3);   // Both, unlike its neighbours here
     REQUIRE (proc.savedLyricMode       == 0);
     REQUIRE (proc.savedRenderer        == 0);
     REQUIRE (proc.savedStemMode        == false);

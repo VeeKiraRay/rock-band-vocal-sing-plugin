@@ -208,6 +208,8 @@ public:
         std::function<void(bool)>   setLiveMic;
         float                       initSpeed          { 200.0f };
         std::function<void(float)>  setSpeed;
+        int                         initNoteMarkings   { 3 };   // 0=Off 1=Lyric 2=Pitch 3=Both
+        std::function<void(int)>    setNoteMarkings;
         float                       initLyricScale     { 1.0f };
         std::function<void(float)>  setLyricScale;
         int                         initSquashGuard    { 0 };   // 0=Off 1=Spacing 2=Auto-shrink 3=Hybrid
@@ -242,6 +244,7 @@ public:
         static const juce::String kTipInCalib  = "Shifts your detected pitch to compensate for how late it is measured: your mic/interface input latency plus the analysis window (about 5 ms into a note, 30 ms on a mid-phrase syllable). Raise this until the pitch trail sits on the notes - do not use Output calibration for that, or the chart will drift off the song.";
         static const juce::String kTipLiveMic  = "Tick when you sing into a mic: your voice reaches the plugin late by the output latency as well, because you sing to what you hear - so Output calibration is added to Input calibration for detection. Leave it off when the plugin listens to playback (a vocal stem or a recorded take) - that audio is already at its true project time. No effect when Output calibration is 0 ms.";
         static const juce::String kTipSpeed    = "How fast notes scroll across the highway. Higher = notes spread further apart.";
+        static const juce::String kTipMarkings = "What is written above each note on the highway: the lyric, the note's pitch in brackets, both, or nothing. In Harmonies mode a harmony's marking is dropped where there is no room to draw it without covering the part above - the lead is never dropped.";
         static const juce::String kTipLyricSize = "Size of the lyric-strip text. The strips (and the default window height) grow or shrink to match.";
         static const juce::String kTipSquash    = "What scrolling lyrics do when packed words would overlap: push them apart (Spacing), squeeze the text to fit (Auto-shrink), or squeeze a little then push the rest (Hybrid).";
         static const juce::String kTipWrap     = "Wraps your detected pitch by octave to match the chart range when you sing an octave too high or low.";
@@ -328,6 +331,20 @@ public:
         {
             this->cbs.setSpeed ((float) noteSpeedSlider.getValue());
         };
+
+        setupLabel (markingsLabel, "Note markings", kTipMarkings);
+        markingsCombo.addItem ("Off",        1);
+        markingsCombo.addItem ("Lyric only", 2);
+        markingsCombo.addItem ("Pitch only", 3);
+        markingsCombo.addItem ("Both",       4);
+        markingsCombo.setSelectedId (this->cbs.initNoteMarkings + 1, juce::dontSendNotification);
+        styleCombo (markingsCombo);
+        markingsCombo.setTooltip (kTipMarkings);
+        markingsCombo.onChange = [this]
+        {
+            this->cbs.setNoteMarkings (markingsCombo.getSelectedId() - 1);
+        };
+        addAndMakeVisible (markingsCombo);
 
         setupLabel (lyricSizeLabel, "Lyrics Size", kTipLyricSize);
         setupStepper (lyricSizeSlider, 50, 200, 10, " %", kTipLyricSize);
@@ -466,6 +483,7 @@ public:
         layoutRow (inCalibLabel, inCalibSlider);
         layoutRow (liveMicLabel, liveMicToggle, 24);
         layoutRow (speedLabel, noteSpeedSlider);
+        layoutRow (markingsLabel, markingsCombo, 130);
         layoutRow (lyricSizeLabel, lyricSizeSlider);
         layoutRow (squashLabel, squashCombo, 130);
 
@@ -490,11 +508,11 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (6) + SINGING (6), two inter-section gaps,
+    // PERFORMANCE (3 rows) + HIGHWAY (7) + SINGING (6), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (3)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (6)
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (7)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (6);
 
 private:
@@ -518,6 +536,8 @@ private:
     juce::ToggleButton  liveMicToggle;
     juce::Label         speedLabel;
     juce::Slider        noteSpeedSlider;
+    juce::Label         markingsLabel;
+    juce::ComboBox      markingsCombo;
     juce::Label         lyricSizeLabel;
     juce::Slider        lyricSizeSlider;
     juce::Label         squashLabel;
@@ -1089,6 +1109,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setLiveMic         = [safe] (bool v)   { if (safe) { safe->audioProcessor.savedLiveMicInput = v; safe->repaint(); } };
         cbs.initSpeed          = pixPerSec;
         cbs.setSpeed           = [safe] (float v)  { if (safe) { safe->pixPerSec = v; safe->audioProcessor.savedPixPerSec = v; safe->repaint(); } };
+        cbs.initNoteMarkings   = (int) noteMarkings;
+        cbs.setNoteMarkings    = [safe] (int v)    { if (safe) { safe->noteMarkings = (NoteMarkings) juce::jlimit (0, 3, v); safe->audioProcessor.savedNoteMarkings = v; safe->repaint(); } };
         cbs.initLyricScale     = lyricScale;
         cbs.setLyricScale      = [safe] (float v)  { if (safe) safe->applyLyricScale (v); };
         cbs.initSquashGuard    = (int) squashGuard;
@@ -1240,6 +1262,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     pixPerSec           = audioProcessor.savedPixPerSec;
     lyricScale          = audioProcessor.savedLyricScale;
     squashGuard         = (SquashMode) juce::jlimit (0, 3, audioProcessor.savedSquashGuard.load());
+    noteMarkings        = (NoteMarkings) juce::jlimit (0, 3, audioProcessor.savedNoteMarkings.load());
 
     if (audioProcessor.savedRenderer == 2)
         glContext.attachTo (*this);

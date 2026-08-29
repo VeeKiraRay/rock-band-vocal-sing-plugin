@@ -272,6 +272,7 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("pixPerSec",      (double) savedPixPerSec.load(), nullptr);
     state.setProperty ("lyricScale",     (double) savedLyricScale.load(), nullptr);
     state.setProperty ("squashGuard",    savedSquashGuard.load(),      nullptr);
+    state.setProperty ("noteMarkings",   savedNoteMarkings.load(),     nullptr);
     state.setProperty ("lyricMode",      savedLyricMode.load(),        nullptr);
     state.setProperty ("stemMode",      savedStemMode.load(),         nullptr);
     state.setProperty ("renderer",       savedRenderer.load(),         nullptr);
@@ -328,6 +329,7 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     savedPixPerSec       = (float)(double) state.getProperty ("pixPerSec",      200.0);
     savedLyricScale      = (float)(double) state.getProperty ("lyricScale",     1.0);
     savedSquashGuard     =        (int)    state.getProperty ("squashGuard",    0);
+    savedNoteMarkings    =        (int)    state.getProperty ("noteMarkings",   3);
     savedLyricMode       =        (int)    state.getProperty ("lyricMode",      0);
     savedStemMode        =        (bool)   state.getProperty ("stemMode",      false);
     savedRenderer        =        (int)    state.getProperty ("renderer",       0);

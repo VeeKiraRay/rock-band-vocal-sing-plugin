@@ -3,6 +3,8 @@
 #include "StemAudioReader.h"
 #include "TakeExport.h"    // rbtake::TrailPoint (= TrailSample) + segmentPitchTrail
 #include "FrameHealth.h"   // rbperf::classifyFrames — the frame-health rule
+#include "NoteMarkings.h"  // rbmark::placeMarkings — the note-marking yield rule
+#include <array>
 
 class RBVocalSingAudioProcessorEditor
     : public juce::AudioProcessorEditor
@@ -66,6 +68,12 @@ private:
     // Persisted as int (savedSquashGuard); order is part of the saved state.
     enum class SquashMode { Off, Spacing, Shrink, Hybrid };
     SquashMode squashGuard { SquashMode::Off };
+
+    // Note markings — what the highway writes above each note bar. Lyric-only is what the
+    // highway has always drawn; the pitch is the addition. Persisted as int
+    // (savedNoteMarkings); order is part of the saved state.
+    enum class NoteMarkings { Off, Lyric, Pitch, Both };
+    NoteMarkings noteMarkings { NoteMarkings::Both };
 
     RBVocalSingAudioProcessor& audioProcessor;
 
@@ -409,6 +417,28 @@ private:
     struct ScrollPill { int noteIdx; float anchorX, x, tw, drawW; };
     std::vector<ScrollPill> pillScratch;
 
+    // Inline-label lyric widths, the highway's own copy of the cache above — same shape,
+    // different font (the strip's rescales with the Lyrics size setting; the highway's is a
+    // fixed 10 pt), so the two cannot share one table.
+    std::vector<float> hwLabelWidthCache;
+    int                hwLabelWidthCacheVersion { -1 };
+    float              hwLabelWidthCacheFontH   { -1.0f };
+
+    // Pitch-mark widths, indexed by MIDI pitch. Only 128 strings exist at one fixed font,
+    // so this needs no chart-version key — just the font height it was measured at.
+    // -1 = not yet measured.
+    std::array<float, 128> hwPitchMarkWidths {};
+    float                  hwPitchMarkWidthsFontH { -1.0f };
+
+    // Note-marking scratch for the collect → place → draw passes over the visible notes,
+    // members for the same reason pillScratch is: capacity persists, so paint allocates
+    // nothing after warm-up. Written from paint() — safe on the message thread, and JUCE's
+    // attachTo GL path holds the MessageManagerLock around paint (Performance lessons §5),
+    // but this joins the chart snapshot on the list of state a full decoupled
+    // renderOpenGL() pivot would have to deal with.
+    std::vector<rbmark::Candidate> markScratch;
+    std::vector<char>              markAccepted;
+
     // Static-lyric-mode phrase layout cache (2026-07 paint phase, c5): the
     // collected syllable list + measured widths for one (strip, role) slot, rebuilt
     // only when the chart, phrase index, or font changes — while inside a phrase,
@@ -511,6 +541,12 @@ private:
     static constexpr int   kLyricBaseH = 46;  // 28 current row + 18 preview row at 100% scale
     // How far back from the left edge to start scanning notes each frame.
     static constexpr double kNoteLookback = 5.0;  // seconds
+    // Note markings: the inline label row's height, and the gap between the lyric and the
+    // pitch mark when a note carries both. kMarkH is the same 12 px the inline lyric has
+    // always been drawn with — it is the label's collision height as well as its box, so
+    // the two must not drift apart.
+    static constexpr float kMarkH   = 12.0f;
+    static constexpr float kMarkGap = 4.0f;
     // Solo base height; Harmonies adds a second (top) lyric strip. The + kControlsRowH keeps
     // the highway the same height now that the controls band is two rows: getHighwayArea()
     // subtracts the whole band, so growing one without the other silently shrinks the

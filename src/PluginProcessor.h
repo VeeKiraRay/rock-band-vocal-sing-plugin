@@ -302,6 +302,10 @@ public:
     std::atomic<float>  savedPixPerSec       { 200.0f };
     std::atomic<float>  savedLyricScale      { 1.0f };
     std::atomic<int>    savedSquashGuard     { 0 };   // 0=Off 1=Spacing 2=Auto-shrink 3=Hybrid
+    // Highway note markings: 0=Off 1=Lyric 2=Pitch 3=Both. Defaults to Both, unlike its
+    // neighbours here — the pitch is the reason the setting exists, so a session saved
+    // before it existed opens showing it rather than hiding it behind a menu.
+    std::atomic<int>    savedNoteMarkings    { 3 };
     std::atomic<int>    savedLyricMode       { 0 };   // 0=Scrolling, 1=Static
     std::atomic<int>    savedRenderer        { 0 };   // 0=CPU, 2=OpenGL+persist
     std::atomic<bool>   savedLiveMicInput    { false }; // does the *output* offset apply to

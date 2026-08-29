@@ -1,13 +1,20 @@
 #include "PluginEditor.h"
 #include "EditorVisuals.h"
+#include "TooltipBounds.h"   // rbtip::tooltipBounds — pure tooltip placement rule
 
 // The four draw routines (drawHighway/drawStats/drawStatusBar and drawLyricStrip)
 // live in PluginEditorHighway.cpp and PluginEditorLyrics.cpp. This file holds the
 // editor's lifecycle, the VBlank frame loop, layout, and the paint dispatcher.
 
 // ─── Tooltip LookAndFeel ─────────────────────────────────────────────────────
-// Bumps tooltip font to 15pt. JUCE 7 has no getTooltipFont() virtual; must
-// replicate both drawTooltip() and getTooltipBounds() so size and draw stay in sync.
+// Bumps tooltip font to 15pt, and nothing else. JUCE 7 has no getTooltipFont() virtual, so
+// both drawTooltip() and getTooltipBounds() have to be overridden to keep the size used to
+// place the box and the size used to draw it in sync.
+//
+// The placement rule must therefore stay identical to LookAndFeel_V2::getTooltipBounds —
+// it lives in rbtip::tooltipBounds (src/TooltipBounds.h), pure and unit-tested, precisely
+// because a hand-written variant of it here once dropped the vertical above/below flip and
+// put the box under the cursor, which flickers. See the tooltip gotcha in CLAUDE.md.
 // Applied to the editor's TooltipWindow so it covers main panel + settings popup.
 
 struct TooltipLAF : public juce::LookAndFeel_V4
@@ -30,13 +37,11 @@ struct TooltipLAF : public juce::LookAndFeel_V4
         tl.createLayoutWithBalancedLineLengths (makeTipString (tipText, juce::Colours::black), 400.0f);
         const int w = (int) (tl.getWidth()  + 14.0f);
         const int h = (int) (tl.getHeight() +  6.0f);
-        return juce::Rectangle<int> (
-                   screenPos.x > parentArea.getCentreX() ? screenPos.x - (w + 12)
-                                                          : screenPos.x + 24,
-                   juce::jmax (parentArea.getY(),
-                               juce::jmin (screenPos.y - 6, parentArea.getBottom() - h)),
-                   w, h)
-               .constrainedWithin (parentArea);
+
+        const auto r = rbtip::tooltipBounds (w, h, screenPos.x, screenPos.y,
+                                             { parentArea.getX(),     parentArea.getY(),
+                                               parentArea.getWidth(), parentArea.getHeight() });
+        return { r.x, r.y, r.w, r.h };
     }
 
     void drawTooltip (juce::Graphics& g, const juce::String& text, int w, int h) override
@@ -1274,6 +1279,14 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     tooltipLaf = std::make_unique<TooltipLAF>();
     tooltipWindow.setLookAndFeel (tooltipLaf.get());
     tooltipWindow.setMillisecondsBeforeTipAppears (600);
+    // JUCE marks a tooltip windowIgnoresMouseClicks only on its *desktop* path; an
+    // editor-parented one like ours is an ordinary child, so it would swallow a click on
+    // whatever it covers. Making it hit-test transparent also means it can never become
+    // the component under the mouse, which is the loop the placement rule already avoids
+    // (mouseEnter -> hideTip -> immediate re-show). Dismissal is unaffected: the tooltip
+    // gets mouseDown/mouseWheelMove from the global mouse listener it registers itself,
+    // not from hit-testing.
+    tooltipWindow.setInterceptsMouseClicks (false, false);
 
     setOpaque (true);
     setSize (kWindowW, harmoniesMode() ? windowHHarm() : windowH());

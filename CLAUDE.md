@@ -73,6 +73,9 @@ rock-band-vocal-sing-plugin/          (repo root)
     HighwayRange.h                — rbhighway::visibleRange: pure pitch-axis rules (pad,
                                     clamp to the 36–84 vocal band, minimum span). Header-only,
                                     JUCE-free, unit-tested directly
+    TooltipBounds.h               — rbtip::tooltipBounds: pure tooltip placement (flip past
+                                    each midpoint, then clamp). Header-only, JUCE-free,
+                                    unit-tested; the box must never contain the cursor
     PluginEditor.h                — RBVocalSingAudioProcessorEditor decl
     PluginEditor.cpp              — editor lifecycle, VBlank frame loop, layout, paint dispatch,
                                     SettingsPanel popup, transport keys, note-pitch edit drag
@@ -522,7 +525,10 @@ Catch2 unit tests (`RBVocalSingTests` target, `tests/*.cpp`) exercise the proces
 public API directly — pitch detection, chart loading (Solo + Harmonies), settings
 persistence — plus the take-export segmenter (pure functions in `src/TakeExport.h`,
 tested without any plugin scaffolding) and the highway pitch-axis rules
-(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the offline stem
+(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the tooltip
+placement rule (`src/TooltipBounds.h` — `tests/TooltipBoundsTests.cpp`, which sweeps every
+cursor position over a minimum-width editor against the widest tooltips the layout can
+produce and asserts the box never contains the cursor), the offline stem
 reader (`tests/StemAudioReaderTests.cpp`, driven through a fake REAPER API — the
 null-guards, accessor lifetime and double-to-float read path are all checkable without
 REAPER, but the function-pointer *signatures* are not) and the extracted
@@ -701,3 +707,20 @@ so nothing an author sends for review can be committed by accident.
   target/fit rects — still rendered wrong on a mixed-DPI two-monitor setup (worked on
   the 100% monitor, glitched on the high-DPI one). Tall panels scroll inside
   `SettingsScroller` (a Viewport wrapper) instead.
+- **A tooltip box must never contain the cursor, or it flickers.** `TooltipWindow::mouseEnter`
+  hides the tip when the pointer lands on it, and the 500 ms re-show window in
+  `TooltipWindow::timerCallback` immediately puts it back in the same place — a hard
+  flicker loop. `TooltipLAF` overrides `getTooltipBounds` **only** to enlarge the font
+  (JUCE 7 has no `getTooltipFont` virtual, so placement and drawing must agree on the text
+  size); the geometry itself must stay JUCE's, and now lives in `rbtip::tooltipBounds`
+  (`src/TooltipBounds.h`, pure + unit-tested) so it cannot drift again. The rule that
+  matters is the **vertical flip past the midpoint** — wholly above the cursor or wholly
+  below. A hand-written version once placed the top edge 6 px *above* the cursor, leaving
+  only the horizontal offset between them, and clamping to the parent removed even that:
+  the box overlapped for cursor x in `[W - w, w]`, non-empty whenever the tooltip is wider
+  than half the window. Since `kWindowW` (600) is also the *minimum* width and text wraps
+  at 400 px, that hit long tooltips at the default size and vanished on a wide window,
+  which made it look intermittent (found 2026-08-29). Note also that JUCE only sets
+  `windowIgnoresMouseClicks` on a *desktop*-parented tooltip: ours is an editor child, so
+  it is given `setInterceptsMouseClicks (false, false)` explicitly, or it would swallow a
+  click on whatever it covers.

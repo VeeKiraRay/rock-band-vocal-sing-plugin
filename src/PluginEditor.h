@@ -1,7 +1,8 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "StemAudioReader.h"
-#include "TakeExport.h"   // rbtake::TrailPoint (= TrailSample) + segmentPitchTrail
+#include "TakeExport.h"    // rbtake::TrailPoint (= TrailSample) + segmentPitchTrail
+#include "FrameHealth.h"   // rbperf::classifyFrames — the frame-health rule
 
 class RBVocalSingAudioProcessorEditor
     : public juce::AudioProcessorEditor
@@ -224,7 +225,13 @@ private:
     float  lastPaintHeardPitch { -2.0f };   // see the gate: in stem mode the heard
                                             //   sample moves while the atomic does not
     int    lastPaintStateCount { -2 };
-    bool   lastPaintDropping   { false };
+    // Frame-warning paint inputs: whether the held warning is up, and which one it is —
+    // the verdicts print different advice, so a switch between two bad states changes the
+    // picture while a plain "something is wrong" flag would not move. The idle marker is
+    // here too, so the status bar swaps to "--" the moment the transport parks.
+    bool                 lastPaintWarnActive  { false };
+    rbperf::FrameVerdict lastPaintWarnVerdict { rbperf::FrameVerdict::Healthy };
+    bool                 lastPaintFpsIdle     { false };
     int    lastPaintLyricMode  { -1 };
     double lastPaintRate       { -1.0 };
     bool   lastPaintFlash      { false };
@@ -277,6 +284,11 @@ private:
     // default → 2×-width → big, keyPressed()) so grid measurements are reproducible.
     int    profSizePreset { 0 };
     static constexpr double kBusyFactor = 3.0;  // paint ≤ ~1/3 of wall time under load
+    // Tolerance on the Frame cap, as a fraction of the target interval. A cap equal to the
+    // display refresh rate lands each VBlank a hair either side of the interval, and a
+    // strict comparison then rejects roughly one in six — see the frameGate comment in
+    // onFrame(). Applies to the cap only, never to the paint-budget floor.
+    static constexpr double kFrameSlack = 0.1;
 
     // When true, the paint-budget cap is applied (REAPER stays responsive, plugin may skip
     // frames). When false (default), the plugin renders as fast as it can.
@@ -429,9 +441,61 @@ private:
     juce::Font lyricFontPreview { 11.0f, juce::Font::bold };  // static preview row
     float      lyricFontsScale  { 1.0f };  // the lyricScale the fonts were built at
 
-    // Perf signals computed in onFrame(), shown by drawStatusBar().
-    bool   framesDropping { false };
-    double displayFps     { 0.0 };
+    // ── Frame accounting ─────────────────────────────────────────────────────
+    // Three counters differentiated over a ~1 s window in onFrame(), feeding
+    // rbperf::classifyFrames. They are counted rather than modelled because the figure
+    // they replaced was modelled — derived from how long paint() took — and so read a
+    // contented 60 fps through a scrub that was delivering about 3 (2026-08-29).
+    //
+    // Each answers a different question, and the three together say which stage is at
+    // fault: ticks = is REAPER still handing us the VBlank callback, requested = did the
+    // idle gate want a frame, delivered = did one reach the screen.
+    uint32_t frameTicks      { 0 };   // onFrame() entries, counted before the throttle
+    uint32_t paintsRequested { 0 };   // repaint() calls the idle gate approved
+    // Written from paint(), which runs on the OpenGL thread when a context is attached.
+    // JUCE holds the MessageManagerLock around it (see the OpenGL note in CLAUDE.md), so
+    // the neighbouring lastPaintSeconds gets away with being plain — but a counter is one
+    // relaxed increment and should not lean on that.
+    std::atomic<uint32_t> paintsDelivered { 0 };
+    uint32_t    snapTicks     { 0 };  // counter values at the last window close
+    uint32_t    snapRequested { 0 };
+    uint32_t    snapDelivered { 0 };
+    juce::int64 lastRateTicks { 0 };
+
+    // Perf signals computed in onFrame(), shown by drawStatusBar() and drawMessageBar().
+    rbperf::FrameVerdict frameVerdict { rbperf::FrameVerdict::Healthy };
+    double displayFps    { 0.0 };   // measured frames delivered per second
+    double requestedFps  { 0.0 };   // measured frames asked for per second
+    double tickFps       { 0.0 };   // measured onFrame() calls per second
+    double achievableFps { 0.0 };   // modelled: the best rate paint + the budget allow
+    // Nothing is asking for frames, so the measured rate describes nothing. Distinguished
+    // from a real reading in the status bar rather than left showing whatever the last busy
+    // second happened to produce — a stale "12 fps" on a parked transport reads as a fault
+    // that is not there (found 2026-08-29). Same floor the health rule uses.
+    bool fpsIdle { true };
+
+    // The frame warning is held on screen after the fault clears, the way the take-export
+    // flash is: the faults it reports are bursty by nature (a playhead drag ends the moment
+    // the user pauses to read) and an amber bar that vanishes as you look at it cannot be
+    // read at all. Re-armed on every bad window, so a persistent fault simply stays up.
+    static constexpr double kFrameWarnHoldSec = 5.0;
+    double               frameWarnUntil  { 0.0 };
+    bool                 frameWarnActive { false };   // decided in onFrame, read by paint
+    // The verdict and figures as they were when the warning armed. Without latching, the
+    // held message would redraw itself with the healthy numbers that replaced them.
+    rbperf::FrameVerdict warnVerdict   { rbperf::FrameVerdict::Healthy };
+    double warnDelivered  { 0.0 };
+    double warnRequested  { 0.0 };
+    double warnTicks      { 0.0 };
+    double warnAchievable { 0.0 };
+
+    // The rate the user asked for: the Frame cap, or 60 when uncapped. Both the health
+    // verdict and the status bar need it, and two copies of the uncapped fallback would
+    // drift the moment one was retuned.
+    double capFps() const
+    {
+        return (targetFrameInterval > 0.0) ? (1.0 / targetFrameInterval) : 60.0;
+    }
     // Achieved detector hop rate (detections/s), differentiated from the processor's
     // monotonic profDetectCount over a ~1 s window in onFrame(). Shown only in
     // RB_PITCH_PROFILE builds; members exist unconditionally (see the paint EMAs).

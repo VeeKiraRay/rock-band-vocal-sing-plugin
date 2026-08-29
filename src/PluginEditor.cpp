@@ -235,7 +235,7 @@ public:
         setupHeader (singingHeader, "SINGING");
 
         // ── Performance ───────────────────────────────────────────────────────
-        static const juce::String kTipRate     = "Limit redraws per second. Lower values reduce CPU load on REAPER's UI thread.";
+        static const juce::String kTipRate     = "Limit redraws per second. Lower values reduce CPU load on REAPER's UI thread. Your monitor's refresh rate is the real clock: a frame lasts a whole number of refreshes, so a 60 fps cap draws 48 on a 144 Hz monitor (3 refreshes each) and a clean 60 on a 60 Hz one. Pick Uncapped, or a cap that divides your refresh rate.";
         static const juce::String kTipPriority = "Skips frames when paint takes too long, keeping REAPER's UI responsive. Recommended at large window sizes.";
         static const juce::String kTipRenderer = "CPU: software renderer (default). OpenGL: GPU rendering, may help at large window sizes. 'session only' reverts on next load; 'persist' saves the choice.";
         static const juce::String kTipCalib    = "Shifts the chart to compensate for how late the song reaches your ears (audio output latency). Positive = notes appear later, negative = earlier. Applies only while playing, so parking the edit cursor on a note start always puts that note on the playhead line.";
@@ -1931,29 +1931,89 @@ void RBVocalSingAudioProcessorEditor::updateStemReadout()
 
 void RBVocalSingAudioProcessorEditor::onFrame()
 {
+    // Counted before the throttle below, so this measures how often REAPER hands us the
+    // VBlank callback at all rather than how often we chose to act on it. That is the one
+    // signal here independent of what the picture is doing, and the only witness if the
+    // host stops dispatching to us during a drag.
+    ++frameTicks;
+
     // ── Frame throttle ──────────────────────────────────────────────────────
     const double ticksPerSec = (double) juce::Time::getHighResolutionTicksPerSecond();
     const juce::int64 now = juce::Time::getHighResolutionTicks();
 
     const double paintBudgetFloor = reaperPriority ? (lastPaintSeconds * kBusyFactor) : 0.0;
-    const double effInterval      = juce::jmax (targetFrameInterval, paintBudgetFloor);
 
-    if (effInterval > 0.0)
+    // The gate the throttle below compares against. A Frame cap equal to the
+    // display refresh — the default 60 on a 60 Hz monitor, i.e. the common case — puts every
+    // VBlank within a few tens of microseconds of the target interval, so a strict
+    // comparison rejected roughly one in six and delivered ~50 fps for a 60 fps cap. The old
+    // modelled fps figure reported a contented 60 throughout and hid it; measuring delivery
+    // surfaced it immediately (2026-08-29). kFrameSlack is applied to the requested cap
+    // only, never to the REAPER-priority budget floor, which is a load-shedding limit rather
+    // than a cadence and must not be loosened.
+    const double frameGate = juce::jmax (targetFrameInterval * (1.0 - kFrameSlack),
+                                         paintBudgetFloor);
+
+    // ── Frame accounting (~1 s window) ──────────────────────────────────────
+    // Ahead of the throttle return, so the numbers keep moving at a low Frame cap and the
+    // tick rate stays honest. Unsigned wraparound subtracts correctly, as in the hop-rate
+    // block below, so no overflow handling is needed.
+    if (lastRateTicks == 0)
     {
-        const double elapsed = (now - lastFrameTicks) / ticksPerSec;
-        if (elapsed < effInterval)
-            return;
-        lastFrameTicks = now;
+        lastRateTicks = now;
+    }
+    else if (const double since = (now - lastRateTicks) / ticksPerSec; since >= 1.0)
+    {
+        const uint32_t deliveredNow = paintsDelivered.load (std::memory_order_relaxed);
+
+        tickFps      = (double) (uint32_t) (frameTicks      - snapTicks)     / since;
+        requestedFps = (double) (uint32_t) (paintsRequested - snapRequested) / since;
+        displayFps   = (double) (uint32_t) (deliveredNow    - snapDelivered) / since;
+
+        snapTicks     = frameTicks;
+        snapRequested = paintsRequested;
+        snapDelivered = deliveredNow;
+        lastRateTicks = now;
+
+        // The best rate paint and the REAPER-priority budget allow. Still modelled, and
+        // deliberately so: it answers "what could we manage", which is a different
+        // question from "what did we manage" and is not observable by counting.
+        const double capInterval = 1.0 / capFps();
+        const double achievable  = juce::jmax (capInterval,
+                                               reaperPriority ? (lastPaintSeconds * kBusyFactor)
+                                                              :  lastPaintSeconds);
+        achievableFps = (achievable > 1.0e-6) ? (1.0 / achievable) : 0.0;
+
+        rbperf::FrameStats fs;
+        fs.capFps        = capFps();
+        fs.achievableFps = achievableFps;
+        fs.requestedFps  = requestedFps;
+        fs.deliveredFps  = displayFps;
+        fs.tickFps       = tickFps;
+
+        frameVerdict = rbperf::classifyFrames (fs);
+        fpsIdle      = requestedFps < rbperf::kMinRequestedFps;
+
+        // Arm (or re-arm) the held warning. Wall clock, like the take-export flash: this is
+        // a legibility hold for a reader, not a project-time deadline.
+        if (frameVerdict != rbperf::FrameVerdict::Healthy)
+        {
+            frameWarnUntil = juce::Time::getMillisecondCounterHiRes() * 0.001
+                                 + kFrameWarnHoldSec;
+            warnVerdict    = frameVerdict;
+            warnDelivered  = displayFps;
+            warnRequested  = requestedFps;
+            warnTicks      = tickFps;
+            warnAchievable = achievableFps;
+        }
     }
 
-    // Perf signals for the status bar.
+    if (frameGate > 0.0)
     {
-        const double requested  = (targetFrameInterval > 0.0) ? targetFrameInterval : (1.0 / 60.0);
-        const double achievable = juce::jmax (requested,
-                                              reaperPriority ? (lastPaintSeconds * kBusyFactor)
-                                                             :  lastPaintSeconds);
-        framesDropping = achievable > requested * 1.15;
-        displayFps     = (achievable > 1.0e-6) ? (1.0 / achievable) : 0.0;
+        const double elapsed = (now - lastFrameTicks) / ticksPerSec;
+        if (elapsed < frameGate)
+            return;
+        lastFrameTicks = now;
     }
 
     // Detector hop rate: differentiate the processor's monotonic counter over ~1 s.
@@ -2076,6 +2136,9 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     // Flash visibility participates in the idle gate so the message-bar flash both
     // appears and expires while the transport sits idle (nothing else would repaint).
     const bool  flashActive  = juce::Time::getMillisecondCounterHiRes() * 0.001 < flashUntil;
+    // Same reasoning for the held frame warning, and the same need: the hold exists so it
+    // can be read after the fault clears, which is precisely when nothing else repaints.
+    frameWarnActive = juce::Time::getMillisecondCounterHiRes() * 0.001 < frameWarnUntil;
 
     // Octave-guard chip persistence. Rival evidence arrives per hop (~94/s) and a note can
     // easily produce a rival on one hop and none on the next, so the chip was changing
@@ -2117,7 +2180,9 @@ void RBVocalSingAudioProcessorEditor::onFrame()
                       || (livePitch       != lastPaintPitch)
                       || (heardPitch      != lastPaintHeardPitch)
                       || (lastStateCount  != lastPaintStateCount)
-                      || (framesDropping  != lastPaintDropping)
+                      || (frameWarnActive != lastPaintWarnActive)
+                      || (warnVerdict     != lastPaintWarnVerdict)
+                      || (fpsIdle         != lastPaintFpsIdle)
                       || (curLyricMode    != lastPaintLyricMode)
                       || (cachedPlayRate  != lastPaintRate)
                       || (flashActive     != lastPaintFlash)
@@ -2129,7 +2194,9 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         lastPaintPitch      = livePitch;
         lastPaintHeardPitch = heardPitch;
         lastPaintStateCount = lastStateCount;
-        lastPaintDropping   = framesDropping;
+        lastPaintWarnActive  = frameWarnActive;
+        lastPaintWarnVerdict = warnVerdict;
+        lastPaintFpsIdle     = fpsIdle;
         lastPaintLyricMode  = curLyricMode;
         lastPaintRate       = cachedPlayRate;
         lastPaintFlash      = flashActive;
@@ -2140,6 +2207,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         lastPaintOctDash    = octChipDashVisible;
 
         // Dirty only the dynamic areas — controls panel is static widgets that repaint themselves
+        ++paintsRequested;
         repaint (getLocalBounds().withBottom (getHeight() - kControlsH));
     }
 }
@@ -2294,4 +2362,8 @@ void RBVocalSingAudioProcessorEditor::paint (juce::Graphics& g)
     const double paintSec = (juce::Time::getHighResolutionTicks() - paintStart)
                                 / (double) juce::Time::getHighResolutionTicksPerSecond();
     lastPaintSeconds = 0.5 * lastPaintSeconds + 0.5 * paintSec;
+
+    // A frame actually reached the screen. This is the only place that can say so: onFrame
+    // knows what was asked for, not what Windows chose to deliver.
+    paintsDelivered.fetch_add (1, std::memory_order_relaxed);
 }

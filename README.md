@@ -106,7 +106,7 @@ From top to bottom:
 | **Note highway**        | The scrolling chart. Notes move right-to-left; the playhead is fixed at 30% from the left. A white arrowhead marks your live detected pitch.                   |
 | **Bottom lyric strip**  | The Main (HARM1 / Solo) lyrics, below the highway.                                                                                                             |
 | **Stats panel**         | The project time from REAPER's transport, your live pitch (note name, MIDI number, Hz), and the traffic light.                                                 |
-| **Status bar**          | Faint diagnostics: `N fps \| REAPER priority: on/off \| renderer: CPU/GPU \| calib: X ms`.                                                                     |
+| **Status bar**          | Faint diagnostics: `N fps \| REAPER priority: on/off \| renderer: CPU/GPU \| calib: X ms`. The fps figure counts frames actually drawn, and reads `--` when nothing needs drawing.                                                                     |
 | **Message bar**         | The chart status (e.g. "Loaded N notes from …"). Turns into an amber ⚠ warning if frames start dropping.                                                       |
 | **Control bar**         | Two rows: Vocal Mode, Lyric Mode and the transport buttons with **Settings** on top; the **Actions** and **Advanced** popups below — see [Controls](#controls).                                    |
 
@@ -356,7 +356,27 @@ Your voice reaches the highway slightly after the notes. Raise **Input calib** u
 **Live-mic used** is ticked while the plugin is listening to playback. It adds your **Output calib** to the detected pitch, which is right for a voice (it arrives late by the round trip out to your ears and back) but wrong for playback, which is already at its true project time — so the trail and the gold land early by that amount. Untick **Live-mic used**; leave **Output calib** alone, since the highway still needs it to match what you hear, and leave **Input calib** alone too, since the analysis delay it compensates applies to a stem exactly as it does to a voice. The status bar shows which mode is active as `calib: +200/+30 ms live` / `calib: +200/+30 ms playback`. Saved takes are unaffected either way — they are always written at true project time.
 
 **REAPER feels laggy or stops redrawing while the plugin is open.**
-Enable **REAPER priority** so the plugin yields the shared UI thread, or lower the **Frame cap**, or make the plugin window smaller (paint cost scales with visible area). The message bar warns with an amber ⚠ when frames are being dropped.
+Enable **REAPER priority** so the plugin yields the shared UI thread, or lower the **Frame cap**, or make the plugin window smaller (paint cost scales with visible area). The message bar warns with an amber ⚠ **"Can't keep up"** when the plugin cannot render at the rate you asked for.
+
+**The picture stutters while I drag REAPER's playhead (scrubbing).**
+Switch **Renderer** to **OpenGL - session only** and try again. Dragging the playhead floods REAPER's UI thread, and on the CPU renderer Windows only hands the plugin its redraws once that thread goes quiet — so a fast drag can leave the highway frozen until you slow down. The OpenGL renderer draws on its own thread and skips that queue entirely. The message bar warns with an amber ⚠ **"Redraws are being starved"** when this is happening; it is a different fault from "Can't keep up" above and wants the opposite fix, which is why the two say different things.
+
+**The fps number in the status bar reads `--`.**
+Nothing is moving, so no frames are being asked for and any number there would describe nothing. Normal on a parked transport — it comes back as soon as the transport plays or you move the cursor.
+
+**The fps number is lower than my Frame cap — 48 instead of 60, say.**
+Your monitor's refresh rate is the real clock. The plugin can only draw when the display refreshes, so a frame always lasts a whole number of refreshes and the cap effectively rounds *down* to the nearest rate that fits.
+
+On a 144 Hz monitor a 60 fps cap needs 2.4 refreshes per frame, which is impossible, so it takes 3 — and 144 ÷ 3 = **48 fps**. The same plugin on a 60 Hz monitor gives a clean 60. Nothing is wrong in either case; the number is simply honest about what reached the screen.
+
+| Your monitor | Rates a cap can actually produce |
+| --- | --- |
+| 60 Hz | 60, 30, 20, 15 … |
+| 144 Hz | 144, 72, 48, 36, 28.8 … |
+
+If the missing frames bother you, either pick **Uncapped** (draws as fast as the plugin and REAPER allow) or choose a cap that divides your refresh rate evenly. Worth knowing that **50 fps on a 60 Hz monitor gives 30** for the same reason — if you want a middle setting there, 30 is the honest one.
+
+The fps figure also counts only frames the plugin actually needed to draw, so it sits below the cap whenever nothing on screen changed. Amber warnings stay up for 5 seconds after the problem clears, so a warning that appears mid-drag can still be read once you stop dragging.
 
 **OpenGL renderer flickers or behaves oddly.**
 GPU rendering is experimental and host/driver-dependent. Set **Renderer** back to **CPU (software)** (the default) — that always works. If you want to try OpenGL without committing to it, use **OpenGL - session only**, which reverts to CPU on the next load; **OpenGL - persist** is the variant that remembers the GPU choice across sessions.

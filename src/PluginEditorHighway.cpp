@@ -1151,8 +1151,28 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
     g.setColour (juce::Colour (0xff222233));
     g.drawHorizontalLine (area.getY(), (float) area.getX(), (float) area.getRight());
 
-    const int  fps  = (int) std::lround (displayFps);
+    // Frames actually drawn per second, or "--" when nothing is asking for any: on a parked
+    // transport the idle gate means no frames are wanted, so a number there would describe
+    // nothing, and leaving the last busy second's figure up reads as a fault that isn't
+    // there. One number is what a user needs — how badly is it lagging.
     const auto text = area.reduced (8, 0);
+    juce::String fpsStr = fpsIdle ? juce::String ("--")
+                                  : juce::String (juce::roundToInt (displayFps));
+
+#if RB_PAINT_PROFILE
+    // Profile builds get the whole accounting: drawn/wanted/ticks. That triple is the
+    // diagnosis for a stalling picture — 3/19/58 means we ran 58 times, asked for 19 frames
+    // and got 3, so Windows is withholding WM_PAINT; 4/4/4 means REAPER stopped dispatching
+    // to us and there was never a frame to withhold; 50/50/60 means our own throttle is
+    // rejecting frames. Shown unconditionally rather than only when they disagree, because
+    // reading a healthy 60/60/60 is how you confirm the measurement itself is sound.
+    // Behind RB_PAINT_PROFILE and not a Debug guard on purpose: Debug's rasterizer is ~9x
+    // slower per pixel (Performance lessons), so frame timing has to be measured in Release.
+    if (! fpsIdle)
+        fpsStr = juce::String (juce::roundToInt (displayFps))
+               + "/" + juce::String (juce::roundToInt (requestedFps))
+               + "/" + juce::String (juce::roundToInt (tickFps));
+#endif
     g.setFont (juce::Font (12.0f, juce::Font::bold));
     g.setColour (juce::Colour (0xff556070));  // always faint
     // Reads "out/in", the two calibrations that actually shape the picture. The
@@ -1172,7 +1192,7 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
     if (! audioProcessor.reaperApi.CSurf_OnPlayRateChange)
         rateStr += " [N/A]";
 
-    juce::String status = juce::String (fps) + " fps   |   REAPER priority: "
+    juce::String status = fpsStr + " fps   |   REAPER priority: "
                               + (reaperPriority ? "on" : "off")
                               + "   |   renderer: " + (glContext.isAttached() ? "GPU" : "CPU")
                               + "   |   calib: " + calibStr
@@ -1231,12 +1251,42 @@ void RBVocalSingAudioProcessorEditor::drawMessageBar (juce::Graphics& g,
         g.setColour (juce::Colour (0xffffb030));
         g.drawText (flashMessage, text, juce::Justification::centredLeft, true);
     }
-    else if (framesDropping)
+    else if (frameWarnActive)
     {
-        const int fps = (int) std::lround (displayFps);
-        juce::String msg = "[!] Can't keep up (~" + juce::String (fps) + " fps) - ";
-        msg += reaperPriority ? "shrink window or lower Frame cap"
-                              : "REAPER may lag; shrink window, lower Frame cap, or enable REAPER priority";
+        // Three faults, two remedies. "Paint too slow" is about what this plugin can manage,
+        // so it quotes the achievable rate and the things that reduce our own cost. Both
+        // starved states are about frames going missing between asking and drawing, so they
+        // point at the renderer that skips the path they go missing on - but they must say
+        // different sentences: in the thread-starved case requested and delivered agree
+        // perfectly, so "N of M drawn" would report "4 of 4" and read as no fault at all.
+        //
+        // Every figure comes from the latched warn* copies, not the live rates. The warning
+        // is held for kFrameWarnHoldSec after the fault clears so it can actually be read,
+        // and by then the live numbers have recovered and would contradict the message.
+        juce::String msg;
+        switch (warnVerdict)
+        {
+            case rbperf::FrameVerdict::StarvedPaint:
+                msg = "[!] Redraws starved - only " + juce::String (juce::roundToInt (warnDelivered))
+                    + " of " + juce::String (juce::roundToInt (warnRequested))
+                    + " frames drawn; REAPER's UI thread is busy. Switch Renderer to OpenGL in Settings";
+                break;
+
+            case rbperf::FrameVerdict::StarvedThread:
+                msg = "[!] Redraws starved - REAPER is running the plugin only "
+                    + juce::String (juce::roundToInt (warnTicks))
+                    + " times/sec. Switch Renderer to OpenGL in Settings";
+                break;
+
+            case rbperf::FrameVerdict::PaintTooSlow:
+            case rbperf::FrameVerdict::Healthy:
+            default:
+                msg = "[!] Can't keep up (~" + juce::String ((int) std::lround (warnAchievable))
+                    + " fps) - ";
+                msg += reaperPriority ? "shrink window or lower Frame cap"
+                                      : "REAPER may lag; shrink window, lower Frame cap, or enable REAPER priority";
+                break;
+        }
         g.setColour (juce::Colour (0xffffb030));
         g.drawText (msg, text, juce::Justification::centredLeft, true);
     }

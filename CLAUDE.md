@@ -73,6 +73,10 @@ rock-band-vocal-sing-plugin/          (repo root)
     HighwayRange.h                — rbhighway::visibleRange: pure pitch-axis rules (pad,
                                     clamp to the 36–84 vocal band, minimum span). Header-only,
                                     JUCE-free, unit-tested directly
+    FrameHealth.h                 — rbperf::classifyFrames: pure frame-health rule (are the
+                                    frames we ask for arriving, and if not, is it our paint
+                                    or the host's message queue?). Header-only, JUCE-free,
+                                    unit-tested
     TooltipBounds.h               — rbtip::tooltipBounds: pure tooltip placement (flip past
                                     each midpoint, then clamp). Header-only, JUCE-free,
                                     unit-tested; the box must never contain the cursor
@@ -316,8 +320,28 @@ Details live in the code; this is the map of what exists and its non-obvious dec
 - **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics
   (the calib field reads `out/in ms`, appending ` live` / ` playback` when the *output*
   offset is non-zero — at 0 ms the mode cannot change anything, so it is left off — and
-  ` (stopped)`, since the output offset is not applied while stopped);
-  chart status string, overridden by an amber can't-keep-up warning when frames drop.
+  ` (stopped)`, since the output offset is not applied while stopped); chart status string,
+  overridden by an amber frame warning, itself overridden by the take-export flash.
+  The **fps field is measured, not modelled** (2026-08-29): three counters — `onFrame`
+  entries before the throttle, `repaint()` calls the idle gate approved, and `paint()` calls
+  — differentiated over a ~1 s window and classified by `rbperf::classifyFrames`
+  (`FrameHealth.h`, pure + unit-tested) into Healthy / PaintTooSlow / StarvedPaint /
+  StarvedThread. The field shows **delivered frames only**, and `--` when nothing is asking
+  for frames — a parked transport left the last busy second's number on screen, which reads
+  as a fault that isn't there. The full `drawn/wanted/ticks` triple is **`RB_PAINT_PROFILE`-
+  only**: it is the diagnosis, not a user-facing number, and the flag is the right home
+  because frame timing has to be measured in *Release* (lesson 7), which a Debug guard would
+  prevent. Each
+  verdict prints **different advice**: the two starved states share a remedy (OpenGL) but not
+  a sentence, because in the thread-starved case requested and delivered agree perfectly and
+  "N of M drawn" would say "4 of 4". `achievableFps` stays modelled on purpose — "what could
+  we manage" is not observable by counting, and PaintTooSlow quotes it.
+  The warning is **held for `kFrameWarnHoldSec` (5 s) after the fault clears**, re-armed on
+  every bad window, with the figures latched at arming time: these faults are bursty (a
+  playhead drag ends the moment the user pauses to read) and the live numbers have recovered
+  by the time the held message is read, so an unlatched message would contradict itself.
+  `frameWarnActive` is a paint input for the same reason `flashActive` is — the hold exists
+  to be read after the fault clears, which is exactly when nothing else repaints.
 - **Controls**: bottom bar, **two rows of three** — row 1 (Vocal Mode, Lyric Mode,
   `<<`/Settings/`>>`), row 2 (Actions, Advanced), each row-2 button `kBtnW` wide and
   centred in its third so both sit on a column row 1 established. Three design rules hold
@@ -489,10 +513,36 @@ The conclusions that must survive:
    pixel — a 2315×1280 playing frame measured 32.7 ms in Debug vs **3.6 ms** in Release
    (2026-07-17), and every "paint problem" measured in Debug was mostly that. The
    `RB_PAINT_PROFILE` CMake option (OFF by default, works in both configs) adds
-   per-section paint EMAs + drawHighway sub-timers to the status bar and an 'S'-key
+   per-section paint EMAs + drawHighway sub-timers to the status bar, the frame-accounting
+   triple (`drawn/wanted/ticks`), and an 'S'-key
    window-size preset cycle; sub-timers showed the background fill dominates and note
    bars/label text are ≤ 2 ms even in Debug — so §d1 (text image cache) and the
    Harmonies scan merge are ruled out (2026-07 paint phase).
+8. **A modelled frame rate is not a frame rate.** The status bar's `fps` was for a long time
+   derived from how long `paint()` took, never from frames actually drawn — which is blind
+   to the whole class of faults where paint is fast and the frames simply never arrive.
+   JUCE defers editor repaints to `WM_PAINT`, and Windows delivers that only when the host's
+   message queue is empty, so a REAPER playhead drag froze the highway while the bar
+   reported a serene 60. Delivery can only be counted at `paint()`; when a new perf signal
+   is about what the user *sees*, measure it there rather than inferring it (2026-08-29
+   scrub-redraw work, which also documents the deferred forced-redraw fix).
+9. **The Frame cap quantises to the display's refresh rate.** `onFrame` is VBlank-driven, so
+   an accepted frame interval is always a *whole number of refreshes*: the gate delivers
+   `refresh / ceil(refresh / cap)`. A 60 fps cap gives 60 on a 60 Hz panel but
+   `144 / ceil(2.4)` = **48** on a 144 Hz one — the same plugin, same settings, two monitors
+   (measured 2026-08-29, and it reproduced the reading on both). The achievable rates on a
+   144 Hz panel are 144, 72, 48, 36, 28.8 and nothing between. Note the shipped dropdown has
+   its own trap: **50 fps on a 60 Hz display delivers 30**, a factor of two.
+   `kFrameSlack` (10 % of the interval, applied to the requested cap only and never to the
+   REAPER-priority budget floor, which is load-shedding rather than cadence) is still needed,
+   but only for the *equal* case, where a strict comparison against a jittery clock beats
+   between one and two refreshes. It cannot touch the unequal case — `ceil()` does not care
+   whether the bound is 15 ms or 16.667 ms when the refresh period is 6.944 ms.
+   **Deliberately not fixed.** Accumulating the target (`lastFrameTicks += frameGate` rather
+   than `= now`) would alternate 2, 3, 2, 3 refreshes and average out to the requested 60 —
+   at the cost of uneven pacing, which is exactly the 2:3:2:3 judder pattern. A scrolling
+   highway is the worst case for that, so evenly-paced 48 is the better picture and
+   "Uncapped" already exists for anyone who wants all 144. Documented in README instead.
 
 ---
 
@@ -504,6 +554,16 @@ cmake --build build --config Debug
 ```
 
 (from the repo root)
+
+A profiling build goes in its own directory so it never becomes the one you deploy by
+habit, and must be **Release** — Debug's rasterizer is ~9× slower per pixel, so paint and
+frame timings measured there mean nothing (Performance lessons §7). `cmake-build-*` is
+already gitignored; `build_prof` is not.
+
+```
+cmake -B cmake-build-profile -DCMAKE_BUILD_TYPE=Release -DRB_PAINT_PROFILE=ON
+cmake --build cmake-build-profile --config Release
+```
 
 Output: `build/RBVocalSing_artefacts/Debug/VST3/Rock Band Vocal Sing - Reaper.vst3`
 (bundle name from `PRODUCT_NAME` in `CMakeLists.txt`).
@@ -525,7 +585,10 @@ Catch2 unit tests (`RBVocalSingTests` target, `tests/*.cpp`) exercise the proces
 public API directly — pitch detection, chart loading (Solo + Harmonies), settings
 persistence — plus the take-export segmenter (pure functions in `src/TakeExport.h`,
 tested without any plugin scaffolding) and the highway pitch-axis rules
-(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the tooltip
+(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the frame-health rule
+(`src/FrameHealth.h` — `tests/FrameHealthTests.cpp`, whose load-bearing cases are the two
+*non*-faults: a low Frame cap being honoured, and the REAPER-priority budget throttling on
+purpose, either of which misreported would make the warning noise), the tooltip
 placement rule (`src/TooltipBounds.h` — `tests/TooltipBoundsTests.cpp`, which sweeps every
 cursor position over a minimum-width editor against the widest tooltips the layout can
 produce and asserts the box never contains the cursor), the slider-tooltip ordering rule

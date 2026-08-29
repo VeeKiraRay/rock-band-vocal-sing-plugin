@@ -105,11 +105,10 @@ From top to bottom:
 | **Top lyric strip**     | Harmonies only — the shared HARM2 + HARM3 lyrics above the highway.                                                                                            |
 | **Note highway**        | The scrolling chart. Notes move right-to-left; the playhead is fixed at 30% from the left. A white arrowhead marks your live detected pitch.                   |
 | **Bottom lyric strip**  | The Main (HARM1 / Solo) lyrics, below the highway.                                                                                                             |
-| **Allow edits / Save take** | A row above the stats panel. **Allow edits** lets you drag notes on the highway to change their pitch; **Save take** writes the sung pitch trail to a new MIDI track (both REAPER only — see [Editing note pitches](#editing-note-pitches) and [Saving a take as MIDI](#saving-a-take-as-midi)). |
 | **Stats panel**         | The project time from REAPER's transport, your live pitch (note name, MIDI number, Hz), and the traffic light.                                                 |
 | **Status bar**          | Faint diagnostics: `N fps \| REAPER priority: on/off \| renderer: CPU/GPU \| calib: X ms`.                                                                     |
 | **Message bar**         | The chart status (e.g. "Loaded N notes from …"). Turns into an amber ⚠ warning if frames start dropping.                                                       |
-| **Control bar**         | Vocal Mode, Lyric Mode, transport buttons, and the **Settings** button — see [Controls](#controls).                                                            |
+| **Control bar**         | Two rows: Vocal Mode, Lyric Mode and the transport buttons with **Settings** on top; the **Actions** and **Advanced** popups below — see [Controls](#controls).                                    |
 
 ### The note highway
 
@@ -200,12 +199,34 @@ The control bar along the bottom keeps only the things you reach for constantly;
 
 ### Bottom control bar
 
-| Control            | Default   | What it does                                                                                                            |
-| ------------------ | --------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Vocal Mode**     | Solo      | Solo (`PART VOCALS`) or Harmonies (`HARM1`/`HARM2`/`HARM3`). Switching re-reads the chart; the window grows by one strip in Harmonies. |
-| **Lyric Mode**     | Scrolling | Scrolling lyrics (move with the highway) or Static (laid out on the phrase grid).                                      |
-| **`<<` / `>>`**    | —         | Jump the playhead back / forward 5 seconds (same as the Left / Right arrow keys).                                      |
-| **Settings**       | —         | Opens the settings popup below.                                                                                        |
+The top row is the modes and the transport; the bottom row is the two popups, with **Advanced** sitting directly under **Settings**. Anything you set once rather than reach for constantly lives inside a popup.
+
+| Control            | Row | Default   | What it does                                                                                                            |
+| ------------------ | --- | --------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Vocal Mode**     | 1   | Solo      | Solo (`PART VOCALS`) or Harmonies (`HARM1`/`HARM2`/`HARM3`). Switching re-reads the chart; the window grows by one strip in Harmonies. |
+| **Lyric Mode**     | 1   | Scrolling | Scrolling lyrics (move with the highway) or Static (laid out on the phrase grid).                                      |
+| **`<<` / `>>`**    | 1   | —         | Jump the playhead back / forward 5 seconds (same as the Left / Right arrow keys).                                      |
+| **Settings**       | 1   | —         | Opens the settings popup below.                                                                                        |
+| **Actions**        | 2   | —         | Opens the take, stem and note-editing popup — see [Actions popup](#actions-popup).                                      |
+| **Advanced**       | 2   | —         | Opens the expert detection/segmentation panel, off by default.                                                          |
+
+### Actions popup
+
+The three steps of getting a take out of the plugin, in the order you use them, plus the note-editing switch. They share a popup because they are one workflow: read the stem, sweep it into a take, write the take out.
+
+| Control            | What it does                                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| **Stem readout**   | Read the vocal stem on this track instead of the mic while stopped — see [Reading the stem while stopped](#saving-a-take-as-midi). |
+| **Whole stem**     | **Analyse stem** sweeps the entire stem offline into the pitch trail. Needs **Stem readout** on and the transport stopped; turns into **Cancel** with a running percentage while it works. |
+| **Export**         | **Save take** writes the pitch trail to a new MIDI track. Enabled once you stop with a take on screen — sung or swept.  |
+
+And, under **NOTE EDITING**:
+
+| Control            | What it does                                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| **Allow edits**    | Drag notes on the highway to change their pitch — see [Editing note pitches](#editing-note-pitches). Off, clicking the highway only moves the playhead. REAPER only. |
+
+A sweep keeps running whether or not you leave the popup open, and its progress also shows in the message bar; reopen **Actions** to cancel it.
 
 ### Settings popup
 
@@ -252,7 +273,7 @@ These all require REAPER (they drive the REAPER transport API) and have no effec
 
 You can correct a note's pitch without leaving the plugin — REAPER only.
 
-1. Tick the **Allow edits** checkbox above the stats panel. (It is greyed out if REAPER is not connected, or in a REAPER version without the write API.)
+1. Open **Actions** and tick **Allow edits**, under NOTE EDITING. (It is greyed out if REAPER is not connected, or in a REAPER version without the write API.)
 2. On the highway, **drag a note bar up or down**. The pitch snaps to whole semitones as you drag and the bar previews the new position live.
 3. Release to commit. The change is written straight into REAPER's MIDI as a single undo step (labelled "Edit vocal note pitch"), so REAPER's Ctrl+Z reverts it.
 
@@ -262,10 +283,10 @@ Only pitch can be changed this way (timing and lyrics are unchanged), and drags 
 
 ## Saving a take as MIDI
 
-After singing a pass — or playing a recorded vocal through the plugin — you can keep the take: the **Save take** button next to **Allow edits** writes the pitch trail into your project as real MIDI notes. REAPER only.
+After singing a pass — or playing a recorded vocal through the plugin — you can keep the take: the **Save take** button in the **Actions** popup writes the pitch trail into your project as real MIDI notes. REAPER only.
 
 1. Sing your pass, then **stop playback**. Stopping freezes the take (the trail and the gold stay on screen), and the button enables.
-2. Click **Save take**. A new track named `RB Vocal Sing <date> <time>` appears **directly below the plugin's track**, holding one MIDI item with the notes of your take. The message bar confirms with the note count and track name.
+2. Open **Actions** and click **Save take**. A new track named `RB Vocal Sing <date> <time>` appears **directly below the plugin's track**, holding one MIDI item with the notes of your take. The message bar confirms with the note count and track name.
 3. The whole export is a single undo step (labelled "Save RB vocal take as MIDI"), so REAPER's Ctrl+Z removes the track again.
 
 What gets written follows the trail on screen, cleaned up for charting:
@@ -277,7 +298,7 @@ What gets written follows the trail on screen, cleaned up for charting:
 
 The button is greyed out while playing, when no take is on screen yet, outside REAPER, and in REAPER versions without the write API. Each save makes a fresh timestamped track — sing, save, tweak, sing again, and keep whichever take reads best.
 
-**Reading the stem while stopped (Stem mode).** Tick **Stem** in the band above the highway and the pitch readout stops listening to your microphone and reads the vocal stem on the plugin's own track instead. Stop the transport, drag the edit cursor through the song, and the note name, Hz, traffic light, arrowhead and octave chip all describe the stem *at the cursor* — no playback, no singing. It is the quickest way to ask "what note is the singer actually on here", and with a chart loaded the arrowhead snaps to the charted note when the stem is within your Pitch Tolerance, so a wrong chart pitch shows up immediately.
+**Reading the stem while stopped (Stem mode).** Open **Actions** and turn on **Stem readout**, and the pitch readout stops listening to your microphone and reads the vocal stem on the plugin's own track instead. Stop the transport, drag the edit cursor through the song, and the note name, Hz, traffic light, arrowhead and octave chip all describe the stem *at the cursor* — no playback, no singing. It is the quickest way to ask "what note is the singer actually on here", and with a chart loaded the arrowhead snaps to the charted note when the stem is within your Pitch Tolerance, so a wrong chart pitch shows up immediately.
 
 Notes on the mode: it reads the track's **media items**, so it is unaffected by any FX on that track, and it needs a REAPER new enough to expose the audio-accessor API (the toggle stays greyed out otherwise). It only applies while **stopped** — during playback the stem reaches the plugin as ordinary audio and the normal path is already correct. Silence, or a gap between items, reads as silence rather than holding the previous note.
 
@@ -292,9 +313,9 @@ Notes on the mode: it reads the track's **media items**, so it is unaffected by 
 
 The **Mic Gate** in Settings is deliberately not repeated here — it applies to every source whether advanced tuning is on or off. And this panel is unrelated to **Live-mic used**: that one answers whether your input is a microphone and adjusts *timing*, nothing else.
 
-**Analysing the whole stem at once (no playback).** With **Stem** ticked and the transport stopped, **Analyse stem** reads the entire vocal stem on this track and fills the pitch trail from it in one pass — no playing, no singing. A progress percentage appears in the message bar and the button turns into **Cancel**; a four-minute stem takes a second or two. When it finishes, the trail on the highway is the singer's melody, and **Save take** writes it out as a reference MIDI exactly as it would a sung pass.
+**Analysing the whole stem at once (no playback).** With **Stem readout** on and the transport stopped, **Analyse stem** in the same popup reads the entire vocal stem on this track and fills the pitch trail from it in one pass — no playing, no singing. A progress percentage appears in the message bar and the button turns into **Cancel**; a four-minute stem takes a second or two. When it finishes, the trail on the highway is the singer's melody, and **Save take** writes it out as a reference MIDI exactly as it would a sung pass.
 
-This is the fastest route to a draft chart: load the stem, press Analyse, press Save take, then refine the notes. The sweep stops at the song end (the `[end]` marker on an `EVENTS` track, or the last charted note) so a stray clip parked far down the timeline does not turn a four-minute stem into a twenty-minute scan. It replaces whatever take was on screen, and starting playback part-way through abandons it rather than mixing a half-analysed pass with a sung one.
+This is the fastest route to a draft chart: load the stem, then work straight down the **Actions** popup - Stem readout, Analyse stem, Save take - and refine the notes. The sweep stops at the song end (the `[end]` marker on an `EVENTS` track, or the last charted note) so a stray clip parked far down the timeline does not turn a four-minute stem into a twenty-minute scan. It replaces whatever take was on screen, and starting playback part-way through abandons it rather than mixing a half-analysed pass with a sung one.
 
 **Charting from a stem:** put the plugin on a track with the real singer's vocal stem (see "Review takes offline" in [Tips](#tips)), play it through, stop, and save — the exported notes are a draft chart of the actual melody, ready to refine with [note edits](#editing-note-pitches). You do not need any notes on `PART VOCALS` first — with an empty chart the highway draws its axis, playhead and trail across the full singable range, so you can watch the take as it is captured. Leave **Live-mic used** off (the default) while doing this: the export is written at true project time either way, but with it ticked the trail is drawn — and the gold awarded — early against the notes by your Output calib value, so what you see while working would not match what you save.
 
@@ -310,7 +331,7 @@ This is the fastest route to a draft chart: load the stem, press Analyse, press 
   If you find yourself dragging **Output calib** negative to catch a late trail, that is the wrong knob — it drags the whole chart off the song. Use **Input calib**. Neither one moves the time readout or the MIDI that **Save take** writes.
 - **Use Note Speed for readability.** If too many notes are crammed on screen, raise Note Speed to spread them out; if words scroll by too fast to read, lower it.
 - **Slow down hard passages.** Press the Down arrow to drop REAPER's play rate (e.g. to 0.5×) and sing a tricky run at half speed; Up arrow brings it back. The highway and lyrics stay in sync at any rate.
-- **Fix a wrong pitch on the spot.** Spot a note that should be a tone higher? Tick **Allow edits** and drag it — no need to switch to REAPER's MIDI editor. Untick it again before you sing so you can't drag by accident.
+- **Fix a wrong pitch on the spot.** Spot a note that should be a tone higher? Tick **Allow edits** in **Actions** and drag it — no need to switch to REAPER's MIDI editor. Untick it again before you sing so you can't drag by accident.
 - **Review takes offline.** Drop the plugin on a track that already has a recorded vocal item, then play it back — you get the same highway and traffic light without singing live. **Untick Live-mic used** (the default) so the recorded audio is placed at its own time: it made no round trip out to your ears, so applying your Calibration to it would draw the pitch trail early and make an accurate take look wrong. The Calibration value itself can stay where it is — the highway still lines up with what you hear, and so does the arrowhead: with a Calibration set, the plugin has already analysed a fraction of a second more audio than has reached your ears, so the contour stops at the playhead while playing and the last stretch appears when you stop.
 - **Harmonies grows the window.** Switching to Harmonies adds the top lyric strip and widens the pitch range to span all three parts, so nothing clips off the top or bottom.
 - **Keep it open while authoring.** Inside REAPER the chart reloads on every edit/undo/tempo change, so the highway always reflects the current state of your MIDI.

@@ -946,11 +946,11 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
     const int   note  = midiF >= 0.0f ? juce::jlimit (0, 127, juce::roundToInt (midiF)) : -1;
     const float hz    = midiF >= 0.0f ? 440.0f * std::pow (2.0f, (midiF - 69.0f) / 12.0f) : 0.0f;
 
-    // Content is capped at kWindowW so it doesn't stretch with the window. The top
-    // kEditRowH is reserved for the "Allow edits" toggle component (laid out in resized()),
-    // so the time/pitch/light row paints below it.
+    // Content is capped at kWindowW so it doesn't stretch with the window. The band is
+    // painted output only — the toggles and buttons that used to sit in a reserved row
+    // above this one live in controls row 2 now.
     const int contentW = std::min (area.getWidth(), kWindowW);
-    auto row = area.withTrimmedTop (kEditRowH).withWidth (contentW).reduced (8, 6);
+    auto row = area.withWidth (contentW).reduced (8, 6);
 
     // ── Time ────────────────────────────────────────────────────────────────
     auto timeCol = row.removeFromLeft (200);

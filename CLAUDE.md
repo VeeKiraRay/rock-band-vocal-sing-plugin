@@ -315,8 +315,18 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   offset is non-zero — at 0 ms the mode cannot change anything, so it is left off — and
   ` (stopped)`, since the output offset is not applied while stopped);
   chart status string, overridden by an amber can't-keep-up warning when frames drop.
-- **Controls**: bottom bar, **two rows** — row 1 (Vocal Mode, Lyric Mode,
-  `<<`/Settings/`>>`), row 2 (Advanced, centred). `kControlsH = 2 * kControlsRowH`, and
+- **Controls**: bottom bar, **two rows of three** — row 1 (Vocal Mode, Lyric Mode,
+  `<<`/Settings/`>>`), row 2 (Actions, Advanced), each row-2 button `kBtnW` wide and
+  centred in its third so both sit on a column row 1 established. Three design rules hold
+  it together: **row 2 carries only popups** — two iterations put working controls there
+  and both failed the same way, first as a false Allow-edits/Save-take pairing, then as a
+  lone toggle-styled Allow edits button that read as half of a broken segmented pair next
+  to the real Solo/Harmonies and Scrolling/Static pairs; **the left third stays empty**
+  rather than take a wrong occupant; and **Advanced lands under Settings** because the right third's centre *is* `settingsX` — `resized()` derives
+  row 1's nav group from that one hoisted local and `jassert`s the alignment, so a retune
+  cannot drift them apart. Row 2 can use plain per-third offsets because `setResizeLimits`
+  pins the minimum width to `kWindowW`, so `panelW` is always exactly that.
+  `kControlsH = 2 * kControlsRowH`, and
   `kWindowBaseH` includes the extra row: `getHighwayArea()` subtracts the whole band, so
   growing one without the other silently shrinks the highway + `SettingsPanel`
   CallOutBox (Frame cap 20–60/uncapped default 60; REAPER priority off; Renderer
@@ -328,8 +338,27 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   window keeps its height; Squash Guard Off/Spacing/Auto-shrink/Hybrid default Off;
   Octave Wrapping on; Pitch Trail on; Pitch Tolerance ±25/50/75/100 cents default
   ±50; Octave Guard Off/Warn only/Warn + correct default Off; Octave Threshold 60–90%
-  step 5 default 80; Mic gate; Load MIDI File when no REAPER API) + **Allow edits** and
-  **Stem** toggles in the stats band.
+  step 5 default 80; Mic gate; Load MIDI File when no REAPER API). The stats band holds
+  **no widgets** — it is painted output only. It briefly carried the take/stem controls in
+  a reserved 22 px strip at its top; moving them out shrank `kStatsH` *and* `kWindowBaseH`
+  by that same 22 px, which is what kept the highway height unchanged while the window got
+  shorter.
+- **Actions popup** (`ActionsPanel`, off the Actions button on row 2): TAKE & STEM (Stem
+  readout, Analyse stem, Save take, in the order they are used) plus NOTE EDITING (Allow
+  edits). The header is NOTE EDITING, not HIGHWAY, because `SettingsPanel` already owns a
+  HIGHWAY section covering highway *appearance*. Unlike the other two panels it
+  **polls rather than being pushed to** — everything it shows is derived state that moves
+  on its own (the transport starts, a sweep advances, a sung pass fills the trail), and the
+  user can dismiss the CallOutBox at any moment, so a `juce::Timer` at 10 Hz calls back into
+  `canStemModeNow()` / `canSweepNow()` / `canSaveTakeNow()` and the editor holds **no
+  pointer into the popup at all**. Those three predicates are the single point of truth and
+  replaced the per-button enablement the poll gate used to do — `canEditNow()` joined them
+  when Allow edits moved in. What stays in the poll gate is the separate job of forcing a
+  *mode* off when its API goes away (`editMode`, `stemMode`), which must happen whether or
+  not the popup is open. A sweep started here keeps
+  running if the popup is dismissed (a CallOutBox does not block VBlank, so `onFrame()`
+  still drives `advanceStemSweep()`); progress goes to the message bar as well as the
+  popup's Cancel button, which is the always-visible half of that trade.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   octaveGuard, octaveThresh, frameInterval, reaperPriority, octaveWrap, pitchTolCents,
   pitchTrail, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
@@ -342,16 +371,17 @@ Details live in the code; this is the map of what exists and its non-obvious dec
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
   (`SetEditCurPos`), Up/Down = play-rate step 0.1× (0.1–4×, `CSurf_OnPlayRateChange`).
   All no-ops outside REAPER.
-- **Note pitch editing** (Allow edits, requires `reaperApi.canEdit()`): drag a bar
+- **Note pitch editing** (Allow edits, in the Actions popup under NOTE EDITING; requires
+  `reaperApi.canEdit()`, surfaced as `canEditNow()`): drag a bar
   vertically, snapped to semitones; preview mutates the in-memory `NoteInfo` (chart
   reloads are suppressed while dragging); `mouseUp` commits via `MIDI_SetNote` inside an
   undo block + `MarkTrackItemsDirty`, then forces a clean reload (`lastStateCount = -1`).
   Drags clamp to visible lanes ∩ pitch 1..95 so a note can never land on a reserved
   marker pitch. Pitch only — timing/lyrics untouched, so `sourceNoteIndex` stays valid.
 - **Save take as MIDI** (`saveCurrentTake()` in PluginEditor.cpp + `src/TakeExport.h/.cpp`,
-  requires `reaperApi.canExportTake()`): the **Save take** button next to Allow edits
-  (enabled by the poll gate only when stopped with a non-empty trail — stopping is what
-  freezes the trail) segments `pitchTrail` via `rbtake::segmentPitchTrail` (pure,
+  requires `reaperApi.canExportTake()`): the **Save take** button in the Actions popup
+  (enabled via `canSaveTakeNow()` only when stopped with a non-empty trail — stopping is
+  what freezes the trail) segments `pitchTrail` via `rbtake::segmentPitchTrail` (pure,
   unit-tested: 120 ms min note, 80 ms same-pitch gap merge, 20 ms spacing when notes
   butt, 0.65 st split hysteresis, clamp 1..95) and writes one MIDI item (vel 96, ch 0,
   PPQ via `MIDI_GetPPQPosFromProjTime`) on a new track `RB Vocal Sing YYYYMMDD HHMM`
@@ -364,7 +394,7 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   up with the audio waveform and stay neutral about the monitoring latency of this rig or
   the target console. Design and findings come from the 2026-07 take-export work.
 
-- **Stem readout** (Stem toggle in the stats band, requires `reaperApi.canAnalyzeOffline()`):
+- **Stem readout** (Stem readout toggle in the Actions popup, requires `reaperApi.canAnalyzeOffline()`):
   while the transport is **stopped**, reads the plugin's own track through a REAPER
   AudioAccessor (`rbstem::AudioReader`) and reports the pitch of the *stem under the edit
   cursor* — no playback needed. `updateStemReadout()` runs on the 20 Hz poll gate, and only
@@ -394,13 +424,15 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   control users already know, and a second gate would be two controls for one value.
   `detectorParams()` and `segmentationParams()` on the processor are the single place the
   switch turns into numbers, so the three detection paths and the export cannot drift.
-  Lives in its own **Advanced** popup off a second controls row (`AdvancedPanel`), not in
-  Settings: four more rows there would push that panel into permanent scrolling, and
+  Lives in its own **Advanced** popup (`AdvancedPanel`) on controls row 2, directly under
+  the Settings button — near it because the two are siblings, but not *inside* Settings:
+  four more rows there would push that panel into permanent scrolling, and
   these knobs can make detection worse. The four sliders grey out while the switch is
   off, so "does nothing until enabled" is visible rather than something to remember.
   Unlike `SettingsPanel` it needs no `Callbacks` struct — every value it edits is a
   processor atomic, so it reads and writes them directly, and re-reads after Restore.
-- **Stem sweep** (**Analyse stem** button beside the Stem toggle): reads the whole stem
+- **Stem sweep** (**Analyse stem** button in the Actions popup, below the Stem toggle it
+  depends on): reads the whole stem
   offline and fills `pitchTrail` from it, so **Save take works unchanged** and writes a
   reference MIDI with no playback and no singing. Runs on a third `rbpitch::Detector`
   (`sweepDetector`) configured with the **live settings including the hold decay** — an
@@ -414,7 +446,7 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   return**, since charting from scratch is exactly the case with no PART VOCALS track and
   the failsafe was previously unavailable there.
   Chunked across `onFrame()` at `kSweepBudgetSec` (20 ms) per frame with a percentage in
-  the message bar and the button doubling as Cancel: a 4-minute stem is ~22k detections,
+  the message bar (and on the button, which doubles as Cancel): a 4-minute stem is ~22k detections,
   and every REAPER call has to stay on the message thread, so a blocking loop would
   freeze the host and a background thread would buy nothing without a handoff. Playback
   starting mid-sweep abandons it rather than blending a half-swept, half-sung trail.

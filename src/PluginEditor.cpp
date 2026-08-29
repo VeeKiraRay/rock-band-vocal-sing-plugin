@@ -779,6 +779,206 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AdvancedPanel)
 };
 
+// ─── Actions Popup ────────────────────────────────────────────────────────────
+// The three-step take workflow — read the stem, sweep it into a take, write the take
+// out as MIDI. Grouped here because they are one chain (README: "load the stem, press
+// Analyse, press Save take"), and kept out of Advanced because that panel is expert
+// tuning behind a master switch and would imply it gates these too.
+//
+// Everything the panel shows is *derived* state that moves without the user touching
+// this panel — the transport starts, a sweep advances, a sung pass fills the trail — so
+// rather than have the editor push updates into a popup the user can dismiss at any
+// moment, the panel polls the editor through getState on a timer and owns no back
+// pointer. 10 Hz matches the editor's own REAPER poll gate closely enough that a button
+// never looks stale, and the timer only runs while the popup is open.
+
+struct ActionState
+{
+    bool stemOn     { false };
+    bool canStem    { false };
+    bool canAnalyse { false };
+    bool canSave    { false };
+    bool sweeping   { false };
+    int  pct        { 0 };
+    bool editOn     { false };
+    bool canEdit    { false };
+};
+
+class ActionsPanel : public PanelBase,
+                     private juce::Timer
+{
+public:
+    struct Callbacks
+    {
+        std::function<ActionState()> getState;
+        std::function<void(bool)>    setStem;
+        std::function<void()>        onAnalyse;   // also cancels, while a sweep runs
+        std::function<void()>        onSave;
+        std::function<void(bool)>    setEdit;
+    };
+
+    explicit ActionsPanel (Callbacks c)
+        : cbs (std::move (c))
+    {
+        static const juce::String kTipStem =
+            "Read the vocal stem on this track instead of the microphone. While stopped, "
+            "move the edit cursor and the pitch readout follows the stem under it - no "
+            "playback needed.";
+        static const juce::String kTipAnalyse =
+            "Read the whole stem on this track and fill the pitch trail from it, without "
+            "playing anything. Then press Save take to write it out as a reference MIDI.";
+        static const juce::String kTipSave =
+            "Save the current take (the pitch trail) as MIDI notes on a new track below "
+            "this one. Stop playback first - stopping freezes the take.";
+
+        setupHeader (actHeader, "TAKE & STEM");
+
+        noteLabel.setText ("Read the stem, sweep it into a take, then write the take out "
+                           "as MIDI. Works with a sung take too.",
+                           juce::dontSendNotification);
+        noteLabel.setFont (juce::Font (15.0f));
+        noteLabel.setColour (juce::Label::textColourId, juce::Colour (0xffaaaaaa));
+        noteLabel.setJustificationType (juce::Justification::topLeft);
+        addAndMakeVisible (noteLabel);
+
+        setupLabel (stemLabel, "Stem readout", kTipStem);
+        setupToggle (stemToggle, false, kTipStem);
+        stemToggle.onClick = [this]
+        {
+            if (cbs.setStem) cbs.setStem (stemToggle.getToggleState());
+            refreshFromEditor();   // Analyse stem depends on it - do not wait for the tick
+        };
+
+        // Same colours as Restore in Advanced and Load MIDI File in Settings, the other
+        // TextButtons living inside a popup.
+        const auto stylePopupBtn = [] (juce::TextButton& b, const juce::String& tip)
+        {
+            b.setColour (juce::TextButton::buttonColourId,  juce::Colour (0xff2a2a2a));
+            b.setColour (juce::TextButton::textColourOffId, juce::Colours::lightgrey);
+            b.setTooltip (tip);
+        };
+
+        setupLabel (analyseLabel, "Whole stem", kTipAnalyse);
+        stylePopupBtn (analyseBtn, kTipAnalyse);
+        analyseBtn.onClick = [this]
+        {
+            if (cbs.onAnalyse) cbs.onAnalyse();
+            refreshFromEditor();
+        };
+        addAndMakeVisible (analyseBtn);
+
+        setupLabel (saveLabel, "Export", kTipSave);
+        stylePopupBtn (saveBtn, kTipSave);
+        saveBtn.onClick = [this]
+        {
+            if (cbs.onSave) cbs.onSave();
+            refreshFromEditor();
+        };
+        addAndMakeVisible (saveBtn);
+
+        // Its own section, below the take chain: it is a mode rather than a step in that
+        // workflow, and a set-once one — which is why it lives in here at all instead of
+        // taking a permanent slot on the controls row.
+        static const juce::String kTipEdit =
+            "Drag a note bar up/down on the highway to change its pitch. Off: clicking "
+            "the highway only moves the playhead.";
+
+        setupHeader (editHeader, "NOTE EDITING");
+        setupLabel (editLabel, "Allow edits", kTipEdit);
+        setupToggle (editToggle, false, kTipEdit);
+        editToggle.onClick = [this]
+        {
+            if (cbs.setEdit) cbs.setEdit (editToggle.getToggleState());
+        };
+
+        refreshFromEditor();
+        startTimerHz (10);
+        setSize (kW, kH);
+    }
+
+    ~ActionsPanel() override = default;
+
+    static constexpr int kW = 340;
+    // Header + a 2-line note + 3 control rows, then the NOTE EDITING section, padded.
+    static constexpr int kH = 2 * settingsLayout::kPad
+                            + settingsLayout::kHdrH + settingsLayout::kHdrGap
+                            + 2 * settingsLayout::kRowH + settingsLayout::kRowGap  // note
+                            + 3 * (settingsLayout::kRowH + settingsLayout::kRowGap)
+                            + settingsLayout::kSecGap
+                            + settingsLayout::sectionH (1);
+
+    void resized() override
+    {
+        using namespace settingsLayout;
+
+        auto area       = getLocalBounds().reduced (kPad);
+        const int w     = area.getWidth();
+        const int lblW  = w * 42 / 100;
+        const int ctrlW = w - lblW - kLblGap;
+
+        auto layoutRow = [&] (juce::Label& lbl, juce::Component& ctrl, int ctrlWOvr = -1)
+        {
+            auto row = area.removeFromTop (kRowH);
+            lbl.setBounds (row.removeFromLeft (lblW));
+            row.removeFromLeft (kLblGap);
+            ctrl.setBounds (row.removeFromLeft (ctrlWOvr > 0 ? ctrlWOvr : ctrlW));
+            area.removeFromTop (kRowGap);
+        };
+
+        actHeader.setBounds (area.removeFromTop (kHdrH));
+        area.removeFromTop (kHdrGap);
+
+        noteLabel.setBounds (area.removeFromTop (2 * kRowH));
+        area.removeFromTop (kRowGap);
+
+        layoutRow (stemLabel,    stemToggle, 24);
+        layoutRow (analyseLabel, analyseBtn, 130);
+        layoutRow (saveLabel,    saveBtn,    130);
+
+        area.removeFromTop (kSecGap);
+        editHeader.setBounds (area.removeFromTop (kHdrH));
+        area.removeFromTop (kHdrGap);
+        layoutRow (editLabel, editToggle, 24);
+    }
+
+private:
+    void timerCallback() override { refreshFromEditor(); }
+
+    void refreshFromEditor()
+    {
+        if (! cbs.getState)
+            return;
+
+        const auto s = cbs.getState();
+
+        stemToggle.setToggleState (s.stemOn, juce::dontSendNotification);
+        stemToggle.setEnabled (s.canStem);
+
+        // The sweep button doubles as Cancel and carries the percentage, so the popup
+        // stays useful if it is left open across a long stem.
+        analyseBtn.setButtonText (s.sweeping ? "Cancel " + juce::String (s.pct) + "%"
+                                             : "Analyse stem");
+        analyseBtn.setEnabled (s.sweeping || s.canAnalyse);
+        saveBtn   .setEnabled (s.canSave);
+
+        // Polled like the rest: the REAPER handover can complete after the editor is
+        // built, so this wakes up on its own rather than needing a reopen.
+        editToggle.setToggleState (s.editOn, juce::dontSendNotification);
+        editToggle.setEnabled (s.canEdit);
+    }
+
+    Callbacks cbs;
+
+    juce::Label        actHeader, noteLabel;
+    juce::Label        stemLabel, analyseLabel, saveLabel;
+    juce::ToggleButton stemToggle;
+    juce::TextButton   analyseBtn { "Analyse stem" }, saveBtn { "Save take" };
+    juce::Label        editHeader, editLabel;
+    juce::ToggleButton editToggle;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ActionsPanel)
+};
+
 // ─── Playrate step helpers ────────────────────────────────────────────────────
 
 static double stepRateDown (double rate)
@@ -984,66 +1184,57 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     };
     addAndMakeVisible (forwardBtn);
 
-    // ── Allow edits toggle (note pitch editing) ───────────────────────────────
-    // Only usable when REAPER is connected and the write-side API resolved; otherwise
-    // the chart is read-only (file-based fallback or an older REAPER).
+    // ── Actions button (take & stem popup) ────────────────────────────────────
+    // Stem, Analyse stem and Save take are one workflow, so they share one popup rather
+    // than three slots on the row; Allow edits joined them as its own section because a
+    // lone toggle button on the row read as half of a broken segmented pair. The panel
+    // owns the widgets and polls the predicates below, so nothing here outlives a
+    // dismissal.
+    actionsButton.setColour (juce::TextButton::buttonColourId,  juce::Colour (0xff2a2a2a));
+    actionsButton.setColour (juce::TextButton::textColourOffId, juce::Colours::lightgrey);
+    actionsButton.setTooltip ("Read the vocal stem on this track, analyse it into a take, "
+                              "save the take as MIDI, and switch note editing on. "
+                              "REAPER only.");
+    actionsButton.onClick = [this]()
     {
-        const bool canEdit = audioProcessor.reaperApi.isLoaded()
-                          && audioProcessor.reaperApi.canEdit();
-        editToggle.setTooltip ("Drag a note bar up/down on the highway to change its pitch. "
-                               "Off: clicking the highway only moves the playhead.");
-        editToggle.setColour (juce::ToggleButton::textColourId,   juce::Colour (0xffbbbbbb));
-        editToggle.setColour (juce::ToggleButton::tickColourId,   juce::Colour (0xff66ccff));
-        editToggle.setColour (juce::ToggleButton::tickDisabledColourId, juce::Colour (0xff555555));
-        editToggle.setEnabled (canEdit);
-        editToggle.onClick = [this]() { editMode = editToggle.getToggleState(); };
-        addAndMakeVisible (editToggle);
-    }
+        ActionsPanel::Callbacks cbs;
+        auto safe = juce::Component::SafePointer<RBVocalSingAudioProcessorEditor> (this);
 
-    // ── Save take button (pitch trail → MIDI export) ──────────────────────────
-    // Starts disabled: the trail is empty until a pass is sung. The onFrame() poll
-    // gate re-evaluates enablement (export API resolved + frozen non-empty trail).
-    saveTakeBtn.setTooltip ("Save the current sung take (the pitch trail) as MIDI notes "
-                            "on a new track below this one. Stop playback first - "
-                            "stopping freezes the take.");
-    saveTakeBtn.setEnabled (false);
-    saveTakeBtn.onClick = [this]() { saveCurrentTake(); };
-    addAndMakeVisible (saveTakeBtn);
+        cbs.getState = [safe]() -> ActionState
+        {
+            ActionState s;
+            if (safe)
+            {
+                s.stemOn     = safe->stemMode;
+                s.canStem    = safe->canStemModeNow();
+                s.canAnalyse = safe->canSweepNow();
+                s.canSave    = safe->canSaveTakeNow();
+                s.sweeping   = safe->sweepActive;
+                s.pct        = safe->sweepPct;
+                s.editOn     = safe->editMode;
+                s.canEdit    = safe->canEditNow();
+            }
+            return s;
+        };
+        cbs.setStem   = [safe] (bool v) { if (safe) safe->setStemMode (v); };
+        cbs.setEdit   = [safe] (bool v) { if (safe) safe->editMode = v; };
+        cbs.onAnalyse = [safe]()
+        {
+            if (! safe) return;
+            if (safe->sweepActive) safe->cancelStemSweep();
+            else                   safe->startStemSweep();
+        };
+        cbs.onSave    = [safe]() { if (safe) safe->saveCurrentTake(); };
 
-    // ── Stem mode toggle (offline stem tools) ─────────────────────────────────
-    // Sits with the readout it changes the meaning of, rather than in Settings. Starts
-    // disabled; the poll gate enables it once REAPER hands over an accessor-capable API.
-    stemToggle.setTooltip ("Read the vocal stem on this track instead of the microphone. "
-                           "While stopped, move the edit cursor and the pitch readout "
-                           "follows the stem under it - no playback needed.");
-    stemToggle.setColour (juce::ToggleButton::textColourId,   juce::Colour (0xffbbbbbb));
-    stemToggle.setColour (juce::ToggleButton::tickColourId,   juce::Colour (0xff66ccff));
-    stemToggle.setColour (juce::ToggleButton::tickDisabledColourId, juce::Colour (0xff555555));
-    stemToggle.setEnabled (false);
-    stemToggle.onClick = [this]()
-    {
-        stemMode = stemToggle.getToggleState();
-        audioProcessor.savedStemMode = stemMode;
-        lastStemReadTime = -1.0;   // force a read at the current cursor
-        if (! stemMode)
-            stemReader.close();    // do not hold an accessor open for a mode that is off
-        repaint();
+        auto panel   = std::make_unique<ActionsPanel> (std::move (cbs));
+        auto content = std::make_unique<SettingsScroller> (std::move (panel),
+                                                           juce::jmax (100, getHeight() - 50));
+        // Editor-parented, exactly like the Settings popup — see the CallOutBox gotcha.
+        juce::CallOutBox::launchAsynchronously (std::move (content),
+                                                actionsButton.getBoundsInParent(),
+                                                this);
     };
-    addAndMakeVisible (stemToggle);
-
-    // ── Analyse stem button (offline sweep → pitch trail) ─────────────────────
-    // Doubles as Cancel while a sweep runs. Enabled only with Stem mode on and the
-    // transport stopped, like the readout it shares a reader with.
-    analyseBtn.setTooltip ("Read the whole stem on this track and fill the pitch trail "
-                           "from it, without playing anything. Then press Save take to "
-                           "write it out as a reference MIDI.");
-    analyseBtn.setEnabled (false);
-    analyseBtn.onClick = [this]()
-    {
-        if (sweepActive) cancelStemSweep();
-        else             startStemSweep();
-    };
-    addAndMakeVisible (analyseBtn);
+    addAndMakeVisible (actionsButton);
 
     setWantsKeyboardFocus (true);
 
@@ -1063,8 +1254,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     octaveWrap          = audioProcessor.savedOctaveWrap;
     pitchTolCents       = juce::jlimit (25, 100, audioProcessor.savedPitchTolCents.load());
     pitchTrailOn        = audioProcessor.savedPitchTrail;
-    stemMode            = audioProcessor.savedStemMode;
-    stemToggle.setToggleState (stemMode, juce::dontSendNotification);
+    stemMode            = audioProcessor.savedStemMode;   // the popup reads this when opened
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     inputOffsetMs       = audioProcessor.savedInputOffsetMs;
     pixPerSec           = audioProcessor.savedPixPerSec;
@@ -1502,7 +1692,7 @@ void RBVocalSingAudioProcessorEditor::startStemSweep()
     sweepDetector.setParams (audioProcessor.detectorParams());
 
     sweepActive = true;
-    analyseBtn.setButtonText ("Cancel");
+    sweepPct    = 0;
     flashMsg ("Analysing stem...");
 }
 
@@ -1565,17 +1755,19 @@ void RBVocalSingAudioProcessorEditor::advanceStemSweep()
         return;
     }
 
+    // Kept on the editor as well as flashed: the Actions popup's Cancel button shows it,
+    // and the popup polls rather than being pushed to.
     const double span = sweepEnd - sweepStart;
-    const int    pct  = (span > 0.0)
-                          ? juce::jlimit (0, 99, (int) ((sweepPos - sweepStart) / span * 100.0))
-                          : 0;
-    flashMsg ("Analysing stem... " + juce::String (pct) + "%");
+    sweepPct = (span > 0.0)
+                 ? juce::jlimit (0, 99, (int) ((sweepPos - sweepStart) / span * 100.0))
+                 : 0;
+    flashMsg ("Analysing stem... " + juce::String (sweepPct) + "%");
 }
 
 void RBVocalSingAudioProcessorEditor::finishStemSweep()
 {
     sweepActive = false;
-    analyseBtn.setButtonText ("Analyse stem");
+    sweepPct    = 0;
 
     // Replaces whatever take was on screen: the sweep *is* the new take, and Save take
     // operates on exactly what the highway shows.
@@ -1590,7 +1782,7 @@ void RBVocalSingAudioProcessorEditor::finishStemSweep()
         flashMsg ("Stem analysed - no pitch found. Check the Mic gate and the track audio.");
     else
         flashMsg ("Stem analysed - " + juce::String ((int) voiced)
-                  + " points. Press Save take to write the MIDI.");
+                  + " points. Save take (in Actions) writes the MIDI.");
 }
 
 void RBVocalSingAudioProcessorEditor::cancelStemSweep()
@@ -1599,8 +1791,8 @@ void RBVocalSingAudioProcessorEditor::cancelStemSweep()
         return;
 
     sweepActive = false;
+    sweepPct    = 0;
     sweepTrail.clear();          // a half-swept trail is not a take
-    analyseBtn.setButtonText ("Analyse stem");
     flashMsg ("Stem analysis cancelled.");
 }
 
@@ -1617,6 +1809,48 @@ bool RBVocalSingAudioProcessorEditor::stemReadoutActive() const
         && audioProcessor.reaperApi.isLoaded()
         && audioProcessor.reaperApi.canAnalyzeOffline()
         && ! lastIsPlaying;
+}
+
+// ─── Actions popup predicates ─────────────────────────────────────────────────
+// The single point of truth for what the Actions panel may offer. They live here rather
+// than in the poll gate because the panel polls them on its own timer — it can open at any
+// moment and must show the right state immediately, not on the next 20 Hz tick.
+
+bool RBVocalSingAudioProcessorEditor::canEditNow() const
+{
+    // isLoaded() is implied by canEdit(), but kept explicit: the file-fallback chart has
+    // no source notes to write back to at all.
+    return audioProcessor.reaperApi.isLoaded()
+        && audioProcessor.reaperApi.canEdit();
+}
+
+bool RBVocalSingAudioProcessorEditor::canStemModeNow() const
+{
+    return audioProcessor.reaperApi.canAnalyzeOffline();
+}
+
+bool RBVocalSingAudioProcessorEditor::canSweepNow() const
+{
+    return stemMode && canStemModeNow() && ! lastIsPlaying;
+}
+
+bool RBVocalSingAudioProcessorEditor::canSaveTakeNow() const
+{
+    // Needs a frozen non-empty trail: stopping is what freezes it, so the export always
+    // operates on a finished pass rather than one still being written.
+    return audioProcessor.reaperApi.canExportTake()
+        && ! pitchTrail.empty()
+        && ! lastIsPlaying;
+}
+
+void RBVocalSingAudioProcessorEditor::setStemMode (bool on)
+{
+    stemMode = on;
+    audioProcessor.savedStemMode = on;
+    lastStemReadTime = -1.0;   // force a read at the current cursor
+    if (! on)
+        stemReader.close();    // do not hold an accessor open for a mode that is off
+    repaint();
 }
 
 void RBVocalSingAudioProcessorEditor::updateStemReadout()
@@ -1767,16 +2001,12 @@ void RBVocalSingAudioProcessorEditor::onFrame()
             // constructor's one-time "Allow edits" enablement may have seen a not-yet-
             // loaded API. Re-evaluate here (two pointer checks) so the toggle wakes up
             // without a close/reopen. (2026-07 code review, 1.3)
-            const bool canEditNow = audioProcessor.reaperApi.canEdit();
-            if (canEditNow != editToggle.isEnabled())
-            {
-                editToggle.setEnabled (canEditNow);
-                if (! canEditNow)
-                {
-                    editToggle.setToggleState (false, juce::dontSendNotification);
-                    editMode = false;
-                }
-            }
+            // Greying the toggle is the popup's job (it polls canEditNow); this is the
+            // separate one of forcing the *mode* off if the write API goes away, which
+            // must happen whether or not the popup is open — otherwise a highway click
+            // would still try to drag a note.
+            if (editMode && ! canEditNow())
+                editMode = false;
 
             // Suppress chart reload while a pitch drag is in flight — a rebuild would
             // invalidate the dragged note's index mid-drag. mouseUp forces a clean
@@ -1809,14 +2039,6 @@ void RBVocalSingAudioProcessorEditor::onFrame()
 
             lastIsPlaying = nowPlaying;
 
-            // "Save take" wakes up the same way as the edit toggle, but additionally
-            // needs a frozen non-empty trail: stopped transport (stopping is what
-            // freezes the trail) with a take still on screen.
-            const bool canSaveNow = audioProcessor.reaperApi.canExportTake()
-                                 && ! pitchTrail.empty() && ! lastIsPlaying;
-            if (canSaveNow != saveTakeBtn.isEnabled())
-                saveTakeBtn.setEnabled (canSaveNow);
-
             if (! lastIsPlaying && audioProcessor.reaperApi.GetCursorPosition)
                 cachedPlayTime = audioProcessor.reaperApi.GetCursorPosition();
 
@@ -1824,28 +2046,17 @@ void RBVocalSingAudioProcessorEditor::onFrame()
                 cachedPlayRate = audioProcessor.reaperApi.Master_GetPlayRate (nullptr);
 
             // Stem mode needs the accessor API, which an older REAPER may not resolve.
-            const bool canStem = audioProcessor.reaperApi.canAnalyzeOffline();
-            if (canStem != stemToggle.isEnabled())
-            {
-                stemToggle.setEnabled (canStem);
-                if (! canStem)
-                {
-                    stemToggle.setToggleState (false, juce::dontSendNotification);
-                    stemMode = false;
-                }
-            }
+            // The Actions popup greys its own toggle from canStemModeNow(); this is the
+            // separate job of forcing the *mode* off, which must happen whether or not
+            // the popup is open.
+            if (stemMode && ! canStemModeNow())
+                setStemMode (false);
 
             // A sweep is a stopped-transport operation: if playback starts underneath it
             // the accessor reads would race the listener and the trail would be half swept,
             // half sung. Abandon rather than blend.
             if (sweepActive && lastIsPlaying)
                 cancelStemSweep();
-
-            const bool canSweep = stemMode
-                               && audioProcessor.reaperApi.canAnalyzeOffline()
-                               && ! lastIsPlaying;
-            if (canSweep != analyseBtn.isEnabled())
-                analyseBtn.setEnabled (canSweep);
 
             // Reads only when the cursor has actually moved, so parking costs nothing;
             // scrubbing costs one 150 ms analysis per poll tick. Deliberately inside the
@@ -1996,35 +2207,42 @@ void RBVocalSingAudioProcessorEditor::resized()
     }
 
     // ── Right third: [<< 38px][4px][Settings 100px][4px][>> 38px] centred ───
+    // settingsX is hoisted out of the setBounds call because row 2 aligns Advanced to it.
+    // Two literals that happened to agree would drift the moment this group is retuned.
+    static constexpr int kNavW   = 38;
+    static constexpr int kNavGap = 4;
+    const int settingsX = [&]
     {
-        static constexpr int kNavW   = 38;
-        static constexpr int kNavGap = 4;
-        const int groupW  = kNavW + kNavGap + kBtnW + kNavGap + kNavW;
-        const auto slot   = juce::Rectangle<int> (2 * thirdW, rowY, thirdW, kRowH);
-        const int  groupX = slot.getX() + (slot.getWidth() - groupW) / 2;
+        const int groupW = kNavW + kNavGap + kBtnW + kNavGap + kNavW;
+        const int slotX  = 2 * thirdW;
+        return slotX + (thirdW - groupW) / 2 + kNavW + kNavGap;
+    }();
 
-        rewindBtn     .setBounds (groupX,                                          rowY, kNavW, kRowH);
-        settingsButton.setBounds (groupX + kNavW + kNavGap,                        rowY, kBtnW, kRowH);
-        forwardBtn    .setBounds (groupX + kNavW + kNavGap + kBtnW + kNavGap,      rowY, kNavW, kRowH);
-    }
+    rewindBtn     .setBounds (settingsX - kNavGap - kNavW, rowY, kNavW, kRowH);
+    settingsButton.setBounds (settingsX,                   rowY, kBtnW, kRowH);
+    forwardBtn    .setBounds (settingsX + kBtnW + kNavGap, rowY, kNavW, kRowH);
 
-    // ── Row 2: Advanced, centred in the window ───────────────────────────────
-    // The middle third rather than under Settings: a lone button reads as deliberate when
-    // it is centred, and it leaves both outer thirds free for later secondary controls.
+    // ── Row 2: the two popups, on the middle and right columns ───────────────
+    // Actions (the take/stem chain plus note editing) and Advanced (expert tuning), each
+    // centred in its third so both sit on a column established by row 1. The left third
+    // stays empty on purpose — every candidate for it was either a mode that belongs in a
+    // panel or a lone button that read as half of a broken segmented pair, and an empty
+    // column is quieter than a wrong one.
+    //
+    // The right third's centre is also settingsX, because row 1's nav group is itself
+    // centred there — so Advanced lands directly under Settings, which is what we want
+    // (two popups, one corner). Asserted rather than assumed: see the jassert.
     {
-        const auto slot = juce::Rectangle<int> (thirdW, rowY2, thirdW, kRowH);
-        advancedButton.setBounds (slot.withSizeKeepingCentre (kBtnW, kRowH));
-    }
+        const auto slotFor = [&] (int third)
+        {
+            return juce::Rectangle<int> (third * thirdW, rowY2, thirdW, kRowH)
+                       .withSizeKeepingCentre (kBtnW, kRowH);
+        };
 
-    // ── "Allow edits" toggle: top row of the stats band, above the time label ──
-    {
-        // Chain off getHighwayArea() (highway → lyric strip → stats band) instead of
-        // re-deriving the bottom-band sum (2026-07 code review, 2.6).
-        const int statsTop = getHighwayArea().getBottom() + lyricStripH();
-        editToggle.setBounds (8, statsTop + 2, 130, kEditRowH - 2);
-        saveTakeBtn.setBounds (146, statsTop + 2, 90, kEditRowH - 2);
-        stemToggle.setBounds (244, statsTop + 2, 70, kEditRowH - 2);
-        analyseBtn.setBounds (322, statsTop + 2, 104, kEditRowH - 2);
+        actionsButton .setBounds (slotFor (1));
+        advancedButton.setBounds (slotFor (2));
+
+        jassert (advancedButton.getX() == settingsX);   // Advanced must sit under Settings
     }
 }
 

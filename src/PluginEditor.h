@@ -78,20 +78,32 @@ private:
 
     juce::TextButton settingsButton { "Settings" };
     juce::TextButton advancedButton { "Advanced" };
+    juce::TextButton actionsButton  { "Actions" };
     juce::TextButton rewindBtn      { "<<" };
     juce::TextButton forwardBtn     { ">>" };
+    // Row 2 is the two popups: Actions in the middle third, Advanced in the right one
+    // (under Settings). The left third is deliberately empty — every candidate for it so
+    // far was either a mode that belongs in a panel or a lone button that read as a
+    // broken pair, and an empty column is quieter than a wrong one.
 
-    // Opt-in note editing. Sits in its own row above the time label in the stats band.
-    // When checked, a mouse-press on a note bar drags its pitch; otherwise the press
-    // seeks the playhead (unchanged). Disabled (and forced off) unless REAPER is
-    // connected and the write-side API resolved. Session-only — never persisted.
-    juce::ToggleButton editToggle { "Allow edits" };
+    // Opt-in note editing, lives in the Actions popup under NOTE EDITING. It has no
+    // button on the controls row: it is a set-once mode rather than something reached
+    // constantly, and a lone toggle-styled button there read as half of a broken
+    // segmented pair next to the real Solo/Harmonies and Scrolling/Static pairs.
+    // When on, a mouse-press on a note bar drags its pitch; otherwise the press
+    // seeks the playhead (unchanged). Forced off unless REAPER is connected and the
+    // write-side API resolved. Session-only — never persisted.
     bool editMode { false };
 
-    // Export the current take (pitch trail) as MIDI on a new track. Enabled only when
-    // REAPER's export API resolved, a take is on screen, and the transport is stopped
-    // (stopping freezes the trail — the button always operates on a finished pass).
-    juce::TextButton saveTakeBtn { "Save take" };
+    // ── Actions popup state ───────────────────────────────────────────────────
+    // Stem / Analyse stem / Save take live in the ActionsPanel CallOutBox, not on the
+    // controls row. The panel owns its own widgets and polls these three predicates on a
+    // timer while it is open, so nothing here holds a pointer into a popup that the user
+    // can dismiss at any moment.
+    bool canEditNow()     const;   // the write-side API resolved
+    bool canStemModeNow() const;   // the accessor API resolved
+    bool canSweepNow()    const;   // ...plus Stem mode on and the transport stopped
+    bool canSaveTakeNow() const;   // export API resolved, trail non-empty, transport stopped
 
     // ── Offline stem tools ────────────────────────────────────────────────────
     // Stem mode reads the plugin's own track directly, so the pitch readout describes the
@@ -99,9 +111,15 @@ private:
     // what the detection settings do is a separate question, answered by "Live-mic used".
     //
     // Persisted through savedStemMode (the audio thread never reads it, so it follows the
-    // mirror pattern rather than living on the processor as an atomic).
-    juce::ToggleButton stemToggle { "Stem" };
+    // mirror pattern rather than living on the processor as an atomic). This bool is the
+    // source of truth; the Actions popup's toggle only reflects and sets it, so dismissing
+    // the popup mid-session cannot lose the mode.
     bool stemMode { false };
+
+    // Applies a Stem-mode change from the Actions popup (or from the poll gate forcing it
+    // off when the API is unavailable). Keeps the persisted mirror, the cached read time
+    // and the accessor lifetime in one place.
+    void setStemMode (bool on);
 
     // True when the readout should come from the stem rather than the mic: the mode is on,
     // REAPER is connected with the accessor API, and the transport is stopped. While
@@ -116,14 +134,16 @@ private:
     // Batch sweep: reads the whole stem offline and fills the pitch trail, so Save take
     // can write a reference MIDI with no playback and no singing at all. Chunked across
     // frames rather than run in one go — a 4-minute stem is ~22k detections, and a
-    // blocking loop would freeze REAPER for the duration.
-    juce::TextButton analyseBtn { "Analyse stem" };
+    // blocking loop would freeze REAPER for the duration. Driven from onFrame(), which
+    // keeps running while the Actions popup is open (a CallOutBox does not block VBlank),
+    // so a sweep started there continues whether or not the popup is dismissed.
     void startStemSweep();
     void advanceStemSweep();
     void cancelStemSweep();
     void finishStemSweep();
 
     bool   sweepActive { false };
+    int    sweepPct    { 0 };     // 0..99 progress, shown in the message bar and the popup
     double sweepStart  { 0.0 };   // project seconds: where the sweep began
     double sweepPos    { 0.0 };   // project seconds: next sample to read
     double sweepEnd    { 0.0 };   // project seconds: clamped against songEndTime
@@ -422,19 +442,18 @@ private:
     static constexpr int   kWindowW   = 600;
     static constexpr int   kControlsRowH = 40;                  // one row of buttons
     static constexpr int   kControlsH    = 2 * kControlsRowH;   // row 1 + row 2
-    static constexpr int   kEditRowH  = 22;   // edit-toggle row at the top of the stats band
-    static constexpr int   kStatsH    = 70 + kEditRowH;  // edit-toggle row + time/pitch/light row
+    static constexpr int   kStatsH    = 70;   // time/pitch/light row (painted only — no widgets)
     static constexpr int   kStatusH   = 22;   // fps / priority / renderer info bar
     static constexpr int   kMessageH  = 22;   // chart status + frame-skip warning bar
     static constexpr int   kLyricBaseH = 46;  // 28 current row + 18 preview row at 100% scale
     // How far back from the left edge to start scanning notes each frame.
     static constexpr double kNoteLookback = 5.0;  // seconds
-    // Solo base height; Harmonies adds a second (top) lyric strip. The +kEditRowH keeps
-    // the highway height unchanged now that the stats band grew by the edit-toggle row.
-    // The + kControlsRowH keeps the highway the same height now that the controls band
-    // is two rows: getHighwayArea() subtracts the whole band, so growing one without the
-    // other silently shrinks the highway.
-    static constexpr int   kWindowBaseH   = 375 + kMessageH + kEditRowH + kControlsRowH;  // kControlsH + kStatusH + kMessageH + kStatsH + kLyricBaseH + highway, at 100% lyric scale
+    // Solo base height; Harmonies adds a second (top) lyric strip. The + kControlsRowH keeps
+    // the highway the same height now that the controls band is two rows: getHighwayArea()
+    // subtracts the whole band, so growing one without the other silently shrinks the
+    // highway. The same rule ran in reverse when the stats band's widget row moved into
+    // controls row 2 — kStatsH and this both shrank by it, so the highway did not move.
+    static constexpr int   kWindowBaseH   = 375 + kMessageH + kControlsRowH;  // kControlsH + kStatusH + kMessageH + kStatsH + kLyricBaseH + highway, at 100% lyric scale
     // Strip and window heights are computed from lyricScale (2026-07 lyrics-size work): the
     // strips scale and the default window height follows, keeping the highway height
     // constant. At 100% these equal the old kLyricH / kWindowH / kWindowHHarm values.

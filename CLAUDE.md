@@ -176,8 +176,18 @@ note-pitch editor's `MIDI_SetNote` write-back.
   116 = overdrive, ≥ `kFirstReservedPitch` 96 = reserved (all excluded from `chartNotes`).
   `kLyricShiftPitch` 1 = RB3 lyric shift is filtered too, but unlike the others it is
   *dropped* rather than collected — nothing consumes it yet. It has a named constant anyway
-  because charting it dragged the highway floor to C-1 (found in the 2026-08 chart
+  because charting it dragged the highway floor down to MIDI 0 (found in the 2026-08 chart
   review), and because the pitch-edit drag floor is expressed as `kLyricShiftPitch + 1`.
+  Stated as a MIDI number on purpose: an octave *name* here would go stale the moment the
+  display convention below changed, and it did.
+- **Octave numbering: middle C is C3** (`kOctaveOfMidiZero` = −2 in `EditorVisuals.h`), so
+  the vocal band 36–84 reads **C1–C5**. Every note name in the plugin — pitch axis, note
+  markings, stats band — is formatted by `noteNameFor`, so this is one constant. It is the
+  Yamaha/Roland convention; the plugin shipped for a while on scientific pitch notation
+  (middle C = C4, band C2–C6) and named every note an octave high. Nothing caught it until
+  the pitch was drawn on the bars, because an off-by-one octave is invisible without a
+  reference beside it — which is what `NoteNamingTests.cpp` now is. Deliberately not a
+  setting: there is one DAW beside this plugin and it shows one convention.
 - Pitch range (`chartMinPitch`/`chartMaxPitch`) = loaded note min/max ± 2 semitones,
   clamped into the singable band (`rbhighway::kVocalLow/High` = 36–84). This pair is the
   **octave-wrap scoring range only** — the highway draws the section min/max through
@@ -641,7 +651,10 @@ tested without any plugin scaffolding) and the highway pitch-axis rules
 rule (`src/NoteMarkings.h` — `tests/NoteMarkingsTests.cpp`, whose load-bearing cases are the
 two that show the clearance is geometry rather than a semitone count: a harmony one semitone
 under Main is unlabelable at *any* lane height, while at two semitones the same pair resolves
-differently on a tall axis than a short one), the frame-health rule
+differently on a tall axis than a short one), the octave numbering
+(`tests/NoteNamingTests.cpp` — middle C is C3 and the vocal band reads C1–C5; it exists
+because an off-by-one octave looks like a perfectly plausible note name on its own), the
+frame-health rule
 (`src/FrameHealth.h` — `tests/FrameHealthTests.cpp`, whose load-bearing cases are the two
 *non*-faults: a low Frame cap being honoured, and the REAPER-priority budget throttling on
 purpose, either of which misreported would make the warning noise), the tooltip

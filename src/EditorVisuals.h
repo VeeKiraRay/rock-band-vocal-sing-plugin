@@ -13,7 +13,22 @@ static const char* const kNoteNames[] = {
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
 };
 
-// A MIDI pitch as a note name ("D#4", C4 = 60), and the bracketed form the highway's note
+// Octave numbering: middle C (MIDI 60) is C3, so the RB vocal band 36-84 reads C1-C5.
+//
+// This is the Yamaha/Roland convention, and it is the one Rock Band charting works in — the
+// point of these names is to be read next to REAPER's MIDI editor, so they have to agree
+// with it. Scientific pitch notation is the other convention in common use: it puts middle C
+// at C4 and would name the same band C2-C6, one digit higher everywhere. Both describe
+// identical MIDI numbers; only the printed digit differs, and nothing functional reads these
+// strings.
+//
+// Deliberately a constant rather than a setting. There is one DAW beside this plugin and it
+// shows one convention, so a second display-convention row in Settings would be a control
+// nobody moves. Every note name in the plugin is formatted here, so making it a setting
+// later is a small, contained change if that ever stops being true.
+constexpr int kOctaveOfMidiZero = -2;
+
+// A MIDI pitch as a note name ("D#4"), and the bracketed form the highway's note
 // markings draw ("[D#4]").
 //
 // Both hand back a reference into a table built on first use, because these are called once
@@ -31,7 +46,8 @@ inline const juce::String& noteNameFor (int midiPitch)
         std::vector<juce::String> v;
         v.reserve (128);
         for (int p = 0; p < 128; ++p)
-            v.push_back (juce::String (kNoteNames[p % 12]) + juce::String (p / 12 - 1));
+            v.push_back (juce::String (kNoteNames[p % 12])
+                             + juce::String (p / 12 + kOctaveOfMidiZero));
         return v;
     }();
 

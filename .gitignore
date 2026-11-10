@@ -22,6 +22,7 @@ CLAUDE.local.md
 Thumbs.db
 /_old
 /_upcoming
+/_reference_docs
 
 # Local dev aids: standalone triage scripts (e.g. the SMF dumper used to diagnose
 # imported charts) plus any .mid dropped in for inspection. Useful to Claude and

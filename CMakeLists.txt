@@ -110,6 +110,7 @@ if (RBVS_BUILD_TESTS)
             tests/TakeExportTests.cpp
             tests/HighwayRangeTests.cpp
             tests/NoteMarkingsTests.cpp
+            tests/PercussionHitsTests.cpp
             tests/NoteNamingTests.cpp
             tests/FrameHealthTests.cpp
             tests/TooltipBoundsTests.cpp

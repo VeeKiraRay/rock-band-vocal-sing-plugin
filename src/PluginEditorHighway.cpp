@@ -549,6 +549,48 @@ void RBVocalSingAudioProcessorEditor::drawHighway (juce::Graphics& g,
         }
     }
 
+    // Percussion notes: a ringed circle centred vertically (a tap has no pitch) with a
+    // timing line through it, as in game. A hit fills the core gold, growing from the
+    // centre (rbperc::fillProgress). Drawn over the note bars on purpose: the two only ever
+    // share time on a chart the overlap colour is warning about, and then the warning is
+    // the thing worth seeing.
+    {
+        const auto& perc = audioProcessor.getChartPercussion();
+        const float r    = juce::jlimit (5.0f, 12.0f, (float) area.getHeight() * 0.0825f);
+        const float cy   = (float) area.getCentreY();
+        const double pad = (double) r / pixPerSec;
+
+        auto pit = std::lower_bound (perc.begin(), perc.end(), visibleLeft - pad,
+            [] (const PercussionNote& p, double v) { return p.startTime < v; });
+
+        for (; pit != perc.end() && pit->startTime <= rightTime + pad; ++pit)
+        {
+            const float x = phX + (float) (pit->startTime - t) * pixPerSec;
+            const auto  i = (size_t) (pit - perc.begin());
+            const float fill = i < percHits.size()
+                                   ? rbperc::fillProgress (percHits[i], t, lastIsPlaying)
+                                   : 0.0f;
+
+            const juce::Colour edge = pit->overlapsSung ? kPercOverlapColour : kPercRingColour;
+
+            g.setColour (pit->overlapsSung ? kPercOverlapColour.withAlpha (0.6f) : kPercLineColour);
+            g.drawVerticalLine ((int) x, (float) area.getY(), (float) area.getBottom());
+
+            g.setColour (kPercCoreColour);
+            g.fillEllipse (x - r, cy - r, 2.0f * r, 2.0f * r);
+
+            if (fill > 0.0f)
+            {
+                const float fr = r * fill;
+                g.setColour (kNoteHitColour);
+                g.fillEllipse (x - fr, cy - fr, 2.0f * fr, 2.0f * fr);
+            }
+
+            g.setColour (edge);
+            g.drawEllipse (x - r, cy - r, 2.0f * r, 2.0f * r, 2.0f);
+        }
+    }
+
     // Pitch trail: the sung contour of the current pass, drawn behind the
     // arrowhead at raw (unsnapped) pitch. Samples are time-ascending — binary-search
     // to the first visible one and walk. Octave wrapping mirrors the arrowhead (wrap
@@ -832,6 +874,7 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     }
 
     const auto& notes = audioProcessor.getChartNotes();
+    const auto& perc  = audioProcessor.getChartPercussion();
 
     // A chart reload is not a time discontinuity and must not wipe the review state
     // — remap the spans onto the reloaded note list by identity instead (only
@@ -840,6 +883,7 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     {
         noteHitVersion = audioProcessor.getChartVersion();
         remapNoteHitSpans();
+        remapPercHits();
     }
 
     // Hop timestamps arrive from the audio thread as raw project time. Everything in this
@@ -865,7 +909,8 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     // repeating between audio blocks): neither sung time nor a discontinuity.
     if (t0 < 0.0 || t < t0 || t - t0 > 0.5)
     {
-        hitResetPending = true;
+        hitResetPending  = true;
+        percResolvedUpTo = t;   // nothing before the jump target was played
         return;
     }
     if (t == t0)
@@ -884,6 +929,9 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         hitResetPending = false;
         for (auto& spans : noteHitSpans)
             spans.clear();
+        for (auto& h : percHits)
+            h = {};
+        percResolvedUpTo = t0;  // the new pass starts here; earlier windows stay pending
         pitchTrail.clear();
         lastHopMidiF  = -1.0f;
         lastHopVoiced = false;
@@ -950,6 +998,23 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     {
         const double hopT = hop.time - calibSec;
 
+        // Percussion taps are checked on EVERY hop, including the "stale" ones skipped
+        // below. A hop is dated at its window centre, ~16 ms before the block it was
+        // computed in, while cachedPlayTime is that block's start - so a whole block's
+        // hops routinely arrive with times at or before t0. Skipping them is harmless for
+        // the hit spans (their state is folded forward), but a tap is a single closed->open
+        // edge, and losing that one hop lost the tap: the readout showed "no tap" with the
+        // level far over the gate. Each hop is drained exactly once, so nothing can be
+        // counted twice, and a tap carries its own timestamp rather than a share of [t0, t].
+        // (segVoiced is still the previous hop's state here.) First tap in a window wins.
+        if (rbperc::isTap (segVoiced, hop.voiced))
+        {
+            const int pi = rbperc::noteAt (perc, hopT);
+            if (pi >= 0 && (size_t) pi < percHits.size()
+                && percHits[(size_t) pi].result == rbperc::Result::Pending)
+                percHits[(size_t) pi] = { rbperc::Result::Hit, hopT };
+        }
+
         if (hopT <= t0)
         {
             // Stale relative to this frame's window (already accounted for by a
@@ -976,6 +1041,10 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
 
         scoreSegment (segStart, std::min (hopT, t), segVoiced, segMidiF);
 
+        // Percussion: a tap is the gate opening (segVoiced is still the previous hop's
+        // state here). `voiced` is the raw RMS gate, not "pitch found", so an unpitched
+        // mic tap counts — and the gate has no hold decay, so it closes again within a
+        // couple of hops and the next tap gets its own edge. First tap in a window wins.
         segStart  = hopT;
         segMidiF  = hop.midiFloat;
         segVoiced = hop.voiced;
@@ -985,8 +1054,53 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     // arrived this frame) still holds through to this frame's t.
     scoreSegment (segStart, t, segVoiced, segMidiF);
 
+    // Percussion windows that closed without a tap are misses - decided kResolveLagSec
+    // late, because a hop can reach us well after the frame whose time it falls in (see
+    // the tap check above), and a tap at the end of a window must still be able to land.
+    // Only windows past percResolvedUpTo: a seek past a note is a discontinuity, which
+    // moves that mark, and must leave the note pending rather than call it missed.
+    {
+        const double resolveTo = t - rbperc::kResolveLagSec;
+        auto pit = std::partition_point (perc.begin(), perc.end(),
+            [this] (const PercussionNote& p) { return p.window.hi <= percResolvedUpTo; });
+        for (; pit != perc.end() && pit->window.hi <= resolveTo; ++pit)
+        {
+            const auto pi = (size_t) (pit - perc.begin());
+            if (pi < percHits.size() && percHits[pi].result == rbperc::Result::Pending)
+                percHits[pi].result = rbperc::Result::Miss;
+        }
+        percResolvedUpTo = std::max (percResolvedUpTo, resolveTo);
+    }
+
     lastHopMidiF  = segMidiF;
     lastHopVoiced = segVoiced;
+}
+
+// Re-aligns percHits to a freshly reloaded chart, matching on start time — a percussion
+// note has no pitch or part to compare, and its length is not meaningful. Parks across a
+// transient empty read the same way remapNoteHitSpans does; "empty" means the whole chart,
+// since a chart with no percussion at all is the common case and not a failed read.
+void RBVocalSingAudioProcessorEditor::remapPercHits()
+{
+    const auto& perc = audioProcessor.getChartPercussion();
+
+    if (perc.empty() && audioProcessor.getChartNotes().empty())
+    {
+        if (! percHitKeys.empty() && parkedPercHits.empty())
+            parkedPercHits = std::move (percHits);
+        percHits.clear();
+        return;
+    }
+
+    auto& oldHits = parkedPercHits.empty() ? percHits : parkedPercHits;
+
+    std::vector<double> newKeys (perc.size());
+    for (size_t i = 0; i < perc.size(); ++i)
+        newKeys[i] = perc[i].startTime;
+
+    percHits = rbperc::remapByStart (percHitKeys, oldHits, newKeys);
+    parkedPercHits.clear();
+    percHitKeys = std::move (newKeys);
 }
 
 // Re-aligns noteHitSpans to a freshly reloaded chart. Both the old identity snapshot
@@ -1185,6 +1299,21 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
             // No pitch detected while a note is active → silent = miss
             lightColour = juce::Colours::red;
             lightLabel  = "MISS";
+        }
+    }
+    else
+    {
+        // Percussion drives the light only when nothing sung is active — a sung note is
+        // scored continuously and the singer is singing it. Only the two extremes exist for
+        // a tap, so it reuses the vocal labels: GREAT or MISS, and "---" while a window is
+        // still open. Latched results rather than live presence (unlike a talkie), because a
+        // tap is over in a few ms and would otherwise never be readable.
+        switch (rbperc::lightAt (audioProcessor.getChartPercussion(), percHits, t, lastIsPlaying))
+        {
+            case rbperc::Light::Hit:  lightColour = juce::Colours::limegreen; lightLabel = "GREAT"; break;
+            case rbperc::Light::Miss: lightColour = juce::Colours::red;       lightLabel = "MISS";  break;
+            case rbperc::Light::Pending:
+            case rbperc::Light::None: break;
         }
     }
 

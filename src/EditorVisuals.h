@@ -93,6 +93,16 @@ inline const juce::Colour kPitchTrailColour    { 0x66ffffff };
 // reads at a glance against the faint white contour.
 inline const juce::Colour kOctaveDoubtColour   { 0xffff3b30 };
 inline const juce::Colour kPhraseSepColour     { 0x55aaaacc };  // muted blue-grey phrase separator
+// Percussion notes. The game draws a black core in a white ring; pure black disappears on
+// kHighwayBg, so the core is lifted to a grey that still reads as "empty" and the ring
+// carries the edge. A hit fills the core with kNoteHitColour, the same gold as a hit note.
+inline const juce::Colour kPercRingColour      { 0xffffffff };
+inline const juce::Colour kPercCoreColour      { 0xff34343f };
+inline const juce::Colour kPercLineColour      { 0x88ffffff };  // timing line through the circle
+// A percussion note whose window overlaps singing. An authoring hint, not a detection
+// problem, so it avoids every colour that already means something on the highway: the
+// Range Shift orange, the octave-doubt red, the hit gold and the three part colours.
+inline const juce::Colour kPercOverlapColour   { 0xffff4fd8 };
 // Note-marking pitch text ("[D#4]"), drawn beside the inline lyric. The same blue-white
 // family as the lyric it sits next to, dimmed, so the lyric stays the primary read and the
 // pitch is clearly an annotation of it rather than a second word.

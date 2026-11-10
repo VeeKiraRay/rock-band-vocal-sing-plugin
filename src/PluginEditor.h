@@ -38,6 +38,8 @@ private:
     // Re-aligns noteHitSpans to a freshly reloaded chart by note identity (see
     // noteHitKeys) instead of clearing — only actually-changed notes lose their gold.
     void remapNoteHitSpans ();
+    // Same job for percHits: carries tap results across a reload by start time.
+    void remapPercHits ();
     void drawStatusBar   (juce::Graphics&, juce::Rectangle<int>);   // fps / priority / renderer info
     void drawMessageBar  (juce::Graphics&, juce::Rectangle<int>);   // chart status + frame-skip warning
     // "Save take" button handler: segments pitchTrail and writes the notes as a MIDI
@@ -368,6 +370,17 @@ private:
     // noteHitKeys); the next non-empty remap consumes them, so a mid-flush failed
     // chart read doesn't permanently lose the gold. See remapNoteHitSpans().
     std::vector<std::vector<std::pair<double, double>>> parkedHitSpans;
+
+    // Percussion results, index-aligned with getChartPercussion(). Same lifecycle as the
+    // note-hit spans above in every respect: scored only while playing, kept while stopped
+    // for review, cleared by hitResetPending, remapped on reload (by start time — see
+    // remapPercHits) and parked across a transient empty read.
+    std::vector<rbperc::Hit> percHits;
+    std::vector<double>      percHitKeys;     // start times percHits is aligned to
+    std::vector<rbperc::Hit> parkedPercHits;
+    // Detection time up to which percussion windows have been resolved (hit or miss).
+    // Moved by discontinuities and pass resets so a seek never calls skipped notes missed.
+    double percResolvedUpTo { -1.0 };
 
     // Pitch trail: the sung fractional pitch of the current pass, one sample per hop,
     // time-ascending. Raw in both axes — unsnapped/unwrapped pitch (octave wrapping is

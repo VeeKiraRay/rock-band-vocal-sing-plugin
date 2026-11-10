@@ -7,6 +7,7 @@
 #include "NsdfPeak.h"       // kOctaveRivalRatio — default for the octave-threshold setting
 #include "PitchDetector.h"  // rbpitch::Detector — the pitch-detection front end
 #include "TakeExport.h"     // rbtake::SegmentationParams — defaults for the tuning below
+#include "PercussionHits.h" // rbperc::Note — the chart's percussion notes
 
 // Which vocal part a note belongs to. Main = Solo (PART VOCALS) or HARM1 (lead) —
 // both render cyan with lyrics below the highway. Harm2/Harm3 render in their own
@@ -24,6 +25,12 @@ constexpr int kLyricShiftPitch    = 1;    // RB3 lyric shift (which part's lyric
 constexpr int kPhraseMarkerPitch  = 105;  // vocal phrase marker
 constexpr int kOverdrivePitch     = 116;  // overdrive (Star Power) phrase marker
 constexpr int kFirstReservedPitch = 96;   // >= this: reserved / non-singable
+// Percussion cues (tambourine / cowbell / clap) the player hits by tapping the mic. Only
+// the playable one is collected. The sample-only one triggers a sound in game and is never
+// drawn there either, so it is dropped like any other reserved pitch; it is named so the
+// pairing with kPercussionPitch is visible here rather than rediscovered.
+constexpr int kPercussionPitch       = 96;  // playable: drawn and scored
+constexpr int kPercussionSamplePitch = 97;  // non-playable: deliberately dropped
 
 struct NoteInfo {
     double       startTime;  // seconds (absolute project time)
@@ -64,6 +71,11 @@ struct PhraseInfo {
     double startTime;
     double endTime;
 };
+
+// A playable percussion note (kPercussionPitch). Defined in PercussionHits.h, JUCE-free, so
+// the hit rules can be unit-tested on it directly; see that header for why only the start
+// time carries timing.
+using PercussionNote = rbperc::Note;
 
 struct PitchSection {
     double startTime;
@@ -150,6 +162,8 @@ public:
     const std::vector<PhraseInfo>&  getChartPhrases()      const { return chartPhrases; }
     const std::vector<PhraseInfo>&  getChartHarm2Phrases() const { return chartHarm2Phrases; }
     const std::vector<PhraseInfo>&  getChartOverdrives()        const { return chartOverdrives; }
+    // Sorted by startTime. From PART VOCALS (Solo) or HARM1 (Harmonies) only.
+    const std::vector<PercussionNote>& getChartPercussion()     const { return chartPercussion; }
     const std::vector<double>&      getChartPhraseSeparators()  const { return chartPhraseSeparators; }
     const std::vector<PitchSection>& getChartPitchSections() const { return chartPitchSections; }
     juce::String chartStatus;
@@ -190,6 +204,8 @@ public:
     // decay, silence) before the next UI frame reads the atomics was previously
     // invisible to note-hit tracking and the take-export pitch trail, especially
     // for notes shorter than one UI frame interval (the short-note hit-tracking work).
+    // `voiced` is the RMS gate, not "pitch found" - which is what lets an unpitched mic
+    // tap score a percussion note.
     struct HopSample { double time; float midiFloat; bool voiced;
                        float octaveRatio; bool octaveDoubt; };
     static constexpr int kHopQueueCapacity = 128;  // ~2s of hops @ ~16ms — UI-stall headroom
@@ -354,6 +370,7 @@ private:
     std::vector<PhraseInfo>  chartPhrases;       // HARM1 / Solo phrase grid (bottom strip + static)
     std::vector<PhraseInfo>  chartHarm2Phrases;  // HARM2 phrase grid (top strip static mode)
     std::vector<PhraseInfo>  chartOverdrives;          // overdrive (Star Power) ranges from HARM1 / Solo
+    std::vector<PercussionNote> chartPercussion;       // playable percussion from HARM1 / Solo
     std::vector<double>      chartPhraseSeparators;    // precomputed separator line times (seconds)
     std::vector<PitchSection> chartPitchSections;
     int                      chartVersion { 0 };       // see getChartVersion()
@@ -369,6 +386,7 @@ private:
                           std::vector<NoteInfo>&                      out,
                           std::vector<PhraseInfo>*                    outPhrases,    // nullable
                           std::vector<PhraseInfo>*                    outOverdrives, // nullable
+                          std::vector<PercussionNote>*                outPercussion, // nullable
                           std::vector<std::pair<double,double>>&      outShiftMarkers,
                           int& minP, int& maxP);
 

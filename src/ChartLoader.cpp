@@ -190,6 +190,7 @@ void RBVocalSingAudioProcessor::clearChart()
     chartPhrases.clear();
     chartHarm2Phrases.clear();
     chartOverdrives.clear();
+    chartPercussion.clear();
     chartPhraseSeparators.clear();
     chartPitchSections.clear();
     for (auto& v : pitchClassCandidates) v.clear();
@@ -212,6 +213,21 @@ void RBVocalSingAudioProcessor::finalizeChart (std::vector<NoteInfo>&&          
                [] (const NoteInfo& a, const NoteInfo& b) { return a.startTime < b.startTime; });
 
     chartNotes = std::move (notes);
+
+    // Collected straight into the member by the parsers, in item order rather than time
+    // order (a track can hold several MIDI items). prepare() sorts, folds duplicates and
+    // assigns the hit windows; the overlap flag then checks those windows against every
+    // sung note of every loaded part — HARM2/HARM3 singing over HARM1 percussion is the
+    // case reported to misbehave in game.
+    rbperc::prepare (chartPercussion);
+    if (! chartPercussion.empty())
+    {
+        std::vector<rbperc::Span> sung;
+        sung.reserve (chartNotes.size());
+        for (const auto& n : chartNotes)          // already sorted by start
+            sung.push_back ({ n.startTime, n.endTime });
+        rbperc::markOverlaps (chartPercussion, sung);
+    }
 
     if (vocalMode.load (std::memory_order_relaxed) == (int) VocalMode::Harmonies)
     {
@@ -395,7 +411,8 @@ void RBVocalSingAudioProcessor::readChartFromReaper()
     // lead (Main) contributes Range Shift sections; phrases go to a per-part list.
     auto parseTrack = [&] (void* track, VocalPart part, bool collectSections,
                            std::vector<PhraseInfo>* phraseList,
-                           std::vector<PhraseInfo>* overdriveList)
+                           std::vector<PhraseInfo>* overdriveList,
+                           std::vector<PercussionNote>* percussionList)
     {
         if (track == nullptr) return;
         const int numItems = reaperApi.CountTrackMediaItems (track);
@@ -406,15 +423,18 @@ void RBVocalSingAudioProcessor::readChartFromReaper()
             void* take = reaperApi.GetActiveTake (item);
             if (!take || !reaperApi.TakeIsMIDI (take)) continue;
 
-            parseChartNotes (take, item, track, part, collectSections, notes, phraseList, overdriveList, shiftMarkers, minP, maxP);
+            parseChartNotes (take, item, track, part, collectSections, notes, phraseList,
+                             overdriveList, percussionList, shiftMarkers, minP, maxP);
         }
     };
 
-    parseTrack (mainTrack, VocalPart::Main, true, &chartPhrases, &chartOverdrives);
+    // Percussion comes from the lead only. No official chart puts it on HARM2/HARM3 and
+    // nothing documents how the game treats it there, so those parts drop it.
+    parseTrack (mainTrack, VocalPart::Main, true, &chartPhrases, &chartOverdrives, &chartPercussion);
     if (harmonies)
     {
-        parseTrack (harm2Track, VocalPart::Harm2, false, &chartHarm2Phrases, nullptr);
-        parseTrack (harm3Track, VocalPart::Harm3, false, nullptr, nullptr);
+        parseTrack (harm2Track, VocalPart::Harm2, false, &chartHarm2Phrases, nullptr, nullptr);
+        parseTrack (harm3Track, VocalPart::Harm3, false, nullptr, nullptr, nullptr);
     }
 
     finalizeChart (std::move (notes), std::move (shiftMarkers), minP, maxP);
@@ -442,6 +462,7 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
                                                   std::vector<NoteInfo>&                 out,
                                                   std::vector<PhraseInfo>*               outPhrases,
                                                   std::vector<PhraseInfo>*               outOverdrives,
+                                                  std::vector<PercussionNote>*           outPercussion,
                                                   std::vector<std::pair<double,double>>& outShiftMarkers,
                                                   int& minP, int& maxP)
 {
@@ -513,7 +534,13 @@ void RBVocalSingAudioProcessor::parseChartNotes (void* take,
                 outOverdrives->push_back ({ startSec, endSec });
             continue;
         }
-        if (pitch >= kFirstReservedPitch) continue;  // other special notes
+        if (pitch == kPercussionPitch)   // collected from HARM1/Solo only
+        {
+            if (outPercussion != nullptr)
+                outPercussion->push_back ({ startSec, endSec });
+            continue;
+        }
+        if (pitch >= kFirstReservedPitch) continue;  // other special notes, incl. kPercussionSamplePitch
 
         // Match nearest lyric within 50 ms
         juce::String lyric;
@@ -627,7 +654,8 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
     // (Main) contributes Range Shift sections; phrases go to a per-part list.
     auto parseSeq = [&] (int trackIdx, VocalPart part, bool collectSections,
                          std::vector<PhraseInfo>* phraseList,
-                         std::vector<PhraseInfo>* overdriveList)
+                         std::vector<PhraseInfo>* overdriveList,
+                         std::vector<PercussionNote>* percussionList)
     {
         if (trackIdx < 0) return;
 
@@ -681,7 +709,12 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
                 if (overdriveList != nullptr) overdriveList->push_back ({ startT, endT });
                 continue;
             }
-            if (pitch >= kFirstReservedPitch) continue;
+            if (pitch == kPercussionPitch)  // collected from HARM1/Solo only
+            {
+                if (percussionList != nullptr) percussionList->push_back ({ startT, endT });
+                continue;
+            }
+            if (pitch >= kFirstReservedPitch) continue;  // incl. kPercussionSamplePitch
 
             juce::String lyric;
             double bestDist = 0.05;
@@ -699,11 +732,12 @@ void RBVocalSingAudioProcessor::loadMidiFile (const juce::File& file)
         }
     };
 
-    parseSeq (mainIdx, VocalPart::Main, true, &chartPhrases, &chartOverdrives);
+    // Percussion from the lead only — same rule as the REAPER path above.
+    parseSeq (mainIdx, VocalPart::Main, true, &chartPhrases, &chartOverdrives, &chartPercussion);
     if (harmonies)
     {
-        parseSeq (harm2Idx, VocalPart::Harm2, false, &chartHarm2Phrases, nullptr);
-        parseSeq (harm3Idx, VocalPart::Harm3, false, nullptr, nullptr);
+        parseSeq (harm2Idx, VocalPart::Harm2, false, &chartHarm2Phrases, nullptr, nullptr);
+        parseSeq (harm3Idx, VocalPart::Harm3, false, nullptr, nullptr, nullptr);
     }
 
     finalizeChart (std::move (notes), std::move (shiftMarkers), minP, maxP);

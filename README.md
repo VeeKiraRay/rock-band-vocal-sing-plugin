@@ -124,6 +124,18 @@ From top to bottom:
 - **Muted MIDI notes are not treated specially** — a note muted in the REAPER MIDI editor still draws and scores like any other. If you don't want a note charted, delete it or move it to another track. (Let us know if muting matters to your workflow — this can be revisited.)
 - If no chart is loaded, the highway shows a diagnostic message (including the list of tracks it found, if the lead track is missing).
 
+### Percussion notes
+
+Charts can include **percussion** (tambourine, cowbell, hand clap) for the singer to play in vocal breaks. Playable percussion is MIDI note 96 on `PART VOCALS` (or `HARM1` in Harmonies mode); note 97, which only triggers the sound in game, is not shown — the game does not show it either.
+
+- Each percussion note draws as a **ringed circle** across the middle of the highway, with a thin line marking its exact time.
+- **Tap the mic** to play it. Any sound that opens the **Mic Gate** inside the note's window (about 100 ms either side of it, less where two notes are close together) counts — the same gate level that singing uses, so there is nothing extra to set up. It has to be a new sound: if you are still singing, or the gate is already open from background noise, there is no tap to detect.
+- A hit **fills the circle gold**; a miss leaves it empty. Like the gold on sung notes, the result stays while stopped and clears when the next pass starts.
+- The traffic light shows **GREAT** or **MISS** for each one (there is nothing in between for a tap), and grey while its window is still open.
+- A circle drawn in **magenta** has singing too close to it — within its window, on any part. Official charts keep singing clear of percussion, and percussion under singing is reported to misbehave in game, so treat magenta as a hint to move one or the other. On the plugin's side it also means the tap will usually miss, because the singing is already holding the gate open.
+- Percussion on `HARM2` or `HARM3` is ignored. No official chart puts it there and how the game treats it is undocumented.
+- Percussion is not written by [Save take](#saving-a-take-as-midi) — that exports the sung pitch only.
+
 ### Traffic light
 
 The stats panel compares your live pitch to the **closest active chart note of any part**, with cents precision (100 cents = one semitone). How forgiving it is comes from the **Pitch Tolerance** setting (default ± 50 cents):
@@ -134,6 +146,8 @@ The stats panel compares your live pitch to the **closest active chart note of a
 | 🟡 Yellow | Within twice the tolerance — close.                 |
 | 🔴 Red    | Further off than that.                              |
 | ⚪ Grey   | No chart note active, or no pitch sung.             |
+
+Between phrases the light also reports [percussion notes](#percussion-notes): green **GREAT** for a hit, red **MISS** for a miss.
 
 > **About pitch detection.** The plugin uses the MPM (McLeod Pitch Method) algorithm at roughly 60 estimates per second, with a voicing gate that discards breath sounds, hard consonants and other unpitched audio, and a median filter that suppresses momentary octave errors on note attacks. It is a solid tracker but not infallible — if background noise still triggers spurious pitches, raise the **Mic Gate** in Settings, and if whole notes come out an octave low (common on AI-separated stems), see [Octave Guard](#octave-guard). The traffic light is a charting aid: consistent green across a phrase is a good sign that the notes and lyrics are placed correctly; don't treat individual flickers as a definitive grade.
 

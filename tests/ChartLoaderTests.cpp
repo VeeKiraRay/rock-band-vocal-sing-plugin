@@ -263,6 +263,101 @@ TEST_CASE ("chartloader solo: marker pitches route to sections/phrases/overdrive
     REQUIRE (proc.getChartOverdrives()[0].startTime == Catch::Approx (40.0).margin (0.001));
 }
 
+TEST_CASE ("chartloader solo: playable percussion (96) is collected, sample-only (97) dropped",
+           "[chartloader][solo][percussion]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    // Written out of time order on purpose: the loader must hand back a sorted list.
+    juce::MidiMessageSequence vocals;
+    addNote (vocals, 1.0,  1.5,   60);
+    addNote (vocals, 12.0, 12.03, 96);   // 32nd-ish stub, the most common real length
+    addNote (vocals, 10.0, 10.06, 96);
+    addNote (vocals, 11.0, 11.06, 97);   // sample-only: never drawn, never scored
+    addNote (vocals, 20.0, 20.5,  62);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    const auto& perc = proc.getChartPercussion();
+    REQUIRE (perc.size() == 2);
+    REQUIRE (perc[0].startTime == Catch::Approx (10.0).margin (0.001));
+    REQUIRE (perc[0].endTime   == Catch::Approx (10.06).margin (0.001));
+    REQUIRE (perc[1].startTime == Catch::Approx (12.0).margin (0.001));
+
+    // Neither percussion pitch is a singable note.
+    const auto& notes = proc.getChartNotes();
+    REQUIRE (notes.size() == 2);
+    REQUIRE (notes[0].pitch == 60);
+    REQUIRE (notes[1].pitch == 62);
+}
+
+TEST_CASE ("chartloader solo: percussion never widens the pitch range", "[chartloader][solo][percussion]")
+{
+    // The same trap kLyricShiftPitch fell into from the other end: a marker that reached
+    // minP/maxP would drag the highway ceiling up to 96.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote (vocals, 1.0, 1.5, 50);
+    addNote (vocals, 2.0, 2.5, 60);
+    addNote (vocals, 3.0, 3.1, 96);
+    addNote (vocals, 4.0, 4.1, 97);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    REQUIRE (proc.chartMinPitch == 48);
+    REQUIRE (proc.chartMaxPitch == 62);
+
+    const auto& sections = proc.getChartPitchSections();
+    REQUIRE (sections.size() == 1);
+    REQUIRE (sections[0].maxPitch == 60);
+}
+
+TEST_CASE ("chartloader solo: percussion on a percussion-only chart still loads",
+           "[chartloader][solo][percussion]")
+{
+    // A chart can be mid-authoring with only percussion placed so far. Nothing should
+    // depend on there being a singable note first.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals;
+    addNote (vocals, 5.0, 5.06, 96);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "EVENTS", {} } });
+    proc.loadMidiFile (file);
+
+    REQUIRE (proc.getChartNotes().empty());
+    REQUIRE (proc.getChartPercussion().size() == 1);
+}
+
+TEST_CASE ("chartloader: percussion is cleared by the next load", "[chartloader][solo][percussion]")
+{
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence withPerc, withoutPerc;
+    addNote (withPerc,    1.0, 1.5,  60);
+    addNote (withPerc,    2.0, 2.06, 96);
+    addNote (withoutPerc, 1.0, 1.5,  60);
+
+    juce::TemporaryFile tempA (".mid"), tempB (".mid");
+    auto fileA = writeMidiFixture (tempA, { { "PART VOCALS", withPerc } });
+    auto fileB = writeMidiFixture (tempB, { { "PART VOCALS", withoutPerc } });
+
+    proc.loadMidiFile (fileA);
+    REQUIRE (proc.getChartPercussion().size() == 1);
+    proc.loadMidiFile (fileB);
+    REQUIRE (proc.getChartPercussion().empty());
+}
+
 TEST_CASE ("chartloader solo: chartMinPitch/chartMaxPitch pad real notes by 2 semitones", "[chartloader][solo]")
 {
     RBVocalSingAudioProcessor proc;
@@ -540,6 +635,75 @@ TEST_CASE ("chartloader harmonies: each part keeps its own phrase grid", "[chart
     REQUIRE (proc.getChartPhrases()[0].startTime == Catch::Approx (30.0).margin (0.001));
     REQUIRE (proc.getChartHarm2Phrases().size() == 1);
     REQUIRE (proc.getChartHarm2Phrases()[0].startTime == Catch::Approx (60.0).margin (0.001));
+}
+
+TEST_CASE ("chartloader harmonies: percussion comes from HARM1 only", "[chartloader][harmonies][percussion]")
+{
+    // HARM2/HARM3 percussion is undocumented and absent from official charts, so it is
+    // skipped rather than guessed at. It must not leak into the singable notes either.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Harmonies, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence harm1, harm2, harm3;
+    addNote (harm1, 1.0, 1.5,  60);
+    addNote (harm1, 5.0, 5.06, 96);
+    addNote (harm2, 6.0, 6.06, 96);
+    addNote (harm3, 7.0, 7.06, 96);
+    addNote (harm2, 2.0, 2.5,  64);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "HARM1", harm1 }, { "HARM2", harm2 }, { "HARM3", harm3 } });
+    proc.loadMidiFile (file);
+
+    const auto& perc = proc.getChartPercussion();
+    REQUIRE (perc.size() == 1);
+    REQUIRE (perc[0].startTime == Catch::Approx (5.0).margin (0.001));
+    REQUIRE (proc.getChartNotes().size() == 2);
+}
+
+TEST_CASE ("chartloader harmonies: HARM2 singing over HARM1 percussion flags the overlap",
+           "[chartloader][harmonies][percussion]")
+{
+    // The overlap check runs in finalizeChart against every loaded part, not just the part
+    // the percussion came from. The windows are assigned there too.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Harmonies, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence harm1, harm2;
+    addNote (harm1, 1.0,  1.5,  60);
+    addNote (harm1, 5.0,  5.03, 96);   // HARM2 sings across this one
+    addNote (harm1, 8.0,  8.03, 96);   // clear of everything
+    addNote (harm2, 4.8,  5.4,  64);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "HARM1", harm1 }, { "HARM2", harm2 } });
+    proc.loadMidiFile (file);
+
+    const auto& perc = proc.getChartPercussion();
+    REQUIRE (perc.size() == 2);
+    REQUIRE (perc[0].overlapsSung);
+    REQUIRE_FALSE (perc[1].overlapsSung);
+    REQUIRE (perc[1].window.lo == Catch::Approx (8.0 - rbperc::kEarlySec).margin (0.001));
+    REQUIRE (perc[1].window.hi == Catch::Approx (8.0 + rbperc::kLateSec).margin (0.001));
+}
+
+TEST_CASE ("chartloader solo: Solo mode ignores HARM1 percussion", "[chartloader][solo][percussion]")
+{
+    // Solo reads PART VOCALS; a HARM1 track in the same file is not its source.
+    RBVocalSingAudioProcessor proc;
+    proc.vocalMode.store ((int) VocalMode::Solo, std::memory_order_relaxed);
+
+    juce::MidiMessageSequence vocals, harm1;
+    addNote (vocals, 1.0, 1.5,  60);
+    addNote (vocals, 3.0, 3.06, 96);
+    addNote (harm1,  4.0, 4.06, 96);
+
+    juce::TemporaryFile tempFile (".mid");
+    auto file = writeMidiFixture (tempFile, { { "PART VOCALS", vocals }, { "HARM1", harm1 } });
+    proc.loadMidiFile (file);
+
+    REQUIRE (proc.getChartPercussion().size() == 1);
+    REQUIRE (proc.getChartPercussion()[0].startTime == Catch::Approx (3.0).margin (0.001));
 }
 
 // ─── Render cache (finalizeChart post-pass, 2026-07 paint phase) ───────

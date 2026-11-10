@@ -81,6 +81,10 @@ rock-band-vocal-sing-plugin/          (repo root)
                                     highway labels (Main never yields; a lower part's label
                                     is dropped where it would cover a higher part's bar or
                                     label). Header-only, JUCE-free, unit-tested
+    PercussionHits.h              — rbperc::: pure vocal-percussion rules (hit windows with
+                                    midpoint clipping, tap = gate edge, overlap-with-singing
+                                    flag, fill progress, stats-light state, reload remap).
+                                    Header-only, JUCE-free, unit-tested
     TooltipBounds.h               — rbtip::tooltipBounds: pure tooltip placement (flip past
                                     each midpoint, then clamp). Header-only, JUCE-free,
                                     unit-tested; the box must never contain the cursor
@@ -173,7 +177,10 @@ note-pitch editor's `MIDI_SetNote` write-back.
   lyric's whole trailing suffix run (`LyricText.h`), so `"word#$"` is both.
 - Marker pitches (named constants in `PluginProcessor.h`): `kRangeShiftPitch` 0 =
   Range Shift section boundary, `kPhraseMarkerPitch` 105 = phrase, `kOverdrivePitch`
-  116 = overdrive, ≥ `kFirstReservedPitch` 96 = reserved (all excluded from `chartNotes`).
+  116 = overdrive, `kPercussionPitch` 96 = playable percussion (collected into
+  `chartPercussion`), ≥ `kFirstReservedPitch` 96 = reserved (all excluded from `chartNotes`).
+  `kPercussionSamplePitch` 97 (sample-only percussion) is dropped like any reserved pitch;
+  it is named only so the pairing with 96 is visible.
   `kLyricShiftPitch` 1 = RB3 lyric shift is filtered too, but unlike the others it is
   *dropped* rather than collected — nothing consumes it yet. It has a named constant anyway
   because charting it dragged the highway floor down to MIDI 0 (found in the 2026-08 chart
@@ -339,6 +346,45 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   - Deferring labels to after every bar is the **one** way `Lyric only` differs from the
     pre-feature build: a label overrunning a short bar now reads over the next Main bar
     instead of under it.
+- **Percussion notes** (`chartPercussion`, `rbperc::` in `PercussionHits.h`): pitch 96 from
+  PART VOCALS (Solo) or HARM1 (Harmonies). **HARM2/HARM3 percussion is skipped** — official
+  charts never use it and the game's behaviour there is undocumented. `finalizeChart` runs
+  `rbperc::prepare` (sort, fold duplicates, assign windows) then `markOverlaps`.
+  - **The MIDI length is ignored.** Charts write it as an arbitrary stub (mostly 32nds and
+    16ths, up to a quarter), so the hit window is a fixed ±100 ms around the start (briefly ±200 while taps were being
+    lost to the stale-hop skip below; with that fixed, ±100 hits reliably),
+    **clipped at the midpoint** between neighbours — official charts space percussion as
+    tightly as ~137 ms, so the windows really do collide and one tap must not score two.
+  - **A hit is the gate's closed→open edge inside the window**, read off `HopSample::voiced`,
+    which is the raw RMS gate (`aboveGate`), not "pitch found" — an unpitched tap registers
+    with no detector change, and the raw gate has no hold decay. The edge, not "open
+    anywhere in the window", so a sung tail or a noise floor above the gate cannot score.
+    Scored in `updateNoteHits()` on the detection timeline, on **every** hop - including
+    the ones the span scoring skips as `hopT <= t0`. Those are not old: hops are dated at
+    their window centre (~16 ms before the sample that completed them) while
+    `cachedPlayTime` is the block *start*, so a block's hops routinely arrive dated before
+    the previous frame. Skipping them lost the one edge hop that *is* a tap, which made
+    taps miss at random. Misses are resolved `kResolveLagSec` (150 ms) after the window
+    closes, for the same late arrival; `percResolvedUpTo` keeps a seek from calling the
+    notes it jumped over missed. `percHits` shares
+    the note-hit lifecycle — playing only, kept while stopped, `hitResetPending`, remapped
+    by start time on reload (`rbperc::remapByStart`), parked across an empty read.
+  - **Overlap warning:** a window intersecting any sung note of any loaded part (talkies
+    included) draws magenta (`kPercOverlapColour`). Official charts never put singing
+    within 200 ms of percussion, so it is silent on them; it exists because percussion
+    under harmony singing is reported to misbehave in game. Such a tap also usually misses
+    here, since the singing already holds the gate open — consistent with the hint.
+  - **Drawing:** ringed grey-cored circle at the highway's vertical centre plus a timing
+    line, drawn *over* the bars. The gold fill grows over `kGrowSec` keyed on **drawing**
+    time against the hit's detection time, so in playback mode it starts as the playhead
+    reaches the tap, and it is full while stopped. That keying is why no idle-repaint gate
+    input was needed: it only animates while playing, when the play time already repaints
+    every frame.
+  - **Stats light:** only when no sung note is active — GREAT / MISS (the vocal labels; a
+    tap has no in-between), `---` while the window is open, result held `kLingerSec` after
+    the window. A miss is not shown before the drawn window closes, since scoring can
+    resolve it a calibration earlier.
+  - Not exported by Save take and not touched by the stem tools.
 - **Stats panel** (`drawStats`): time `MM:SS.ms / end`, live note name + MIDI + Hz,
   traffic light vs the closest active note of any part, scored in cents from
   `currentMidiFloat` (within ±`pitchTolCents` = GREAT, within 2× = CLOSE, else MISS;
@@ -647,7 +693,11 @@ Catch2 unit tests (`RBVocalSingTests` target, `tests/*.cpp`) exercise the proces
 public API directly — pitch detection, chart loading (Solo + Harmonies), settings
 persistence — plus the take-export segmenter (pure functions in `src/TakeExport.h`,
 tested without any plugin scaffolding) and the highway pitch-axis rules
-(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the note-marking yield
+(`src/HighwayRange.h`, likewise pure — `tests/HighwayRangeTests.cpp`), the vocal-percussion rules
+(`src/PercussionHits.h` — `tests/PercussionHitsTests.cpp`: midpoint clipping at the tightest
+real spacing, a gate already open across a window is not a tap, the overlap flag's running
+end-time maximum, and a miss never shown while its window is still drawn open), the
+note-marking yield
 rule (`src/NoteMarkings.h` — `tests/NoteMarkingsTests.cpp`, whose load-bearing cases are the
 two that show the clearance is geometry rather than a semitone count: a harmony one semitone
 under Main is unlabelable at *any* lane height, while at two semitones the same pair resolves

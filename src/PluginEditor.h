@@ -378,6 +378,7 @@ private:
     std::vector<rbperc::Hit> percHits;
     std::vector<double>      percHitKeys;     // start times percHits is aligned to
     std::vector<rbperc::Hit> parkedPercHits;
+
     // Detection time up to which percussion windows have been resolved (hit or miss).
     // Moved by discontinuities and pass resets so a seek never calls skipped notes missed.
     double percResolvedUpTo { -1.0 };
@@ -403,11 +404,16 @@ private:
     // Reusable scratch buffer for draining audioProcessor's per-hop pitch queue
     // in updateNoteHits() — reused every frame to avoid per-frame allocation.
     std::vector<RBVocalSingAudioProcessor::HopSample> hopScratch;
-    // Pitch/voicing "in effect" at the end of the last processed hop — carries the
-    // held value across frame boundaries so a frame with no new hops (UI faster
-    // than the ~16ms hop cadence) still scores against the right ongoing pitch.
-    float lastHopMidiF  { -1.0f };
-    bool  lastHopVoiced { false };
+    // The last processed hop: its detection-timeline time, pitch and gate state. Scoring
+    // runs hop to hop - each hop's state holds from its own time until the next hop's -
+    // so these carry the open interval across frame boundaries. lastHopT < 0 = no hop yet
+    // this pass (the first hop of a pass opens an interval rather than closing one).
+    double lastHopT      { -1.0 };
+    float  lastHopMidiF  { -1.0f };
+    bool   lastHopVoiced { false };
+    // Longest interval one hop's estimate may cover. Hops are ~10.7 ms apart; this only
+    // matters if the stream has a hole (a stalled UI overflowing the hop queue).
+    static constexpr double kMaxHopGapSec = 0.05;
 
     // Transient message-bar flash (take-export feedback). Drawn by drawMessageBar with
     // priority over chartStatus until flashUntil (seconds, Time::getMillisecondCounterHiRes

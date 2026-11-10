@@ -359,14 +359,11 @@ Details live in the code; this is the map of what exists and its non-obvious dec
     which is the raw RMS gate (`aboveGate`), not "pitch found" — an unpitched tap registers
     with no detector change, and the raw gate has no hold decay. The edge, not "open
     anywhere in the window", so a sung tail or a noise floor above the gate cannot score.
-    Scored in `updateNoteHits()` on the detection timeline, on **every** hop - including
-    the ones the span scoring skips as `hopT <= t0`. Those are not old: hops are dated at
-    their window centre (~16 ms before the sample that completed them) while
-    `cachedPlayTime` is the block *start*, so a block's hops routinely arrive dated before
-    the previous frame. Skipping them lost the one edge hop that *is* a tap, which made
-    taps miss at random. Misses are resolved `kResolveLagSec` (150 ms) after the window
-    closes, for the same late arrival; `percResolvedUpTo` keeps a seek from calling the
-    notes it jumped over missed. `percHits` shares
+    Scored in `updateNoteHits()` on the detection timeline, in the same hop walk as the
+    spans and trail (see the hop-timeline gotcha). Misses are resolved `kResolveLagSec`
+    (150 ms) after the window closes, because hops reach the editor well after the frame
+    whose time they fall in; `percResolvedUpTo` keeps a seek from calling the notes it
+    jumped over missed. `percHits` shares
     the note-hit lifecycle — playing only, kept while stopped, `hitResetPending`, remapped
     by start time on reload (`rbperc::remapByStart`), parked across an empty read.
   - **Overlap warning:** a window intersecting any sung note of any loaded part (talkies
@@ -805,6 +802,21 @@ so nothing an author sends for review can be committed by accident.
   `t`, so at +200 ms the contour drew 200 ms right of the playhead and every scoring
   sub-interval fell outside `[t0, t]` — and the first fix over-corrected by storing
   calibrated times, which leaked the offset into the exported MIDI.
+- **Score hops on their own timestamps, never against the frame's `[t0, t]`.**
+  `updateNoteHits()` walks every drained hop in order; each hop's state holds from its time
+  to the next hop's (`lastHopT`/`lastHopMidiF`/`lastHopVoiced` carry it across frames), and
+  the frame clock only decides *whether* to score (playing, no discontinuity). It used to
+  clip to `[t0, t]` and skip hops dated at or before `t0` as "already accounted for" - but
+  each hop is drained exactly once, and hops are *routinely* dated before `t0`: a hop is
+  filed at its window centre, ~16 ms before the block that produced it, while `t` is that
+  block's start (`currentPlaybackTime`). Measured in REAPER at 128-sample blocks
+  (2026-11-10): **68% of hops skipped at 48 fps, 98% uncapped** - the faster the UI, the
+  worse - so the trail and Save take saw a third of the detections at best, the hit spans
+  degraded to about one sample per frame, and percussion taps (a single edge hop) missed
+  at random. The trade: the gold now ends at the newest hop, ~16-30 ms short of the
+  playhead, which the playhead clip makes invisible. A `t == t0` frame no longer returns
+  on the REAPER path either (it dropped its drained hops outright); the file fallback keeps
+  it as its only "stopped" signal.
 - **Calibration is two numbers, because it compensates two different physical delays.**
   Split 2026-08-08 (`latencyOffsetMs` + `inputOffsetMs`); before that one slider did both
   jobs and could not satisfy them at once.

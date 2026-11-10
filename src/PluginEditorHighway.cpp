@@ -834,14 +834,22 @@ RBVocalSingAudioProcessorEditor::heardDetection() const
 //
 // Scores at hop resolution (~11 ms, the audio thread's detection cadence) rather
 // than once per UI frame: the audio thread queues one HopSample per hop (voiced,
-// held, or silent), drained here every call. A UI frame can span several hops —
-// point-sampling only the latest atomic made hop-level detections invisible
-// whenever they were superseded before the next UI frame happened to read them,
-// which could hide notes shorter than one frame interval entirely (the short-note
-// hit-tracking investigation, bug #3). lastHopMidiF/lastHopVoiced carry
-// the pitch "in effect" at the end of one frame into the start of the next, so the
-// [t0, t] window is reconstructed as a sequence of hop-bounded sub-intervals
-// instead of one instantaneous sample.
+// held, or silent), drained here every call. Point-sampling only the latest atomic
+// made hop-level detections invisible whenever they were superseded before the next
+// UI frame read them, which could hide notes shorter than one frame entirely (the
+// short-note hit-tracking investigation, bug #3).
+//
+// Every drained hop is used, on its own timestamp: each hop's pitch holds from its
+// time until the next hop's (lastHop* carries the open interval across frames). The
+// frame clock decides only *whether* to score (playing, no discontinuity), never
+// *which* hops count. It used to clip scoring to the frame's [t0, t] and skip any hop
+// dated at or before t0 as "already accounted for" - but no hop is ever seen twice,
+// and hops are routinely dated before t0: each is filed at its window centre, ~16 ms
+// before the block it was computed in, while t comes from that block's start. Measured
+// in REAPER (2026-11-10, 128-sample blocks): 68% of hops skipped at 48 fps and 98%
+// uncapped, so the trail and Save take saw a third of the detections at best and the
+// hit spans fell back to roughly one sample per frame. The cost of the change is that
+// the gold now ends at the newest hop rather than at t, ~16-30 ms behind the playhead.
 
 void RBVocalSingAudioProcessorEditor::updateNoteHits()
 {
@@ -905,15 +913,18 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
     // frame, or a jump in either direction (user seek, REAPER's snap-back to the edit
     // cursor on stop, loop wrap) — arms a deferred reset instead of clearing at once,
     // so the gold stays reviewable while stopped and clears when the next pass starts.
-    // t == t0 is just a stalled frame (stopped transport, or the playback-time atomic
-    // repeating between audio blocks): neither sung time nor a discontinuity.
     if (t0 < 0.0 || t < t0 || t - t0 > 0.5)
     {
         hitResetPending  = true;
         percResolvedUpTo = t;   // nothing before the jump target was played
         return;
     }
-    if (t == t0)
+
+    // t == t0 is a frame that landed inside one audio block. On the REAPER path that is
+    // fine while playing - the hops drained above still need scoring, and returning here
+    // lost them for good - and the play-state check below handles stopped. The file
+    // fallback has no play state, so a repeated time is its only "stopped" signal.
+    if (t == t0 && ! audioProcessor.reaperApi.isLoaded())
         return;
 
     // While stopped, the tracked time follows the edit cursor — a small forward
@@ -933,29 +944,36 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
             h = {};
         percResolvedUpTo = t0;  // the new pass starts here; earlier windows stay pending
         pitchTrail.clear();
+        lastHopT      = -1.0;
         lastHopMidiF  = -1.0f;
         lastHopVoiced = false;
     }
 
-    // Degenerate-session guard (~25 min of continuous singing at 60 fps) — drop the
-    // older half rather than growing without bound.
+    // Degenerate-session guard (~19 min of continuous singing at one sample per hop,
+    // ~86-94/s) — drop the older half rather than growing without bound.
     if (pitchTrail.size() > 100000)
         pitchTrail.erase (pitchTrail.begin(),
                           pitchTrail.begin() + (std::ptrdiff_t) (pitchTrail.size() / 2));
 
-    // Look-back once for the whole frame — note times don't change mid-frame, so
-    // every hop-bounded sub-interval below reuses this same starting point.
-    auto itStart = std::lower_bound (notes.begin(), notes.end(), t0 - kNoteLookback,
+    // Look-back once for the whole frame — note times don't change mid-frame, so every
+    // hop-to-hop interval below reuses this same starting point. The earliest interval
+    // starts at the carried hop, or at the first drained one, which can sit well before
+    // t0 (see the header comment).
+    double scanFrom = t0;
+    if (lastHopT >= 0.0)      scanFrom = std::min (scanFrom, lastHopT);
+    if (! hopScratch.empty()) scanFrom = std::min (scanFrom, hopScratch.front().time - calibSec);
+
+    auto itStart = std::lower_bound (notes.begin(), notes.end(), scanFrom - kNoteLookback,
         [] (const NoteInfo& n, double v) { return n.startTime < v; });
     while (itStart != notes.begin())
     {
         const auto prev = std::prev (itStart);
-        if (prev->endTime <= t0) break;
+        if (prev->endTime <= scanFrom) break;
         itStart = prev;
     }
 
-    // Scores one [segStart, segEnd) sub-interval — same windowed scan as the
-    // traffic light, but per hop-bounded slice instead of the whole [t0, t] frame.
+    // Scores one [segStart, segEnd) hop-to-hop interval — same windowed scan as the
+    // traffic light, but per interval instead of per frame.
     auto scoreSegment = [&] (double segStart, double segEnd, bool segVoiced, float segMidiF)
     {
         if (segEnd <= segStart) return;
@@ -990,24 +1008,24 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         }
     };
 
-    double segStart  = t0;
-    float  segMidiF  = lastHopMidiF;
-    bool   segVoiced = lastHopVoiced;
-
     for (const auto& hop : hopScratch)
     {
         const double hopT = hop.time - calibSec;
 
-        // Percussion taps are checked on EVERY hop, including the "stale" ones skipped
-        // below. A hop is dated at its window centre, ~16 ms before the block it was
-        // computed in, while cachedPlayTime is that block's start - so a whole block's
-        // hops routinely arrive with times at or before t0. Skipping them is harmless for
-        // the hit spans (their state is folded forward), but a tap is a single closed->open
-        // edge, and losing that one hop lost the tap: the readout showed "no tap" with the
-        // level far over the gate. Each hop is drained exactly once, so nothing can be
-        // counted twice, and a tap carries its own timestamp rather than a share of [t0, t].
-        // (segVoiced is still the previous hop's state here.) First tap in a window wins.
-        if (rbperc::isTap (segVoiced, hop.voiced))
+        // Two timelines, two ordering checks. Scoring runs on hopT (calibrated), which
+        // steps backwards when the Input calib - or, with Live-mic used, the Output calib -
+        // is raised mid-pass: a hop that does not move forward there is not scored, so no
+        // interval runs backwards and no tap is dated before the last one. The trail runs
+        // on raw hop.time, which no calibration touches; its own check only guards the
+        // start of a project, where several hops are clamped to time 0 and the take
+        // segmenter needs strictly ascending samples. Either way the hop's state is taken
+        // below, so the next interval starts from the right pitch.
+        const bool scoreable = lastHopT < 0.0 || hopT > lastHopT;
+
+        // Percussion: a tap is the gate opening, i.e. this hop open while the previous one
+        // was closed. `voiced` is the raw RMS gate, not "pitch found", so an unpitched mic
+        // tap counts. A tap carries its own timestamp; first tap in a window wins.
+        if (scoreable && rbperc::isTap (lastHopVoiced, hop.voiced))
         {
             const int pi = rbperc::noteAt (perc, hopT);
             if (pi >= 0 && (size_t) pi < percHits.size()
@@ -1015,22 +1033,12 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
                 percHits[(size_t) pi] = { rbperc::Result::Hit, hopT };
         }
 
-        if (hopT <= t0)
-        {
-            // Stale relative to this frame's window (already accounted for by a
-            // previous frame) — just fold it into the carried starting state.
-            segMidiF  = hop.midiFloat;
-            segVoiced = hop.voiced;
-            continue;
-        }
-
-        // Trail capture (skipped when the Pitch Trail setting is off): one sample
-        // per hop instead of per frame. A held MIDI estimate after the RMS gate has
-        // closed is a live-display convenience, not evidence for a saved take, so it
-        // also adds a gap marker. Stored at the raw hop time — drawHighway applies
-        // calibSec, and the take export wants true project time so its MIDI lines up
-        // with the audio waveform.
-        if (pitchTrailOn)
+        // Trail capture (skipped when the Pitch Trail setting is off): one sample per
+        // hop. A held MIDI estimate after the RMS gate has closed is a live-display
+        // convenience, not evidence for a saved take, so it adds a gap marker instead.
+        // Stored at the raw hop time — drawHighway applies the calibration, and the take
+        // export wants true project time so its MIDI lines up with the audio waveform.
+        if (pitchTrailOn && (pitchTrail.empty() || hop.time > pitchTrail.back().time))
         {
             if (hop.voiced && hop.midiFloat >= 0.0f)
                 pitchTrail.push_back ({ hop.time, hop.midiFloat,
@@ -1039,20 +1047,20 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
                 pitchTrail.push_back ({ hop.time, -1.0f });
         }
 
-        scoreSegment (segStart, std::min (hopT, t), segVoiced, segMidiF);
+        // Close the interval the previous hop opened. Capped, so a hole in the hop stream
+        // - or the forward jump a lowered calibration makes - cannot stretch one estimate
+        // across it.
+        if (scoreable)
+        {
+            if (lastHopT >= 0.0)
+                scoreSegment (lastHopT, std::min (hopT, lastHopT + kMaxHopGapSec),
+                              lastHopVoiced, lastHopMidiF);
+            lastHopT = hopT;
+        }
 
-        // Percussion: a tap is the gate opening (segVoiced is still the previous hop's
-        // state here). `voiced` is the raw RMS gate, not "pitch found", so an unpitched
-        // mic tap counts — and the gate has no hold decay, so it closes again within a
-        // couple of hops and the next tap gets its own edge. First tap in a window wins.
-        segStart  = hopT;
-        segMidiF  = hop.midiFloat;
-        segVoiced = hop.voiced;
+        lastHopMidiF  = hop.midiFloat;
+        lastHopVoiced = hop.voiced;
     }
-
-    // Tail: the most recent hop's value (or the carried-over value, if no hops
-    // arrived this frame) still holds through to this frame's t.
-    scoreSegment (segStart, t, segVoiced, segMidiF);
 
     // Percussion windows that closed without a tap are misses - decided kResolveLagSec
     // late, because a hop can reach us well after the frame whose time it falls in (see
@@ -1071,9 +1079,6 @@ void RBVocalSingAudioProcessorEditor::updateNoteHits()
         }
         percResolvedUpTo = std::max (percResolvedUpTo, resolveTo);
     }
-
-    lastHopMidiF  = segMidiF;
-    lastHopVoiced = segVoiced;
 }
 
 // Re-aligns percHits to a freshly reloaded chart, matching on start time — a percussion

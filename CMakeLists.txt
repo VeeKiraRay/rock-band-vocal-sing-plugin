@@ -1,4 +1,16 @@
 cmake_minimum_required(VERSION 3.22)
+
+# macOS: pin the minimum OS version, and export it so it reaches juceaide too. JUCE builds
+# that helper tool in a nested configure that does not forward CMAKE_OSX_DEPLOYMENT_TARGET,
+# so without the environment variable it targets the build machine's own SDK version. With
+# a macOS 15+ SDK, JUCE 7.0.12 then fails to compile, because it calls
+# CGWindowListCreateImage, which Apple made unavailable from macOS 15. Targeting an older
+# release turns that into a deprecation warning. Must come before project().
+if (CMAKE_HOST_APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
+    set(ENV{MACOSX_DEPLOYMENT_TARGET} "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
 project(RBVocalSing VERSION 0.1.0)
 
 include(cmake/CPM.cmake)

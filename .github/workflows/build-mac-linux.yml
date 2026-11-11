@@ -1,0 +1,112 @@
+# .github/workflows/build-mac-linux.yml
+#
+# Test builds for macOS and Linux, run by hand from the Actions tab ("Run workflow").
+# Produces downloadable workflow artifacts, never a GitHub release, so nothing here is
+# published. Follows docs/BUILD_MAC_LINUX.md: Release config, Ninja, universal macOS binary.
+name: Build macOS + Linux (test)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false            # one platform failing must not cancel the other
+      matrix:
+        include:
+          - name: macOS
+            # Always a supported Apple Silicon image, so it cannot be retired from under
+            # us. Runner macOS version does not matter: the deployment target and the
+            # universal architectures are set explicitly in the configure step.
+            os: macos-latest
+          - name: Linux
+            os: ubuntu-22.04      # older glibc than 24.04, so the binary runs on more distros
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install tools and JUCE libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config xvfb \
+            libasound2-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libfreetype6-dev libfontconfig1-dev \
+            libgl1-mesa-dev
+          ldd --version | head -1
+
+      # The minimum macOS version is set in CMakeLists.txt, not here, because JUCE's
+      # juceaide helper needs it too and only picks it up from there.
+      - name: Configure (macOS, universal)
+        if: runner.os == 'macOS'
+        run: >
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build plugin and tests
+        run: cmake --build build
+
+      # upload-artifact drops file permissions, so the bundle is zipped here first with
+      # tools that keep them (and, on macOS, the ad-hoc code signature).
+      - name: Package VST3 bundle
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VST3=$(find build -type d -name '*.vst3' -path '*Release*' | head -1)
+          [ -n "$VST3" ] || { echo "No .vst3 bundle was produced"; exit 1; }
+          echo "Found: $VST3"
+          ZIP="RB-Vocal-Sing-${{ matrix.name }}-${GITHUB_SHA::7}.zip"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            lipo -info "$VST3/Contents/MacOS/"*
+            ditto -c -k --keepParent "$VST3" "$ZIP"
+          else
+            (cd "$(dirname "$VST3")" && zip -ry "$GITHUB_WORKSPACE/$ZIP" "$(basename "$VST3")")
+          fi
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "vst3=$VST3" >> "$GITHUB_OUTPUT"
+
+      # Uploaded before the tests run, so a test failure still leaves a binary to try.
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: RB-Vocal-Sing-${{ matrix.name }}
+          path: ${{ steps.package.outputs.zip }}
+          retention-days: 30
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          TESTS=build/RBVocalSingTests_artefacts/Release/RBVocalSingTests
+          if [ "$RUNNER_OS" = "Linux" ]; then xvfb-run -a "$TESTS"; else "$TESTS"; fi
+
+      - name: Run pluginval (strictness 5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pluginval" && cd "$RUNNER_TEMP/pluginval"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            curl -fsSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+            unzip -q pv.zip
+            PV=./pluginval.app/Contents/MacOS/pluginval
+            RUN=""
+          else
+            curl -fsSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+            unzip -q pv.zip
+            PV=./pluginval
+            RUN="xvfb-run -a"
+          fi
+          $RUN "$PV" --strictness-level 5 --validate-in-process \
+            "$GITHUB_WORKSPACE/${{ steps.package.outputs.vst3 }}"

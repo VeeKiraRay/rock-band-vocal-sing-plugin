@@ -147,10 +147,10 @@ bool Detector::pushSample (float raw, DetectorResult& out)
                                   medianHist[2]))
             : hz;
 
-        const float midi = 69.0f + 12.0f * std::log2f (pubHz / 440.0f);
+        const float midi = 69.0f + 12.0f * std::log2 (pubHz / 440.0f);
         pubFrequency    = pubHz;
         pubMidiFloat    = std::clamp (midi, 0.0f, 127.0f);
-        pubMidiNote     = std::clamp (static_cast<int> (std::roundf (midi)), 0, 127);
+        pubMidiNote     = std::clamp (static_cast<int> (std::round (midi)), 0, 127);
         pitchHoldFrames = params.holdCycles;
     }
     else
@@ -184,7 +184,7 @@ float Detector::detectPitch (const float* samples, int numSamples)
     float sum = 0.0f;
     for (int i = 0; i < numSamples; ++i)
         sum += samples[i] * samples[i];
-    const bool aboveGate = std::sqrtf (sum / (float) numSamples) >= params.gateThreshold;
+    const bool aboveGate = std::sqrt (sum / (float) numSamples) >= params.gateThreshold;
     lastAboveGate = aboveGate;
     if (!aboveGate)
     {

@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <vector>
 
 // Vocal percussion — the rules for when a percussion note counts as hit, and how it shows.

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <vector>
 
 // Note markings — which of the highway's per-note labels actually get drawn.
@@ -62,7 +63,7 @@ inline void placeMarkings (const std::vector<Candidate>& in, std::vector<char>& 
 {
     acceptedOut.assign (in.size(), 0);
 
-    for (size_t i = 0; i < in.size(); ++i)
+    for (std::size_t i = 0; i < in.size(); ++i)
     {
         const Candidate& c = in[i];
 
@@ -73,7 +74,7 @@ inline void placeMarkings (const std::vector<Candidate>& in, std::vector<char>& 
         }
 
         bool clear = true;
-        for (size_t j = 0; j < i && clear; ++j)
+        for (std::size_t j = 0; j < i && clear; ++j)
         {
             const Candidate& o = in[j];
             if (acceptedOut[j] && c.label.intersects (o.label)) clear = false;

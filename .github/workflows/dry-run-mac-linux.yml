@@ -1,0 +1,126 @@
+# .github/workflows/dry-run-mac-linux.yml
+#
+# Pre-release dry run for macOS and Linux, started by hand from the Actions tab ("Run
+# workflow"). It builds both platforms the way release.yml does, then runs the unit tests
+# and pluginval there - tests.yml only ever runs on Windows, so this is the one place
+# Clang/libc++ and GCC/libstdc++ get to see the code before a release does. Produces
+# downloadable workflow artifacts (kept 30 days), never a GitHub release.
+name: Dry run (macOS + Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      paint_profile:
+        description: "Profile build (RB_PAINT_PROFILE): status bar shows paint timings and drawn/wanted/ticks. Diagnostics only, never ship it."
+        type: boolean
+        default: false
+
+env:
+  PROFILE_FLAG: ${{ inputs.paint_profile && '-DRB_PAINT_PROFILE=ON' || '' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false            # one platform failing must not cancel the other
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest      # always a supported image; target OS set in CMakeLists.txt
+          - name: Linux
+            os: ubuntu-22.04      # older glibc than 24.04, so the binary runs on more distros
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # The runner image lists GitHub's Azure-hosted Ubuntu mirror first; when that name
+      # stops resolving the whole install fails, so use Ubuntu's own servers (they carry
+      # the -updates and -security pockets too). cmake and pkg-config (as pkgconf) are
+      # preinstalled; asking apt for pkg-config would swap out pkgconf for no gain.
+      - name: Install tools and JUCE libraries (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10       # normally ~1 min; fail fast if the Ubuntu servers hang
+        run: |
+          printf 'http://archive.ubuntu.com/ubuntu/\nhttp://security.ubuntu.com/ubuntu/\n' \
+            | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y build-essential ninja-build xvfb \
+            libasound2-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libfreetype6-dev libfontconfig1-dev \
+            libgl1-mesa-dev
+          ldd --version | head -1
+
+      # Universal binary, as release.yml builds it. The minimum macOS version is pinned in
+      # CMakeLists.txt, because JUCE's juceaide helper needs it too.
+      - name: Configure (macOS, universal)
+        if: runner.os == 'macOS'
+        run: >
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release $PROFILE_FLAG
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release $PROFILE_FLAG
+
+      - name: Build plugin and tests
+        run: cmake --build build
+
+      # upload-artifact drops file permissions, so the bundle is zipped here first with
+      # tools that keep them (and, on macOS, the ad-hoc code signature).
+      - name: Package VST3 bundle
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VST3=$(find build -type d -name '*.vst3' -path '*Release*' | head -1)
+          [ -n "$VST3" ] || { echo "No .vst3 bundle was produced"; exit 1; }
+          echo "Found: $VST3"
+          ZIP="RB-Vocal-Sing-${{ matrix.name }}${{ inputs.paint_profile && '-PROFILE' || '' }}-${GITHUB_SHA::7}.zip"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            lipo -info "$VST3/Contents/MacOS/"*
+            ditto -c -k --keepParent "$VST3" "$ZIP"
+          else
+            (cd "$(dirname "$VST3")" && zip -ry "$GITHUB_WORKSPACE/$ZIP" "$(basename "$VST3")")
+          fi
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "vst3=$VST3" >> "$GITHUB_OUTPUT"
+
+      # Uploaded before the tests run, so a test failure still leaves a binary to try.
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: RB-Vocal-Sing-${{ matrix.name }}${{ inputs.paint_profile && '-PROFILE' || '' }}
+          path: ${{ steps.package.outputs.zip }}
+          retention-days: 30
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          TESTS=build/RBVocalSingTests_artefacts/Release/RBVocalSingTests
+          if [ "$RUNNER_OS" = "Linux" ]; then xvfb-run -a "$TESTS"; else "$TESTS"; fi
+
+      - name: Run pluginval (strictness 5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pluginval" && cd "$RUNNER_TEMP/pluginval"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            curl -fsSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+            unzip -q pv.zip
+            PV=./pluginval.app/Contents/MacOS/pluginval
+            RUN=""
+          else
+            curl -fsSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+            unzip -q pv.zip
+            PV=./pluginval
+            RUN="xvfb-run -a"
+          fi
+          $RUN "$PV" --strictness-level 5 --validate-in-process \
+            "$GITHUB_WORKSPACE/${{ steps.package.outputs.vst3 }}"

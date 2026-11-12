@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "PluginProcessor.h"
+#include "AudibleLead.h"
 #include "PluginEditor.h"
 #include "NsdfPeak.h"
 #include <cmath>
@@ -263,6 +264,7 @@ void RBVocalSingAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     state.setProperty ("pitchTolCents",  savedPitchTolCents.load(),    nullptr);
     state.setProperty ("pitchTrail",     savedPitchTrail.load(),       nullptr);
     state.setProperty ("smoothPlayhead", savedSmoothPlayhead.load(),   nullptr);
+    state.setProperty ("autoLead",       savedAutoLead.load(),         nullptr);
     state.setProperty ("latencyMs",      savedLatencyOffsetMs.load(),  nullptr);
     state.setProperty ("inputLatencyMs", savedInputOffsetMs.load(),    nullptr);
     state.setProperty ("liveMic",        savedLiveMicInput.load(),     nullptr);
@@ -304,6 +306,10 @@ void RBVocalSingAudioProcessor::setStateInformation (const void* data, int size)
     savedPitchTrail      =        (bool)   state.getProperty ("pitchTrail",     true);
     savedSmoothPlayhead  =        (bool)   state.getProperty ("smoothPlayhead", false);
     savedLatencyOffsetMs =        (int)    state.getProperty ("latencyMs",      0);
+    // After latencyMs, which the migration rule reads.
+    savedAutoLead        = rblead::autoLeadForSession (state.hasProperty ("autoLead"),
+                                                       (bool) state.getProperty ("autoLead", true),
+                                                       savedLatencyOffsetMs.load());
     // Absent in sessions saved before the calibration split; 0 reproduces the old
     // single-slider behaviour exactly, so those sessions load with no visible change.
     savedInputOffsetMs   =        (int)    state.getProperty ("inputLatencyMs", 0);

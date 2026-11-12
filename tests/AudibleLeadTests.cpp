@@ -91,3 +91,27 @@ TEST_CASE ("audible lead: a large buffer with anticipative FX is still a lead", 
     REQUIRE (f.hasValue());
     REQUIRE (f.value() == Approx (1.3));
 }
+
+TEST_CASE ("audible lead: settle skips the first samples but keeps the value", "[lead]")
+{
+    // A new pass must start compensated: the old value stays while the new pass settles.
+    LeadFilter f;
+    pushN (f, 0.27, rblead::kSettleSamples + rblead::kWindow);
+    f.settle();
+    REQUIRE (f.hasValue());
+    f.push (0.9);   // unsettled first readings of the new pass
+    f.push (0.9);
+    REQUIRE (f.value() == Approx (0.27));
+}
+
+TEST_CASE ("audible lead: sessions calibrated before compensation keep their behaviour", "[lead]")
+{
+    using rblead::autoLeadForSession;
+    // No key saved yet: on only if Output calib was never set.
+    REQUIRE (autoLeadForSession (false, false, 0));
+    REQUIRE_FALSE (autoLeadForSession (false, false, 100));
+    REQUIRE_FALSE (autoLeadForSession (false, false, -40));
+    // Once saved, the user's choice wins either way.
+    REQUIRE (autoLeadForSession (true, true, 100));
+    REQUIRE_FALSE (autoLeadForSession (true, false, 0));
+}

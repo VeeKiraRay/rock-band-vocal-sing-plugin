@@ -52,6 +52,13 @@ public:
         skip  = kSettleSamples;
     }
 
+    // Playback (re)started: skip the unsettled first samples but keep the value. Once the
+    // lead is applied, forgetting it at every start would leave the first ~quarter second
+    // of each pass uncompensated - a visible jump on start and a mis-scored opening note.
+    // The rig rarely changes between passes, and when it does the median follows within
+    // half a window.
+    void settle() noexcept { skip = kSettleSamples; }
+
     void push (double sample) noexcept
     {
         if (skip > 0) { --skip; return; }
@@ -85,5 +92,15 @@ private:
     int    skip  = kSettleSamples;
     double last  = 0.0;
 };
+
+// Whether "Compensate REAPER latency" starts on for a loaded session. Every session
+// calibrated before it existed has the lead baked into Output calib (that was Output calib's
+// unacknowledged job), so turning compensation on for it would subtract the lead twice and
+// draw the chart behind the audio. Such a session keeps the old behaviour until the user
+// opts in; a session that never calibrated (Output calib 0) gets the correct one.
+inline bool autoLeadForSession (bool keyPresent, bool savedValue, int savedOutputCalibMs) noexcept
+{
+    return keyPresent ? savedValue : (savedOutputCalibMs == 0);
+}
 
 } // namespace rblead

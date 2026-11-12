@@ -412,8 +412,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   renders byte-identically to pre-feature (2026-07 squash-guard work).
 - **Status + message bars**: `fps | REAPER priority | renderer | calib | rate | lead` diagnostics
   (`lead`, REAPER path only: how far the drawn position runs ahead of REAPER's audible
-  `GetPlayPosition()` while playing, median-filtered on the poll - ~200 ms with anticipative
-  FX processing on, about the output buffer with it off; measured, not yet applied)
+  `GetPlayPosition()` while playing, median-filtered on the poll; suffixed `auto` when
+  compensated, `off` when only measured - see the calibration gotcha)
   (the calib field reads `out/in ms`, appending ` live` / ` playback` when the *output*
   offset is non-zero — at 0 ms the mode cannot change anything, so it is left off — and
   ` (stopped)`, since the output offset is not applied while stopped); chart status string,
@@ -498,7 +498,7 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   popup's Cancel button, which is the always-visible half of that trade.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   octaveGuard, octaveThresh, frameInterval, reaperPriority, octaveWrap, pitchTolCents,
-  pitchTrail, smoothPlayhead, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
+  pitchTrail, smoothPlayhead, autoLead, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
   noteMarkings, lyricMode, renderer, stemMode, advEnabled, advClarity, advMinNote,
   advGapMerge, advSplitHyst. `noteMarkings` is the one key whose absent-property default is
   not the quiet option — a pre-feature session opens on Both, because the pitch is the
@@ -897,12 +897,31 @@ so nothing an author sends for review can be committed by accident.
     take — reaches `processBlock` at true project time and never made that trip. Not
     auto-detected on purpose: a mic and a stem are the same float buffer, and
     `I_RECARM`/`I_RECMON` false-positive on the still-armed track you just recorded on.
-  - `detectionOffsetSec()` = `inputOffsetMs + (liveMic ? latencyOffsetMs : 0)`, and
-    `drawingOffsetSec()` = `latencyOffsetMs` **while playing, 0 while stopped** — both in
+  - `detectionOffsetSec()` = `inputOffsetMs + (liveMic ? latencyOffsetMs + lead : 0)`, and
+    `drawingOffsetSec()` = `latencyOffsetMs + lead` **while playing, 0 while stopped**, where
+    `lead` is `appliedLeadSec()` (0 unless Compensate REAPER latency is on) — both in
     PluginEditor.h, each the single point of truth for its timeline. Both offsets at 0
     reproduces pre-split behaviour, which is what a pre-split saved session loads as
     (`inputLatencyMs` absent → 0).
   - The take export is immune to both (raw project time in every mode).
+  - **REAPER's render-ahead lead is measured, not calibrated** (2026-11-12). While playing,
+    the drawn position comes from `processBlock`, i.e. the audio being *rendered*, and
+    REAPER renders ahead of what is *heard*: by the output buffer plus driver buffering, and
+    on tracks without live input monitoring by anticipative FX processing. Measured on
+    Windows at 48 kHz: 52 / 305 ms (128 / 2048 blocks, anticipative off), 270 / 675 ms (on).
+    Before this, Output calib silently absorbed it, and every stop stepped the picture back
+    by it (the cursor is the true audible position and the output offset drops on stop).
+    `rblead::LeadFilter` (`AudibleLead.h`) takes `displayPlayTime - GetPlayPosition()` once
+    per poll while playing (median of 9, 2 settle samples per pass, |x| > 2 s discarded);
+    `appliedLeadSec()` adds it to `drawingOffsetSec()` while playing, and to
+    `detectionOffsetSec()` for a **live mic only**, ungated like the output offset there
+    (a singer hears and sings late by it; a stem's audio at render time T *is* the note at
+    T). It is measured against `displayPlayTime` - the value actually drawn - so it is the
+    right correction in either Smooth playhead mode and never feeds back on itself.
+    `heardDetection()`'s lead picks it up through the two helpers with no change. Behind
+    **Compensate REAPER latency** (`autoLead`): a session saved without the key loads it
+    **off if it had a non-zero Output calib** (`rblead::autoLeadForSession`), because that
+    calibration already contains the lead and would compensate twice.
 - **The output calibration must not apply while the transport is stopped.** While stopped,
   `cachedPlayTime` is the edit cursor — a true project position with no audio in flight, so
   there is no monitoring latency to cancel. Applying it anyway drew the chart

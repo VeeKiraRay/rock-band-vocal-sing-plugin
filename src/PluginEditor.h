@@ -354,9 +354,10 @@ private:
     // frames agree on one position. cachedPlayTime stays the reported (raw) position.
     double displayPlayTime { 0.0 };
     // Audible lead (rblead): how far displayPlayTime runs ahead of what is heard while
-    // playing, measured against REAPER's GetPlayPosition() once per poll. Measured and
-    // shown only for now; nothing is shifted by it yet.
+    // playing, measured against REAPER's GetPlayPosition() once per poll. Applied through
+    // appliedLeadSec() when autoLeadOn.
     rblead::LeadFilter leadFilter;
+    bool autoLeadOn { true };           // Settings: Compensate REAPER latency
     bool leadSamplePending { false };   // a poll ran this frame; sample after displayPlayTime
 
     // Note-hit tracking: per-note spans of playback time sung within the scoring
@@ -618,12 +619,32 @@ private:
     // output offset is added only for a live mic, whose voice also made the round trip
     // out to the singer's ears and back (see liveMicInput). Both zero reproduces the
     // pre-split behaviour exactly, which is what an old saved session loads as.
+    //
+    // A live mic also takes the measured REAPER lead (appliedLeadSec): the singer hears a
+    // note that much after it was rendered and sings to what they hear. Applied whether or
+    // not the transport is playing, unlike the drawing side, so a captured trail stays on
+    // its notes when reviewed stopped - the same reason the output offset is not gated here.
     double detectionOffsetSec() const
     {
-        return (inputOffsetMs + (liveMicUsed() ? latencyOffsetMs : 0)) / 1000.0;
+        return (inputOffsetMs + (liveMicUsed() ? latencyOffsetMs : 0)) / 1000.0
+             + (liveMicUsed() ? appliedLeadSec() : 0.0);
     }
 
-    // Seconds to subtract from cachedPlayTime to get the drawing timeline. Gated on the
+    // The measured render-ahead lead (rblead), when "Compensate REAPER latency" is on and a
+    // value exists; 0 otherwise. REAPER-only: GetPlayPosition is what it is measured
+    // against. Clamped, so a filter that somehow held a negative or huge value cannot fling
+    // the chart.
+    double appliedLeadSec() const
+    {
+        if (! autoLeadOn || ! audioProcessor.reaperApi.isLoaded() || ! leadFilter.hasValue())
+            return 0.0;
+        return juce::jlimit (0.0, rblead::kMaxPlausibleSec, leadFilter.value());
+    }
+
+    // Seconds to subtract from the drawn position (displayPlayTime) to get the drawing
+    // timeline: Output calib plus, when compensating, the measured REAPER lead - REAPER
+    // renders ahead of what is heard (~270 ms at 128-sample blocks with anticipative FX,
+    // measured 2026-11-12), and the drawn position is the rendered one. Gated on the
     // transport actually playing: while stopped, cachedPlayTime is the edit cursor, a true
     // project position with no audio in flight, so there is no monitoring latency to
     // cancel — applying it anyway drew the chart latencyOffsetMs away from the cursor and
@@ -635,7 +656,7 @@ private:
     double drawingOffsetSec() const
     {
         const bool stopped = audioProcessor.reaperApi.isLoaded() && ! lastIsPlaying;
-        return stopped ? 0.0 : latencyOffsetMs / 1000.0;
+        return stopped ? 0.0 : latencyOffsetMs / 1000.0 + appliedLeadSec();
     }
 
     // The drawing timeline's current time: what chart geometry, the arrowhead, hit-testing

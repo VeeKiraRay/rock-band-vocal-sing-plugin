@@ -4,7 +4,7 @@
 #include <catch2/catch_approx.hpp>
 #include <vector>
 
-TEST_CASE ("state: all 24 persisted fields round-trip through a fresh processor", "[state]")
+TEST_CASE ("state: all 25 persisted fields round-trip through a fresh processor", "[state]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store       ((int) VocalMode::Harmonies, std::memory_order_relaxed);
@@ -17,6 +17,7 @@ TEST_CASE ("state: all 24 persisted fields round-trip through a fresh processor"
     proc.savedPitchTolCents   = 75;
     proc.savedPitchTrail      = false;
     proc.savedSmoothPlayhead  = true;
+    proc.savedAutoLead        = false;
     proc.savedLatencyOffsetMs = 123;
     proc.savedInputOffsetMs   = 45;
     proc.savedLiveMicInput    = true;
@@ -50,6 +51,7 @@ TEST_CASE ("state: all 24 persisted fields round-trip through a fresh processor"
     REQUIRE (proc2.savedPitchTolCents   == 75);
     REQUIRE (proc2.savedPitchTrail      == false);
     REQUIRE (proc2.savedSmoothPlayhead  == true);
+    REQUIRE (proc2.savedAutoLead        == false);
     REQUIRE (proc2.savedLatencyOffsetMs == 123);
     REQUIRE (proc2.savedInputOffsetMs   == 45);
     REQUIRE (proc2.savedLiveMicInput    == true);
@@ -311,4 +313,36 @@ TEST_CASE ("tuning: out-of-range stored values are clamped, not trusted", "[stat
     REQUIRE (proc.advClarityThreshold.load() <= 1.0f);
     REQUIRE (proc.advMinNoteLen.load()       <= 0.50);
     REQUIRE (proc.advSplitHysteresis.load()  >= 0.10);
+}
+
+TEST_CASE ("state: a session calibrated before latency compensation keeps it off", "[state][lead]")
+{
+    // Output calib in such a session already absorbs REAPER's render-ahead lead, so turning
+    // compensation on would subtract it twice. It must come back exactly as it was.
+    const auto load = [] (juce::ValueTree tree)
+    {
+        juce::MemoryBlock block;
+        juce::AudioProcessor::copyXmlToBinary (*tree.createXml(), block);
+        auto proc = std::make_unique<RBVocalSingAudioProcessor>();
+        proc->setStateInformation (block.getData(), (int) block.getSize());
+        return proc;
+    };
+
+    juce::ValueTree calibrated ("RBVocalSingState");
+    calibrated.setProperty ("latencyMs", 100, nullptr);
+    REQUIRE (load (calibrated)->savedAutoLead == false);
+
+    juce::ValueTree uncalibrated ("RBVocalSingState");
+    uncalibrated.setProperty ("latencyMs", 0, nullptr);
+    REQUIRE (load (uncalibrated)->savedAutoLead == true);
+
+    // Once the user has chosen, the choice is kept whatever Output calib says.
+    juce::ValueTree chosen ("RBVocalSingState");
+    chosen.setProperty ("latencyMs", 100,  nullptr);
+    chosen.setProperty ("autoLead",  true, nullptr);
+    REQUIRE (load (chosen)->savedAutoLead == true);
+
+    // A fresh instance with no saved state compensates.
+    RBVocalSingAudioProcessor fresh;
+    REQUIRE (fresh.savedAutoLead == true);
 }

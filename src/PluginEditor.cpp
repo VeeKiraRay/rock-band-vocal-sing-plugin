@@ -202,6 +202,8 @@ public:
         std::function<void(bool)>   setSmoothPlayhead;
         int                        initRenderer        { 1 };   // combo item ID: 1=CPU, 2=session-only, 3=persist
         std::function<void(int)>   setRenderer;
+        bool                        initAutoLead       { true };
+        std::function<void(bool)>   setAutoLead;
         int                         initCalib          { 0 };
         std::function<void(int)>    setCalib;
         int                         initInputCalib     { 0 };
@@ -243,6 +245,7 @@ public:
         static const juce::String kTipPriority = "Yields the shared UI thread to REAPER: skips frames when paint takes too long, and stops the plugin forcing its redraws through while REAPER is busy. Recommended at large window sizes. Leave it off for the smoothest playhead dragging.";
         static const juce::String kTipSmooth   = "Estimates the playhead between audio blocks, so the highway scrolls smoothly even with a large audio buffer. Lowering the block size in REAPER's audio settings is the better fix when you can. Detected pitch still updates once per block, and while playing the time readout drops its milliseconds.";
         static const juce::String kTipRenderer = "CPU: software renderer (default). OpenGL: GPU rendering, may help at large window sizes. 'session only' reverts on next load; 'persist' saves the choice.";
+        static const juce::String kTipAutoLead = "REAPER plays audio a little after it processes it: the audio buffer, plus up to a few hundred ms of anticipative FX processing. When on, the highway is shifted by that delay automatically (the status bar shows it as 'lead'), so the notes meet the playhead when you hear them and Output calibration can usually stay at 0 ms. Sessions calibrated before this existed load with it off; switch it on and set Output calibration back to about 0.";
         static const juce::String kTipCalib    = "Shifts the chart to compensate for how late the song reaches your ears (audio output latency). Positive = notes appear later, negative = earlier. Applies only while playing, so parking the edit cursor on a note start always puts that note on the playhead line.";
         static const juce::String kTipInCalib  = "Shifts your detected pitch to compensate for how late it is measured: your mic/interface input latency plus the analysis window (about 5 ms into a note, 30 ms on a mid-phrase syllable). Raise this until the pitch trail sits on the notes - do not use Output calibration for that, or the chart will drift off the song.";
         static const juce::String kTipLiveMic  = "Tick when you sing into a mic: your voice reaches the plugin late by the output latency as well, because you sing to what you hear - so Output calibration is added to Input calibration for detection. Leave it off when the plugin listens to playback (a vocal stem or a recorded take) - that audio is already at its true project time. No effect when Output calibration is 0 ms.";
@@ -309,6 +312,13 @@ public:
         addAndMakeVisible (rendererCombo);
 
         // ── Highway ───────────────────────────────────────────────────────────
+        setupLabel (autoLeadLabel, "Compensate REAPER latency", kTipAutoLead);
+        setupToggle (autoLeadToggle, this->cbs.initAutoLead, kTipAutoLead);
+        autoLeadToggle.onClick = [this]
+        {
+            this->cbs.setAutoLead (autoLeadToggle.getToggleState());
+        };
+
         setupLabel (calibLabel, "Output calib", kTipCalib);
         setupStepper (calibSlider, -200, 500, 20, " ms", kTipCalib);
         calibSlider.setValue (this->cbs.initCalib, juce::dontSendNotification);
@@ -490,6 +500,7 @@ public:
 
         area.removeFromTop (kSecGap);
         layoutHdr (highwayHeader);
+        layoutRow (autoLeadLabel, autoLeadToggle, 24);
         layoutRow (calibLabel, calibSlider);
         layoutRow (inCalibLabel, inCalibSlider);
         layoutRow (liveMicLabel, liveMicToggle, 24);
@@ -519,11 +530,11 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (4 rows) + HIGHWAY (7) + SINGING (6), two inter-section gaps,
+    // PERFORMANCE (4 rows) + HIGHWAY (8) + SINGING (6), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
                             + settingsLayout::sectionH (4)
-                            + settingsLayout::kSecGap + settingsLayout::sectionH (7)
+                            + settingsLayout::kSecGap + settingsLayout::sectionH (8)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (6);
 
 private:
@@ -541,6 +552,8 @@ private:
     juce::Label         rendererLabel;
     juce::ComboBox      rendererCombo;
 
+    juce::Label         autoLeadLabel;
+    juce::ToggleButton  autoLeadToggle;
     juce::Label         calibLabel;
     juce::Slider        calibSlider;
     juce::Label         inCalibLabel;
@@ -1116,6 +1129,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
                     break;
             }
         };
+        cbs.initAutoLead       = autoLeadOn;
+        cbs.setAutoLead        = [safe] (bool v)   { if (safe) { safe->autoLeadOn = v; safe->audioProcessor.savedAutoLead = v; safe->repaint(); } };
         cbs.initCalib          = latencyOffsetMs;
         cbs.setCalib           = [safe] (int v)    { if (safe) { safe->latencyOffsetMs = v; safe->audioProcessor.savedLatencyOffsetMs = v; safe->repaint(); } };
         cbs.initInputCalib     = inputOffsetMs;
@@ -1272,6 +1287,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     pitchTolCents       = juce::jlimit (25, 100, audioProcessor.savedPitchTolCents.load());
     pitchTrailOn        = audioProcessor.savedPitchTrail;
     smoothPlayheadOn    = audioProcessor.savedSmoothPlayhead;
+    autoLeadOn          = audioProcessor.savedAutoLead;
     stemMode            = audioProcessor.savedStemMode;   // the popup reads this when opened
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     inputOffsetMs       = audioProcessor.savedInputOffsetMs;
@@ -2163,7 +2179,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
             if (nowPlaying && ! lastIsPlaying)
             {
                 hitResetPending = true;
-                leadFilter.reset();   // monitoring or buffering may differ this pass
+                leadFilter.settle();  // skip the unsettled first readings, keep the value
             }
 
             lastIsPlaying = nowPlaying;

@@ -316,6 +316,10 @@ public:
     std::atomic<int>    savedPitchTolCents   { 50 };    // GREAT window ± cents; CLOSE = 2×
     std::atomic<bool>   savedPitchTrail      { true };  // sung-pitch contour on the highway
     std::atomic<bool>   savedSmoothPlayhead  { false }; // estimate the drawn position between audio blocks
+    // Compensate REAPER latency: shift the drawing (and live-mic detection) by the measured
+    // render-ahead lead. True for a fresh instance; a loaded session without the key gets
+    // rblead::autoLeadForSession, which keeps already-calibrated sessions as they were.
+    std::atomic<bool>   savedAutoLead        { true };
     std::atomic<int>    savedLatencyOffsetMs { 0 };     // output calibration: chart shift
     std::atomic<int>    savedInputOffsetMs   { 0 };     // input calibration: detection shift.
                                                         // Defaults to 0 so a session saved

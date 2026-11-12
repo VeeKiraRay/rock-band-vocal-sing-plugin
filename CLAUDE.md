@@ -741,6 +741,23 @@ one step for fast local iteration — plain batch, not PowerShell, so it needs n
 the same build+test on every push/PR (separate from `release.yml`, which only builds on
 tagged releases).
 
+CI per platform — note that **only Windows is tested on every push**:
+
+| Workflow | When | Builds | Tests + pluginval |
+| --- | --- | --- | --- |
+| `tests.yml` | every push / PR | Windows, Debug tests only | tests |
+| `dry-run-mac-linux.yml` | by hand (Actions → Run workflow) | macOS universal + Linux, Release | both |
+| `release.yml` | a GitHub release is created | Windows + macOS + Linux VST3 zips | neither |
+
+Run the dry run before cutting a release, and after any change that touches includes,
+`<cmath>`, or the CMake setup — those are where the compilers disagree (see the
+cross-platform gotcha). It is manual rather than per-push because the macOS job is slow
+and almost every change is caught by the Windows tests anyway. A release can be rehearsed
+with a throwaway *pre-release*; a *draft* does not trigger `release.yml`. The release
+jobs run in parallel; only the Windows job writes the release notes, the others attach
+their zip with `gh release upload`. Every release asset is a single zip of the `.vst3`
+bundle.
+
 Any deliberate chart-loader behaviour change must update the fixtures in
 `tests/ChartLoaderTests.cpp` in the same commit.
 
@@ -895,6 +912,30 @@ so nothing an author sends for review can be committed by accident.
   literals as UTF-8 — so an em dash or `→` in a literal renders as mojibake (bit us
   2026-07-20: the take-export flash message). Comments can use any Unicode; strings the
   user sees cannot.
+- **Three compilers build this, and only MSVC runs on every push.** macOS is Clang +
+  libc++, Linux is GCC 11 + libstdc++ (Ubuntu 22.04, chosen for its older glibc), and each
+  accepts things the others reject. What has broken the Linux/macOS build so far
+  (2026-11), all of it invisible on Windows:
+  - **`std::sqrtf` / `std::log2f` / `std::roundf` do not exist in GCC 11's libstdc++.** Use
+    `std::sqrt` / `std::log2` / `std::round` — with a `float` argument they pick the float
+    overload, so the result is bit-identical. Same for every `<cmath>` `...f` name.
+  - **Include what you use, especially in the pure JUCE-free headers.** `NoteMarkings.h`
+    used a bare `size_t` with only `<vector>` included; MSVC and libc++ leak the name
+    through `<vector>`, libstdc++ does not. The plugin TUs never notice because
+    `JuceHeader.h` comes first — only the unit test that includes the header on its own
+    fails. Use `std::size_t` and `<cstddef>` (`<cstdint>` for fixed-width ints).
+  - **macOS: `CMAKE_OSX_DEPLOYMENT_TARGET` is set in `CMakeLists.txt` before `project()`
+    and exported as `MACOSX_DEPLOYMENT_TARGET`.** JUCE builds its `juceaide` helper in a
+    nested configure that does not forward the CMake variable, so without the environment
+    variable it targets the build machine's own SDK, where JUCE 7.0.12's
+    `CGWindowListCreateImage` call is unavailable (macOS 15+). Don't move it into the
+    workflow.
+  - Clang builds print ~360 warnings (JUCE's recommended warning set: float `==`,
+    sign/int-float conversions, `switch` coverage, shadowing). Reviewed 2026-11 and left
+    alone: the float comparisons are change-detection against a stored copy, where exact
+    `==` is correct. Only an `error:` line matters.
+  - A downloaded macOS build is quarantined and reported as *"damaged"* — the release is
+    unsigned, so the README's install steps carry the `xattr` fix.
 - The Settings CallOutBox must stay **editor-parented** (`this`). A `nullptr`/desktop
   parent was tried twice (2026-07-18) to stop the panel clipping at small window
   heights, and reverted both times: (1) a desktop window doesn't inherit the host's

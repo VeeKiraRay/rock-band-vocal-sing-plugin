@@ -20,10 +20,17 @@ The plugin is VST3 only.
 
 ## Installation
 
-1. Download `Rock Band Vocal Sing - Reaper.vst3` from the [GitHub Releases](../../releases) page. (If no prebuilt release is available, or you want the latest, see [Building from source](#building-from-source).)
-2. Copy `Rock Band Vocal Sing - Reaper.vst3` into your VST3 folder — on Windows that is `C:\Program Files\Common Files\VST3`.
-3. In REAPER: **Options → Preferences → Plug-ins → VST → Re-scan**, or just restart REAPER.
-4. Add **RB Vocal Sing** as an FX on a track (see [Setting up the plugin](#setting-up-the-plugin)).
+1. Download the zip for your system (`...-Windows.zip`, `...-macOS.zip` or `...-Linux.zip`) from the [GitHub Releases](../../releases) page and unzip it. It contains `Rock Band Vocal Sing - Reaper.vst3`. (If no prebuilt release is available, or you want the latest, see [Building from source](#building-from-source).)
+2. Copy `Rock Band Vocal Sing - Reaper.vst3` into your VST3 folder:
+   - **Windows:** `C:\Program Files\Common Files\VST3`
+   - **macOS:** `~/Library/Audio/Plug-Ins/VST3` (one build covers both Apple Silicon and Intel Macs). Delete any older copy first, because copying onto an existing bundle merges the two instead of replacing it.
+   - **Linux (x86_64):** `~/.vst3`. Delete any older copy first, as on macOS. Make sure `~/.vst3` is listed in REAPER's VST plug-in paths. Built on Ubuntu 22.04, so it needs a distribution of that age or newer.
+3. **macOS only:** the plugin is not signed by Apple, so macOS reports it as *"damaged and can't be opened"*. It is not damaged. Clear the download flag once, in Terminal:
+   ```bash
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"Rock Band Vocal Sing - Reaper.vst3"
+   ```
+4. In REAPER: **Options → Preferences → Plug-ins → VST → Re-scan**, or just restart REAPER. If REAPER already tried to load the plugin before step 3, use **Clear cache and re-scan** instead.
+5. Add **RB Vocal Sing** as an FX on a track (see [Setting up the plugin](#setting-up-the-plugin)).
 
 ---
 

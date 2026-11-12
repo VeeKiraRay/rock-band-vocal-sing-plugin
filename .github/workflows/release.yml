@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build:   # Windows; also writes the release notes
     runs-on: windows-latest
 
     steps:
@@ -67,3 +67,102 @@ jobs:
         with:
           files: ${{ steps.package.outputs.zip }}
           body: ${{ steps.notes.outputs.notes }}
+
+  # Runs in parallel with the Windows job. It only attaches its zip: the release notes
+  # belong to the Windows job, and `gh release upload` cannot touch them. Every asset is
+  # uploaded as our own zip, so a release download is a single zip (unlike workflow
+  # artifacts, which GitHub wraps in a second one unless `archive: false`).
+  build-macos:
+    runs-on: macos-latest   # always a supported image; the target OS is set in CMakeLists.txt
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install ninja
+
+      # Universal binary (Apple Silicon + Intel). The minimum macOS version is pinned in
+      # CMakeLists.txt, because JUCE's juceaide helper needs it too. Tests are skipped
+      # here; they run on every push in tests.yml.
+      - name: Configure CMake (Release, universal)
+        run: >
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRBVS_BUILD_TESTS=OFF
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build VST3 (Release)
+        run: cmake --build build --target RBVocalSing_VST3
+
+      # ditto keeps the file permissions and the ad-hoc code signature, which a plain
+      # zip of the bundle can lose.
+      - name: Package VST3 bundle
+        id: package
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VST3=$(find build -type d -name '*.vst3' -path '*Release*' | head -1)
+          [ -n "$VST3" ] || { echo "No .vst3 bundle was produced by the build."; exit 1; }
+          echo "Found VST3 bundle: $VST3"
+          lipo -info "$VST3/Contents/MacOS/"*
+          ZIP="RB-Vocal-Sing-$TAG-VST3-macOS.zip"
+          ditto -c -k --keepParent "$VST3" "$ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Upload VST3 to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" "${{ steps.package.outputs.zip }}" --clobber
+
+  # Same pattern as build-macos: parallel, attaches its zip only.
+  build-linux:
+    runs-on: ubuntu-22.04   # older glibc than 24.04, so the binary runs on more distros
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The runner image lists GitHub's Azure-hosted Ubuntu mirror first; when that name
+      # stops resolving the whole install fails, so use Ubuntu's own servers (they carry
+      # the -updates and -security pockets too). cmake and pkg-config (as pkgconf) are
+      # preinstalled; asking apt for pkg-config would swap out pkgconf for no gain.
+      - name: Install tools and JUCE libraries
+        timeout-minutes: 10       # normally ~1 min; fail fast if the Ubuntu servers hang
+        run: |
+          printf 'http://archive.ubuntu.com/ubuntu/\nhttp://security.ubuntu.com/ubuntu/\n' \
+            | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y build-essential ninja-build \
+            libasound2-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libfreetype6-dev libfontconfig1-dev \
+            libgl1-mesa-dev
+          ldd --version | head -1
+
+      # Tests are skipped here; they run on every push in tests.yml, and on Linux in the
+      # manual dry run.
+      - name: Configure CMake (Release)
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRBVS_BUILD_TESTS=OFF
+
+      - name: Build VST3 (Release)
+        run: cmake --build build --target RBVocalSing_VST3
+
+      # zip -y keeps the bundle's permissions and any symlinks.
+      - name: Package VST3 bundle
+        id: package
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VST3=$(find build -type d -name '*.vst3' -path '*Release*' | head -1)
+          [ -n "$VST3" ] || { echo "No .vst3 bundle was produced by the build."; exit 1; }
+          echo "Found VST3 bundle: $VST3"
+          ZIP="RB-Vocal-Sing-$TAG-VST3-Linux.zip"
+          (cd "$(dirname "$VST3")" && zip -ry "$GITHUB_WORKSPACE/$ZIP" "$(basename "$VST3")")
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Upload VST3 to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" "${{ steps.package.outputs.zip }}" --clobber

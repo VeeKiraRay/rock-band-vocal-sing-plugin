@@ -57,20 +57,72 @@ TEST_CASE ("smooth playhead: a large buffer moves the picture on every frame", "
 
 TEST_CASE ("smooth playhead: stays within one block of the reported position", "[smooth]")
 {
+    // Ahead by one block at most. Behind by up to about a frame, because the line follows
+    // the average of recent reports and a report is seen anywhere within a frame of when
+    // its block started.
     Estimator e;
     for (double t = 0.0; t < 3.0; t += kFrame)
     {
         const double rep = reportedAt (t);
         const double d   = e.update (rep, t, 1.0, true);
-        REQUIRE (d >= rep - 1.0e-9);
+        REQUIRE (d >= rep - kFrame - 1.0e-9);
         REQUIRE (d <= rep + kBlock + 1.0e-9);
+    }
+}
+
+TEST_CASE ("smooth playhead: blocks delivered in bursts still move every frame", "[smooth]")
+{
+    // The N100 + PulseAudio rig (2026-11-13): 2048-sample blocks rendered in pairs ~15 ms
+    // apart, a ~46 Hz frame clock. Re-anchoring on each report stalled 5-10 frames a second.
+    constexpr double block = 2048.0 / 48000.0;
+    constexpr double tick  = 1.0 / 46.0;
+    Estimator e;
+
+    // Positions arrive in pairs: block 2k at the start of the pair, 2k+1 15 ms later.
+    auto reportedInPairs = [&] (double t)
+    {
+        const double pair  = 2.0 * block;
+        const double start = std::floor (t / pair);
+        const int    seen  = (t - start * pair >= 0.015) ? 2 : 1;
+        return (2.0 * start + seen) * block;
+    };
+
+    int moved = 0, steps = 0;
+    double prev = 0.0;
+    for (double t = 0.0; t < 5.0; t += tick)
+    {
+        const double d = e.update (reportedInPairs (t), t, 1.0, true);
+        if (t > 1.0)
+        {
+            REQUIRE (d >= prev);
+            ++steps;
+            if (d > prev) ++moved;
+        }
+        prev = d;
+    }
+    REQUIRE (moved == steps);
+}
+
+TEST_CASE ("smooth playhead: a play-rate change does not jump the picture", "[smooth]")
+{
+    Estimator e;
+    run (e, 0.0, 2.0);
+    double prev = e.update (reportedAt (2.0), 2.0, 1.0, true);
+    // Half speed from here: the host reports half the progress per block.
+    const double base = reportedAt (2.0);
+    for (double t = 2.0 + kFrame; t < 3.0; t += kFrame)
+    {
+        const double d = e.update (base + 0.5 * (reportedAt (t) - reportedAt (2.0)), t, 0.5, true);
+        REQUIRE (d >= prev);
+        REQUIRE (d - prev <= kFrame * rbsmooth::kCatchUp + 1.0e-9);
+        prev = d;
     }
 }
 
 TEST_CASE ("smooth playhead: a stalled host cannot run the picture ahead", "[smooth]")
 {
     // Blocks stop arriving (a stop not yet polled, a host stall): the estimate runs out at
-    // one block interval past the last report and waits there.
+    // the lead limit (here one block interval) past the last report and waits there.
     Estimator e;
     run (e, 0.0, 2.0);
     const double last = reportedAt (2.0 - kFrame);
@@ -79,7 +131,8 @@ TEST_CASE ("smooth playhead: a stalled host cannot run the picture ahead", "[smo
     for (double t = 2.0; t < 3.0; t += kFrame)
         d = e.update (last, t, 1.0, true);
 
-    REQUIRE (d <= last + std::min (e.measuredBlockInterval(), rbsmooth::kMaxLeadSec) + 1.0e-9);
+    REQUIRE (e.leadLimit() <= kBlock + kFrame);
+    REQUIRE (d <= last + e.leadLimit() + 1.0e-9);
     REQUIRE (d > last);   // it did lead, by up to that much
 }
 

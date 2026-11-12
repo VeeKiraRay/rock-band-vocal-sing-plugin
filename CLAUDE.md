@@ -91,7 +91,8 @@ rock-band-vocal-sing-plugin/          (repo root)
                                     unit-tested
     SmoothPlayhead.h              — rbsmooth::Estimator: pure Smooth-playhead rule (estimate
                                     the drawn position between audio blocks; never backwards,
-                                    one-block lead cap, seek snap). Header-only, JUCE-free,
+                                    line fitted through recent reports, lead cap, seek snap).
+                                    Header-only, JUCE-free,
                                     unit-tested
     TooltipBounds.h               — rbtip::tooltipBounds: pure tooltip placement (flip past
                                     each midpoint, then clamp). Header-only, JUCE-free,
@@ -510,15 +511,22 @@ Details live in the code; this is the map of what exists and its non-obvious dec
 - **Smooth playhead** (`smoothPlayheadOn`, Settings → PERFORMANCE, default **Off**): while
   playing, the host reports a new position once per audio block, so with a large buffer
   the highway can only step (4096 @ 48 kHz = ~12 fps, drawn up to one block late).
-  `rbsmooth::Estimator` (`SmoothPlayhead.h`) extrapolates between reports from a wall clock
-  × play rate; each report corrects it. It feeds **only** `displayPlayTime`, which is what
+  `rbsmooth::Estimator` (`SmoothPlayhead.h`) draws a line at the play rate fitted through
+  the last 8 reports (mean of position − wall-clock offsets), **not** a re-anchor on each
+  report: hosts deliver blocks in bursts (PulseAudio rendered 2048-sample blocks in pairs
+  ~15 ms apart), and re-anchoring treated every second report as late, so never-backwards
+  held the picture for 5–10 ticks a second (N100, 2026-11-13). It feeds **only**
+  `displayPlayTime`, which is what
   `drawTime()` reads; `cachedPlayTime` stays the reported position, so scoring (hop
   timestamps), Save take and everything written to the project are untouched. Safeguards,
   all unit-tested: never backwards while playing (a correction behind the picture is
-  waited out), lead capped at one measured block interval (≤ 0.25 s) so a stop or loop
-  end overshoots by one block at most, a report > 0.15 s from the prediction snaps (seek,
-  loop wrap), a late block is caught up at 1.5× rather than jumped, stopped = exactly the
-  reported position. REAPER path only (`smoothingNow()`), since the play state that resets
+  waited out), lead past the last report capped at the longest recent gap between reports
+  (decaying, ≤ 0.25 s) so a stop or loop end overshoots by about one block (one burst) at
+  most, a report > 0.15 s off the line snaps (seek, loop wrap), a late block is caught up
+  at 1.5× rather than jumped, a rate change starts a new line, stopped = exactly the
+  reported position. Following the average rather than the newest report lets the picture
+  sit up to ~a frame behind the newest one; the audible-lead measurement is taken against
+  the drawn position, so it compensates that too. REAPER path only (`smoothingNow()`), since the play state that resets
   it is a REAPER poll. The idle-repaint gate keys on `displayPlayTime`, so with it on the
   Frame cap becomes the only limit. While smoothing, the stats time readout shows the
   estimate **without milliseconds** (neither the per-block steps nor the ms-scale estimate
@@ -745,7 +753,8 @@ differently on a tall axis than a short one), the octave numbering
 because an off-by-one octave looks like a perfectly plausible note name on its own), the
 Smooth-playhead estimator (`src/SmoothPlayhead.h` — `tests/SmoothPlayheadTests.cpp`,
 simulating the 4096-sample rig that found the problem: the picture moves on every frame,
-never backwards, never more than a block ahead, and seeks snap), the
+never backwards, never more than a block ahead, and seeks snap; plus the N100's paired
+block delivery, which the first version stalled on - 158 of 184 frames moved), the
 frame-health rule
 (`src/FrameHealth.h` — `tests/FrameHealthTests.cpp`, whose load-bearing cases are the two
 *non*-faults: a low Frame cap being honoured, and the REAPER-priority budget throttling on

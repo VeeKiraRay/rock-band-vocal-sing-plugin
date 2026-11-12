@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "StemAudioReader.h"
+#include "AudibleLead.h"
 #include "SmoothPlayhead.h"
 #include "TakeExport.h"    // rbtake::TrailPoint (= TrailSample) + segmentPitchTrail
 #include "FrameHealth.h"   // rbperf::classifyFrames — the frame-health rule
@@ -352,6 +353,11 @@ private:
     // Set once per accepted frame in onFrame, so the picture and every mouse hit-test between
     // frames agree on one position. cachedPlayTime stays the reported (raw) position.
     double displayPlayTime { 0.0 };
+    // Audible lead (rblead): how far displayPlayTime runs ahead of what is heard while
+    // playing, measured against REAPER's GetPlayPosition() once per poll. Measured and
+    // shown only for now; nothing is shifted by it yet.
+    rblead::LeadFilter leadFilter;
+    bool leadSamplePending { false };   // a poll ran this frame; sample after displayPlayTime
 
     // Note-hit tracking: per-note spans of playback time sung within the scoring
     // tolerance, index-aligned with chartNotes. drawHighway fills the covered

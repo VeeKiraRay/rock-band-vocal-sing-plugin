@@ -85,6 +85,10 @@ rock-band-vocal-sing-plugin/          (repo root)
                                     midpoint clipping, tap = gate edge, overlap-with-singing
                                     flag, fill progress, stats-light state, reload remap).
                                     Header-only, JUCE-free, unit-tested
+    AudibleLead.h                 — rblead::LeadFilter: pure median filter for the measured
+                                    lead of the drawn position over REAPER's audible
+                                    GetPlayPosition() (render-ahead). Header-only, JUCE-free,
+                                    unit-tested
     SmoothPlayhead.h              — rbsmooth::Estimator: pure Smooth-playhead rule (estimate
                                     the drawn position between audio blocks; never backwards,
                                     one-block lead cap, seek snap). Header-only, JUCE-free,
@@ -406,7 +410,10 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   glyph scaling via AffineTransform (floor 0.5, then fitted-squash to 0.25 + ellipsis;
   no per-frame Font construction), Hybrid = cap at 0.8×width then push the rest. Off
   renders byte-identically to pre-feature (2026-07 squash-guard work).
-- **Status + message bars**: `fps | REAPER priority | renderer | calib | rate` diagnostics
+- **Status + message bars**: `fps | REAPER priority | renderer | calib | rate | lead` diagnostics
+  (`lead`, REAPER path only: how far the drawn position runs ahead of REAPER's audible
+  `GetPlayPosition()` while playing, median-filtered on the poll - ~200 ms with anticipative
+  FX processing on, about the output buffer with it off; measured, not yet applied)
   (the calib field reads `out/in ms`, appending ` live` / ` playback` when the *output*
   offset is non-zero — at 0 ms the mode cannot change anything, so it is left off — and
   ` (stopped)`, since the output offset is not applied while stopped); chart status string,

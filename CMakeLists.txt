@@ -126,6 +126,7 @@ if (RBVS_BUILD_TESTS)
             tests/NoteNamingTests.cpp
             tests/FrameHealthTests.cpp
             tests/SmoothPlayheadTests.cpp
+            tests/AudibleLeadTests.cpp
             tests/TooltipBoundsTests.cpp
             tests/SliderTooltipTests.cpp
     )

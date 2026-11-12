@@ -2161,9 +2161,13 @@ void RBVocalSingAudioProcessorEditor::onFrame()
             // doesn't depend on REAPER's cursor-on-stop preference (stop-in-place
             // would otherwise continue the old take).
             if (nowPlaying && ! lastIsPlaying)
+            {
                 hitResetPending = true;
+                leadFilter.reset();   // monitoring or buffering may differ this pass
+            }
 
             lastIsPlaying = nowPlaying;
+            leadSamplePending = nowPlaying;
 
             if (! lastIsPlaying && audioProcessor.reaperApi.GetCursorPosition)
                 cachedPlayTime = audioProcessor.reaperApi.GetCursorPosition();
@@ -2206,6 +2210,16 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     displayPlayTime = smoothEstimator.update (cachedPlayTime,
                                               juce::Time::getMillisecondCounterHiRes() * 0.001,
                                               cachedPlayRate, smoothingNow());
+
+    // Sample the audible lead against the position actually drawn this frame (not the
+    // block-stale cachedPlayTime), so the lead is the right correction in either Smooth
+    // playhead mode. Poll rate only: the flag is set by the poll gate above.
+    if (leadSamplePending)
+    {
+        leadSamplePending = false;
+        if (lastIsPlaying && audioProcessor.reaperApi.GetPlayPosition)
+            leadFilter.push (displayPlayTime - audioProcessor.reaperApi.GetPlayPosition());
+    }
 
     // The sweep runs every frame rather than on the poll gate: it is a bounded burst of
     // work the user is waiting on, so it should finish as fast as the budget allows.

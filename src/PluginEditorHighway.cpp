@@ -1470,6 +1470,18 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
                               + "   |   calib: " + calibStr
                               + "   |   rate: " + rateStr;
 
+    // How far the drawn position runs ahead of what is heard (measured, not yet applied).
+    // Kept after a stop so it can be read; "--" until a pass has produced one.
+    if (audioProcessor.reaperApi.isLoaded())
+        status << "   |   lead: "
+               << (leadFilter.hasValue() ? juce::String (juce::roundToInt (leadFilter.value() * 1000.0))
+                                         : juce::String ("--"))
+#if RB_PAINT_PROFILE
+               // The newest accepted sample beside the median, to judge how noisy it is.
+               << " (raw " << juce::String (juce::roundToInt (leadFilter.lastSample() * 1000.0)) << ")"
+#endif
+               << " ms";
+
 #if RB_PITCH_PROFILE
     // Audio-thread cost (see the profDetect* comment in PluginProcessor.h): cost of one
     // detectPitch call, processBlock's share of its deadline, and the achieved hop rate.

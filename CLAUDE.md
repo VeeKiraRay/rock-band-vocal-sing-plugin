@@ -85,6 +85,10 @@ rock-band-vocal-sing-plugin/          (repo root)
                                     midpoint clipping, tap = gate edge, overlap-with-singing
                                     flag, fill progress, stats-light state, reload remap).
                                     Header-only, JUCE-free, unit-tested
+    SmoothPlayhead.h              — rbsmooth::Estimator: pure Smooth-playhead rule (estimate
+                                    the drawn position between audio blocks; never backwards,
+                                    one-block lead cap, seek snap). Header-only, JUCE-free,
+                                    unit-tested
     TooltipBounds.h               — rbtip::tooltipBounds: pure tooltip placement (flip past
                                     each midpoint, then clamp). Header-only, JUCE-free,
                                     unit-tested; the box must never contain the cursor
@@ -453,7 +457,8 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   `kControlsH = 2 * kControlsRowH`, and
   `kWindowBaseH` includes the extra row: `getHighwayArea()` subtracts the whole band, so
   growing one without the other silently shrinks the highway + `SettingsPanel`
-  CallOutBox (Frame cap 20–60/uncapped default 60; REAPER priority off; Renderer
+  CallOutBox (Frame cap 20–60/uncapped default 60; REAPER priority off; Smooth playhead
+  off; Renderer
   CPU/GL-session/GL-persist; Output calib −200..+500 ms step 20 (chart) and Input calib
   −50..+250 ms step 5 (detections — finer, since the analysis chain alone is 5–30 ms);
   **Live-mic used** off — whether the *output* calibration also shifts detected pitch, see
@@ -486,7 +491,7 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   popup's Cancel button, which is the always-visible half of that trade.
 - **Settings persistence**: `get`/`setStateInformation` serialise vocalMode, gate,
   octaveGuard, octaveThresh, frameInterval, reaperPriority, octaveWrap, pitchTolCents,
-  pitchTrail, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
+  pitchTrail, smoothPlayhead, latencyMs, inputLatencyMs, liveMic, pixPerSec, lyricScale, squashGuard,
   noteMarkings, lyricMode, renderer, stemMode, advEnabled, advClarity, advMinNote,
   advGapMerge, advSplitHyst. `noteMarkings` is the one key whose absent-property default is
   not the quiet option — a pre-feature session opens on Both, because the pitch is the
@@ -495,6 +500,24 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   them — and are clamped on read (0..2 and 0.60..0.90).
   Exception by design: the `OpenGL - session only` renderer choice is never persisted
   (only `OpenGL - persist` writes `savedRenderer = 2`).
+- **Smooth playhead** (`smoothPlayheadOn`, Settings → PERFORMANCE, default **Off**): while
+  playing, the host reports a new position once per audio block, so with a large buffer
+  the highway can only step (4096 @ 48 kHz = ~12 fps, drawn up to one block late).
+  `rbsmooth::Estimator` (`SmoothPlayhead.h`) extrapolates between reports from a wall clock
+  × play rate; each report corrects it. It feeds **only** `displayPlayTime`, which is what
+  `drawTime()` reads; `cachedPlayTime` stays the reported position, so scoring (hop
+  timestamps), Save take and everything written to the project are untouched. Safeguards,
+  all unit-tested: never backwards while playing (a correction behind the picture is
+  waited out), lead capped at one measured block interval (≤ 0.25 s) so a stop or loop
+  end overshoots by one block at most, a report > 0.15 s from the prediction snaps (seek,
+  loop wrap), a late block is caught up at 1.5× rather than jumped, stopped = exactly the
+  reported position. REAPER path only (`smoothingNow()`), since the play state that resets
+  it is a REAPER poll. The idle-repaint gate keys on `displayPlayTime`, so with it on the
+  Frame cap becomes the only limit. While smoothing, the stats time readout shows the
+  estimate **without milliseconds** (neither the per-block steps nor the ms-scale estimate
+  error are worth showing); stopped it is always the exact position. Off by default out of
+  caution about new per-frame behaviour, not accuracy: unsmoothed is the one that is late.
+  The large-buffer hint names it and stops judging while it is on.
 - **Transport**: click-to-seek on the highway, Left/Right arrows & `<<`/`>>` = ∓5 s
   (`SetEditCurPos`), Up/Down = play-rate step 0.1× (0.1–4×, `CSurf_OnPlayRateChange`).
   All no-ops outside REAPER.
@@ -713,6 +736,9 @@ under Main is unlabelable at *any* lane height, while at two semitones the same 
 differently on a tall axis than a short one), the octave numbering
 (`tests/NoteNamingTests.cpp` — middle C is C3 and the vocal band reads C1–C5; it exists
 because an off-by-one octave looks like a perfectly plausible note name on its own), the
+Smooth-playhead estimator (`src/SmoothPlayhead.h` — `tests/SmoothPlayheadTests.cpp`,
+simulating the 4096-sample rig that found the problem: the picture moves on every frame,
+never backwards, never more than a block ahead, and seeks snap), the
 frame-health rule
 (`src/FrameHealth.h` — `tests/FrameHealthTests.cpp`, whose load-bearing cases are the two
 *non*-faults: a low Frame cap being honoured, and the REAPER-priority budget throttling on
@@ -809,7 +835,8 @@ so nothing an author sends for review can be committed by accident.
 
 - **Three timelines exist — decide which one any new feature is on.** Raw project time
   (`cachedPlayTime`, `currentPlaybackTime`, `HopSample::time`, chart `NoteInfo` times);
-  the *drawing* timeline `t = cachedPlayTime - drawingOffsetSec()`; and the
+  the *drawing* timeline `t = drawTime()` = `displayPlayTime - drawingOffsetSec()`, where
+  `displayPlayTime` is `cachedPlayTime` unless Smooth playhead is estimating; and the
   *detection* timeline `cachedPlayTime - detectionOffsetSec()`. The two offsets are
   independent settings and are equal only by coincidence (see the next gotcha); never
   substitute one for the other, and never inline `latencyOffsetMs` in place of either —

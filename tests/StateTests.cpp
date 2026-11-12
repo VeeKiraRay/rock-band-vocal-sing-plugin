@@ -4,7 +4,7 @@
 #include <catch2/catch_approx.hpp>
 #include <vector>
 
-TEST_CASE ("state: all 23 persisted fields round-trip through a fresh processor", "[state]")
+TEST_CASE ("state: all 24 persisted fields round-trip through a fresh processor", "[state]")
 {
     RBVocalSingAudioProcessor proc;
     proc.vocalMode.store       ((int) VocalMode::Harmonies, std::memory_order_relaxed);
@@ -16,6 +16,7 @@ TEST_CASE ("state: all 23 persisted fields round-trip through a fresh processor"
     proc.savedOctaveWrap      = false;
     proc.savedPitchTolCents   = 75;
     proc.savedPitchTrail      = false;
+    proc.savedSmoothPlayhead  = true;
     proc.savedLatencyOffsetMs = 123;
     proc.savedInputOffsetMs   = 45;
     proc.savedLiveMicInput    = true;
@@ -48,6 +49,7 @@ TEST_CASE ("state: all 23 persisted fields round-trip through a fresh processor"
     REQUIRE (proc2.savedOctaveWrap      == false);
     REQUIRE (proc2.savedPitchTolCents   == 75);
     REQUIRE (proc2.savedPitchTrail      == false);
+    REQUIRE (proc2.savedSmoothPlayhead  == true);
     REQUIRE (proc2.savedLatencyOffsetMs == 123);
     REQUIRE (proc2.savedInputOffsetMs   == 45);
     REQUIRE (proc2.savedLiveMicInput    == true);
@@ -80,6 +82,7 @@ TEST_CASE ("state: garbage bytes are rejected without crashing, defaults intact"
     REQUIRE (proc.savedOctaveWrap      == true);
     REQUIRE (proc.savedPitchTolCents   == 50);
     REQUIRE (proc.savedPitchTrail      == true);
+    REQUIRE (proc.savedSmoothPlayhead  == false);
     REQUIRE (proc.savedLatencyOffsetMs == 0);
     REQUIRE (proc.savedInputOffsetMs   == 0);
     REQUIRE (proc.savedLiveMicInput    == false);
@@ -173,6 +176,7 @@ TEST_CASE ("state: empty block is rejected without crashing, defaults intact", "
     REQUIRE (proc.savedOctaveWrap      == true);
     REQUIRE (proc.savedPitchTolCents   == 50);
     REQUIRE (proc.savedPitchTrail      == true);
+    REQUIRE (proc.savedSmoothPlayhead  == false);
     REQUIRE (proc.savedLatencyOffsetMs == 0);
     REQUIRE (proc.savedInputOffsetMs   == 0);
     REQUIRE (proc.savedLiveMicInput    == false);

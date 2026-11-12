@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "StemAudioReader.h"
+#include "SmoothPlayhead.h"
 #include "TakeExport.h"    // rbtake::TrailPoint (= TrailSample) + segmentPitchTrail
 #include "FrameHealth.h"   // rbperf::classifyFrames — the frame-health rule
 #include "NoteMarkings.h"  // rbmark::placeMarkings — the note-marking yield rule
@@ -342,6 +343,15 @@ private:
     // Whether the sung-pitch contour draws on the highway. Off skips capture and
     // draw; the pass-lifecycle clears stay unconditional so stale trail can't linger.
     bool  pitchTrailOn    { true };
+    // Smooth playhead: estimate the drawn position between audio blocks (rbsmooth). Off by
+    // default out of caution - it is new per-frame behaviour - not because it is less
+    // accurate: unsmoothed, a large buffer draws a position up to one block late.
+    bool  smoothPlayheadOn { false };
+    rbsmooth::Estimator smoothEstimator;
+    // What drawTime() is based on: the estimate while smoothing, else cachedPlayTime.
+    // Set once per accepted frame in onFrame, so the picture and every mouse hit-test between
+    // frames agree on one position. cachedPlayTime stays the reported (raw) position.
+    double displayPlayTime { 0.0 };
 
     // Note-hit tracking: per-note spans of playback time sung within the scoring
     // tolerance, index-aligned with chartNotes. drawHighway fills the covered
@@ -628,7 +638,14 @@ private:
     // stays on the detection timeline (updateNoteHits), and raw positions stay raw.
     double drawTime() const
     {
-        return cachedPlayTime - drawingOffsetSec();
+        return displayPlayTime - drawingOffsetSec();
+    }
+
+    // True while the drawn position is an estimate: setting on, REAPER path (the play
+    // state that resets the estimate is a REAPER poll), transport playing.
+    bool smoothingNow() const
+    {
+        return smoothPlayheadOn && audioProcessor.reaperApi.isLoaded() && lastIsPlaying;
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RBVocalSingAudioProcessorEditor)

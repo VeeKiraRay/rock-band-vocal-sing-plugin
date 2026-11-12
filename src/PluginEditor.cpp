@@ -198,6 +198,8 @@ public:
         std::function<void(double)> setFrameInterval;
         bool                        initReaperPriority { false };
         std::function<void(bool)>   setReaperPriority;
+        bool                        initSmoothPlayhead { false };
+        std::function<void(bool)>   setSmoothPlayhead;
         int                        initRenderer        { 1 };   // combo item ID: 1=CPU, 2=session-only, 3=persist
         std::function<void(int)>   setRenderer;
         int                         initCalib          { 0 };
@@ -239,6 +241,7 @@ public:
         // ── Performance ───────────────────────────────────────────────────────
         static const juce::String kTipRate     = "Limit redraws per second. Lower values reduce CPU load on REAPER's UI thread. Your monitor's refresh rate is the real clock: a frame lasts a whole number of refreshes, so a 60 fps cap draws 48 on a 144 Hz monitor (3 refreshes each) and a clean 60 on a 60 Hz one. Pick Uncapped, or a cap that divides your refresh rate.";
         static const juce::String kTipPriority = "Yields the shared UI thread to REAPER: skips frames when paint takes too long, and stops the plugin forcing its redraws through while REAPER is busy. Recommended at large window sizes. Leave it off for the smoothest playhead dragging.";
+        static const juce::String kTipSmooth   = "Estimates the playhead between audio blocks, so the highway scrolls smoothly even with a large audio buffer. Lowering the block size in REAPER's audio settings is the better fix when you can. Detected pitch still updates once per block, and while playing the time readout drops its milliseconds.";
         static const juce::String kTipRenderer = "CPU: software renderer (default). OpenGL: GPU rendering, may help at large window sizes. 'session only' reverts on next load; 'persist' saves the choice.";
         static const juce::String kTipCalib    = "Shifts the chart to compensate for how late the song reaches your ears (audio output latency). Positive = notes appear later, negative = earlier. Applies only while playing, so parking the edit cursor on a note start always puts that note on the playhead line.";
         static const juce::String kTipInCalib  = "Shifts your detected pitch to compensate for how late it is measured: your mic/interface input latency plus the analysis window (about 5 ms into a note, 30 ms on a mid-phrase syllable). Raise this until the pitch trail sits on the notes - do not use Output calibration for that, or the chart will drift off the song.";
@@ -283,6 +286,13 @@ public:
         reaperPriorityToggle.onClick = [this]
         {
             this->cbs.setReaperPriority (reaperPriorityToggle.getToggleState());
+        };
+
+        setupLabel (smoothLabel, "Smooth playhead", kTipSmooth);
+        setupToggle (smoothToggle, this->cbs.initSmoothPlayhead, kTipSmooth);
+        smoothToggle.onClick = [this]
+        {
+            this->cbs.setSmoothPlayhead (smoothToggle.getToggleState());
         };
 
         setupLabel (rendererLabel, "Renderer", kTipRenderer);
@@ -475,6 +485,7 @@ public:
         layoutHdr (perfHeader);
         layoutRow (rateLabel,           rateCombo,             130);
         layoutRow (reaperPriorityLabel, reaperPriorityToggle,  24);
+        layoutRow (smoothLabel,         smoothToggle,          24);
         layoutRow (rendererLabel,       rendererCombo,         160);
 
         area.removeFromTop (kSecGap);
@@ -508,10 +519,10 @@ public:
     ~SettingsPanel() override = default;
 
     static constexpr int kW = 360;
-    // PERFORMANCE (3 rows) + HIGHWAY (7) + SINGING (6), two inter-section gaps,
+    // PERFORMANCE (4 rows) + HIGHWAY (7) + SINGING (6), two inter-section gaps,
     // padding top and bottom. The optional NON-REAPER section adds kExtraH (ctor).
     static constexpr int kH = 2 * settingsLayout::kPad
-                            + settingsLayout::sectionH (3)
+                            + settingsLayout::sectionH (4)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (7)
                             + settingsLayout::kSecGap + settingsLayout::sectionH (6);
 
@@ -525,6 +536,8 @@ private:
     juce::ComboBox      rateCombo;
     juce::Label         reaperPriorityLabel;
     juce::ToggleButton  reaperPriorityToggle;
+    juce::Label         smoothLabel;
+    juce::ToggleButton  smoothToggle;
     juce::Label         rendererLabel;
     juce::ComboBox      rendererCombo;
 
@@ -1075,6 +1088,8 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
         cbs.setFrameInterval   = [safe] (double v) { if (safe) { safe->targetFrameInterval = v; safe->audioProcessor.savedFrameInterval = v; } };
         cbs.initReaperPriority = reaperPriority;
         cbs.setReaperPriority  = [safe] (bool v)   { if (safe) { safe->reaperPriority = v; safe->audioProcessor.savedReaperPriority = v; } };
+        cbs.initSmoothPlayhead = smoothPlayheadOn;
+        cbs.setSmoothPlayhead  = [safe] (bool v)   { if (safe) { safe->smoothPlayheadOn = v; safe->audioProcessor.savedSmoothPlayhead = v; } };
         // Reflect the actual current renderer state as a combo item ID so the panel
         // shows the right selection even after an auto-close triggered by GL attach.
         cbs.initRenderer = rendererToComboId (rendererFromState (glContext.isAttached(),
@@ -1256,6 +1271,7 @@ RBVocalSingAudioProcessorEditor::RBVocalSingAudioProcessorEditor (RBVocalSingAud
     octaveWrap          = audioProcessor.savedOctaveWrap;
     pitchTolCents       = juce::jlimit (25, 100, audioProcessor.savedPitchTolCents.load());
     pitchTrailOn        = audioProcessor.savedPitchTrail;
+    smoothPlayheadOn    = audioProcessor.savedSmoothPlayhead;
     stemMode            = audioProcessor.savedStemMode;   // the popup reads this when opened
     latencyOffsetMs     = audioProcessor.savedLatencyOffsetMs;
     inputOffsetMs       = audioProcessor.savedInputOffsetMs;
@@ -2055,7 +2071,10 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         snapPositionChanges = positionChanges;
 
         const double target  = rbperf::deliverableFps (capFps(), targetFrameInterval <= 0.0, tickFps);
-        const bool   limited = positionWindowPlaying && rbperf::positionLimited (positionFps, target);
+        // Not judged while Smooth playhead is on: the user has already taken the advice,
+        // and the picture is no longer limited by the block rate.
+        const bool   limited = positionWindowPlaying && ! smoothPlayheadOn
+                            && rbperf::positionLimited (positionFps, target);
         positionWindowPlaying = true;   // the next window starts clean
 
         if (bufferStreak.update (limited))
@@ -2181,6 +2200,13 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         cachedPlayTime = audioProcessor.currentPlaybackTime.load (std::memory_order_relaxed);
     }
 
+    // The drawn position for this frame. Smoothing off (or stopped) hands back
+    // cachedPlayTime unchanged and resets the estimator, so switching it on starts clean.
+    // Drawing only: scoring below keeps reading cachedPlayTime on the detection timeline.
+    displayPlayTime = smoothEstimator.update (cachedPlayTime,
+                                              juce::Time::getMillisecondCounterHiRes() * 0.001,
+                                              cachedPlayRate, smoothingNow());
+
     // The sweep runs every frame rather than on the poll gate: it is a bounded burst of
     // work the user is waiting on, so it should finish as fast as the budget allows.
     if (sweepActive)
@@ -2232,7 +2258,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     octChipVisible = nowSec < heldOctUntil;
     octChipDashVisible = nowSec < heldOctVoicedUntil;
 
-    const bool changed = (cachedPlayTime  != lastPaintTime)
+    const bool changed = (displayPlayTime != lastPaintTime)
                       || (heldOctRatio    != lastPaintOctRatio)
                       || (heldOctDoubt    != lastPaintOctDoubt)
                       || (octChipVisible  != lastPaintOctVisible)
@@ -2251,7 +2277,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
 
     if (changed)
     {
-        lastPaintTime       = cachedPlayTime;
+        lastPaintTime       = displayPlayTime;
         lastPaintPitch      = livePitch;
         lastPaintHeardPitch = heardPitch;
         lastPaintStateCount = lastStateCount;

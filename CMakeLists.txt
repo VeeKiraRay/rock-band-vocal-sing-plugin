@@ -125,6 +125,7 @@ if (RBVS_BUILD_TESTS)
             tests/PercussionHitsTests.cpp
             tests/NoteNamingTests.cpp
             tests/FrameHealthTests.cpp
+            tests/SmoothPlayheadTests.cpp
             tests/TooltipBoundsTests.cpp
             tests/SliderTooltipTests.cpp
     )

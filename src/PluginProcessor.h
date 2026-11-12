@@ -315,6 +315,7 @@ public:
     std::atomic<bool>   savedOctaveWrap      { true };
     std::atomic<int>    savedPitchTolCents   { 50 };    // GREAT window ± cents; CLOSE = 2×
     std::atomic<bool>   savedPitchTrail      { true };  // sung-pitch contour on the highway
+    std::atomic<bool>   savedSmoothPlayhead  { false }; // estimate the drawn position between audio blocks
     std::atomic<int>    savedLatencyOffsetMs { 0 };     // output calibration: chart shift
     std::atomic<int>    savedInputOffsetMs   { 0 };     // input calibration: detection shift.
                                                         // Defaults to 0 so a session saved

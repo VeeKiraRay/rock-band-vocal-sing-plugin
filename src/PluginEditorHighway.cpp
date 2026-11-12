@@ -1212,8 +1212,15 @@ void RBVocalSingAudioProcessorEditor::drawStats (juce::Graphics& g,
                                         totalMs % 1000);
     };
     // The readout is the real transport position (raw), so it matches REAPER's own time
-    // display, and is unaffected by the calibration offset.
-    juce::String timeStr = fmtTime (cachedPlayTime);
+    // display, and is unaffected by the calibration offset. The exception is Smooth
+    // playhead while playing: then it follows the drawn estimate so it ticks with the
+    // highway, and drops the milliseconds - the real value steps by a whole block and the
+    // estimate can be a few ms off, so neither is worth showing at that precision. Stopped,
+    // it is always the exact position, which is when the precision is actually used.
+    juce::String timeStr = smoothingNow()
+        ? juce::String::formatted ("%02d:%02d", (int) displayPlayTime / 60,
+                                                (int) displayPlayTime % 60)
+        : fmtTime (cachedPlayTime);
     const double endTime = audioProcessor.songEndTime;
     if (endTime > 0.0)
         timeStr += " / " + fmtTime (endTime);
@@ -1558,7 +1565,7 @@ void RBVocalSingAudioProcessorEditor::drawMessageBar (juce::Graphics& g,
                          + " fps by the audio buffer";
         if (hintBlockSize > 0)
             msg += " (" + juce::String (hintBlockSize) + " samples)";
-        msg += " - lower the block size in REAPER's audio device settings";
+        msg += " - lower the block size in REAPER's audio settings, or turn on Smooth playhead";
         g.setColour (juce::Colour (0xff7fa7c8));
         g.drawText (msg, text, juce::Justification::centredLeft, true);
     }

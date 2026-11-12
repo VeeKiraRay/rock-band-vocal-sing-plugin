@@ -178,11 +178,22 @@ protected:
         s.setRange (lo, hi, interval);
         s.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 65, 28);
         s.setTextValueSuffix (suffix);
+        noWheel (s);
         addAndMakeVisible (s);
     }
 
+    // The mouse wheel scrolls the panel, never a value. A juce::Slider takes the wheel by
+    // default, so scrolling a tall panel changed whichever row passed under the cursor -
+    // and a change that resizes or repaints the editor (Lyrics Size, Note Speed) closed
+    // the popup mid-scroll. A slider with the wheel off forwards it to its parent, which
+    // is the SettingsScroller viewport. Combos already default to off; it is set anyway so
+    // a JUCE default change cannot bring the problem back.
+    static void noWheel (juce::Slider& s)   { s.setScrollWheelEnabled (false); }
+    static void noWheel (juce::ComboBox& c) { c.setScrollWheelEnabled (false); }
+
     static void styleCombo (juce::ComboBox& cb)
     {
+        noWheel (cb);
         cb.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff2a2a2a));
         cb.setColour (juce::ComboBox::textColourId,       juce::Colours::white);
         cb.setColour (juce::ComboBox::arrowColourId,      juce::Colours::lightgrey);
@@ -444,6 +455,7 @@ public:
         gateSlider.setSliderStyle (juce::Slider::LinearHorizontal);
         gateSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 55, 28);
         gateSlider.setNumDecimalPlacesToDisplay (3);
+        noWheel (gateSlider);
         gateSlider.onValueChange = [this]
         {
             this->proc.gateThreshold.store ((float) gateSlider.getValue(),

@@ -605,5 +605,14 @@ private:
         return stopped ? 0.0 : latencyOffsetMs / 1000.0;
     }
 
+    // The drawing timeline's current time: what chart geometry, the arrowhead, hit-testing
+    // and click-to-seek are all positioned against. Every consumer goes through here so the
+    // picture and the mouse can never disagree about where "now" is. Scoring does not: it
+    // stays on the detection timeline (updateNoteHits), and raw positions stay raw.
+    double drawTime() const
+    {
+        return cachedPlayTime - drawingOffsetSec();
+    }
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RBVocalSingAudioProcessorEditor)
 };

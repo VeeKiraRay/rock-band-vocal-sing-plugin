@@ -1350,7 +1350,7 @@ int RBVocalSingAudioProcessorEditor::hitTestNote (juce::Point<int> pt) const
 
     const auto&  notes = audioProcessor.getChartNotes();
     const float  phX   = (float) lastHighwayArea.getX() + (float) lastHighwayArea.getWidth() * 0.3f;
-    const double t     = cachedPlayTime - drawingOffsetSec();
+    const double t     = drawTime();
 
     auto pitchY = [&] (int p) -> float {
         return (float) lastHighwayArea.getBottom() - ((float) p - lastFMinP + 0.5f) * lastNoteH;
@@ -1416,7 +1416,7 @@ void RBVocalSingAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     // Map through the same calibrated time the highway is drawn with (and hitTestNote
     // uses), so a click lands on the note the user sees, not a calibration away.
     const float  phX      = (float) highway.getX() + (float) highway.getWidth() * 0.3f;
-    const double seekTime = (cachedPlayTime - drawingOffsetSec())
+    const double seekTime = drawTime()
                           + (e.x - phX) / (double) pixPerSec;
 
     audioProcessor.reaperApi.SetEditCurPos (std::max (0.0, seekTime), true, true);
@@ -2378,7 +2378,7 @@ void RBVocalSingAudioProcessorEditor::paint (juce::Graphics& g)
     const auto statusArea  = juce::Rectangle<int> (0, statsArea.getBottom(),   getWidth(), kStatusH);
     const auto messageArea = juce::Rectangle<int> (0, statusArea.getBottom(),  getWidth(), kMessageH);
 
-    const double t = cachedPlayTime - drawingOffsetSec();
+    const double t = drawTime();
 
     // Per-section timing (RB_PAINT_PROFILE builds only): accumulate raw ms per section
     // this frame, folded into the prof* EMAs after the draws. The whole-paint EMA at

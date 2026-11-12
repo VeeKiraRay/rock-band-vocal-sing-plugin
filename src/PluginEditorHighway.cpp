@@ -1430,10 +1430,13 @@ void RBVocalSingAudioProcessorEditor::drawStatusBar (juce::Graphics& g,
     // reading a healthy 60/60/60 is how you confirm the measurement itself is sound.
     // Behind RB_PAINT_PROFILE and not a Debug guard on purpose: Debug's rasterizer is ~9x
     // slower per pixel (Performance lessons), so frame timing has to be measured in Release.
+    // The fourth figure is how often the playback position moved (0 while stopped): when it
+    // sits below "wanted", the audio buffer is what caps the picture, e.g. 12/12/43/12.
     if (! fpsIdle)
         fpsStr = juce::String (juce::roundToInt (displayFps))
                + "/" + juce::String (juce::roundToInt (requestedFps))
-               + "/" + juce::String (juce::roundToInt (tickFps));
+               + "/" + juce::String (juce::roundToInt (tickFps))
+               + "/" + juce::String (juce::roundToInt (positionFps));
 #endif
     g.setFont (juce::Font (12.0f, juce::Font::bold));
     g.setColour (juce::Colour (0xff556070));  // always faint
@@ -1542,6 +1545,21 @@ void RBVocalSingAudioProcessorEditor::drawMessageBar (juce::Graphics& g,
                                   : "REAPER may lag; shrink window, lower Frame cap, or enable REAPER priority";
         }
         g.setColour (juce::Colour (0xffffb030));
+        g.drawText (msg, text, juce::Justification::centredLeft, true);
+    }
+    else if (bufferHintActive)
+    {
+        // Advice, not a fault: nothing is broken, the host is reporting the position only
+        // this often. Below the frame warning (a real fault outranks it) and above the chart
+        // status. A calmer colour than the warning's amber for the same reason. Figures are
+        // the latched copies, as with the warning. The block size is quoted because it is
+        // the setting to change; it was never part of the decision.
+        juce::String msg = "Highway limited to " + juce::String (juce::roundToInt (hintPositionFps))
+                         + " fps by the audio buffer";
+        if (hintBlockSize > 0)
+            msg += " (" + juce::String (hintBlockSize) + " samples)";
+        msg += " - lower the block size in REAPER's audio device settings";
+        g.setColour (juce::Colour (0xff7fa7c8));
         g.drawText (msg, text, juce::Justification::centredLeft, true);
     }
     else

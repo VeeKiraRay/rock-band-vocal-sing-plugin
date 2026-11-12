@@ -197,6 +197,10 @@ public:
     // let them drift apart.
     std::atomic<bool>   currentOctaveDoubt  { false };
     std::atomic<double> currentPlaybackTime { 0.0 };  // fallback when API unavailable
+    // Samples in the most recent processBlock call. Quoted by the editor's large-buffer
+    // hint as the number to change; never used to *decide* the hint, which measures how
+    // often the position actually moves (see rbperf::positionLimited).
+    std::atomic<int>    lastBlockSize       { 0 };
 
     // One entry per audio-thread hop estimate (~every 16 ms). Queued so the UI
     // thread can see every estimate instead of point-sampling the latest atomics

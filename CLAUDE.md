@@ -427,6 +427,18 @@ Details live in the code; this is the map of what exists and its non-obvious dec
   by the time the held message is read, so an unlatched message would contradict itself.
   `frameWarnActive` is a paint input for the same reason `flashActive` is — the hold exists
   to be read after the fault clears, which is exactly when nothing else repaints.
+  **Large-buffer hint** (2026-11-12): a separate, calmer message ranked below the frame
+  warning. While playing the picture can only move when the reported position does, and
+  that happens once per audio block, so a big buffer caps the frame rate (4096 @ 48 kHz =
+  ~12 fps) while `classifyFrames` correctly sees every requested frame delivered. The
+  editor counts position changes per tick (before the throttle, REAPER path, only windows
+  that played throughout) and `rbperf::positionLimited` compares them with
+  `rbperf::deliverableFps` — the cap after refresh quantisation, with the tick rate as the
+  refresh. Three bad windows in a row (`BufferLimitStreak`) arm it, held and latched like
+  the warning. **Measured, never computed from the block size**: the size a host passes is
+  a maximum and REAPER's anticipative FX can deliver blocks in bursts; `lastBlockSize` is
+  only quoted as the thing to change. Profile builds append the rate as a fourth figure,
+  `drawn/wanted/ticks/pos`.
 - **Controls**: bottom bar, **two rows of three** — row 1 (Vocal Mode, Lyric Mode,
   `<<`/Settings/`>>`), row 2 (Actions, Advanced), each row-2 button `kBtnW` wide and
   centred in its third so both sit on a column row 1 established. Three design rules hold

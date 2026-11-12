@@ -147,3 +147,67 @@ TEST_CASE ("frame health: slow paint outranks starvation when both are true", "[
     s.tickFps       = 58.0;
     REQUIRE (classifyFrames (s) == FrameVerdict::PaintTooSlow);
 }
+
+// ── Large audio buffer: rbperf::deliverableFps / positionLimited / BufferLimitStreak ──
+// Found 2026-11-12 on Linux: a 4096-sample buffer reported ~12 positions a second, so the
+// highway ran at 12 fps while classifyFrames correctly saw nothing wrong.
+
+using rbperf::deliverableFps;
+using rbperf::positionLimited;
+using rbperf::BufferLimitStreak;
+
+TEST_CASE ("buffer hint: the Frame cap quantises to the refresh rate", "[frames][buffer]")
+{
+    REQUIRE (deliverableFps (60.0, false, 60.0)  == 60.0);
+    REQUIRE (deliverableFps (60.0, false, 144.0) == 48.0);   // 144 / 3
+    REQUIRE (deliverableFps (30.0, false, 60.0)  == 30.0);   // 60 / 2
+    // A measured refresh a hair above the cap is still one refresh per frame, not two.
+    REQUIRE (deliverableFps (60.0, false, 60.4)  == 60.4);
+    // Uncapped delivers the refresh rate; nothing measured yet falls back to the cap.
+    REQUIRE (deliverableFps (60.0, true,  144.0) == 144.0);
+    REQUIRE (deliverableFps (60.0, false, 0.0)   == 60.0);
+}
+
+TEST_CASE ("buffer hint: a large buffer against a 60 fps cap fires", "[frames][buffer]")
+{
+    // The Linux reading: ~12 positions a second, ticks at 43.
+    REQUIRE (positionLimited (12.0, deliverableFps (60.0, false, 43.0)));
+}
+
+TEST_CASE ("buffer hint: small blocks never fire", "[frames][buffer]")
+{
+    // 128-sample blocks are ~345 positions a second, but the editor can only *see* one per
+    // tick, so the measured rate tops out at the tick rate. Either way, never limited.
+    REQUIRE_FALSE (positionLimited (60.0,  deliverableFps (60.0, false, 60.0)));
+    REQUIRE_FALSE (positionLimited (144.0, deliverableFps (60.0, true,  144.0)));
+}
+
+TEST_CASE ("buffer hint: judged against what the cap can deliver, not the raw cap", "[frames][buffer]")
+{
+    // A 60 fps cap on a 144 Hz panel delivers 48. 30 positions a second is above 60% of 48,
+    // so the buffer is not what is holding the picture back.
+    REQUIRE_FALSE (positionLimited (30.0, deliverableFps (60.0, false, 144.0)));
+    // A low cap the user chose is honoured, not blamed on the buffer.
+    REQUIRE_FALSE (positionLimited (12.0, deliverableFps (20.0, false, 60.0)));
+}
+
+TEST_CASE ("buffer hint: a position that did not move says nothing", "[frames][buffer]")
+{
+    REQUIRE_FALSE (positionLimited (0.0, 60.0));
+    REQUIRE_FALSE (positionLimited (12.0, 0.0));
+}
+
+TEST_CASE ("buffer hint: needs consecutive bad windows", "[frames][buffer]")
+{
+    BufferLimitStreak streak;
+    REQUIRE_FALSE (streak.update (true));
+    REQUIRE_FALSE (streak.update (true));
+    REQUIRE (streak.update (true));          // third in a row
+    REQUIRE (streak.update (true));          // and stays up while it lasts
+
+    // One good window (a seek, a burst) starts the count again.
+    REQUIRE_FALSE (streak.update (false));
+    REQUIRE_FALSE (streak.update (true));
+    REQUIRE_FALSE (streak.update (true));
+    REQUIRE (streak.update (true));
+}

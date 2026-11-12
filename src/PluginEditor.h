@@ -537,6 +537,23 @@ private:
     double warnRequested  { 0.0 };
     double warnAchievable { 0.0 };
 
+    // Large-buffer hint (rbperf::positionLimited). While playing, the picture can only move
+    // when the reported position does, so a large audio buffer caps the frame rate below
+    // anything the frame warning looks at. Counted per tick, before the throttle, so the
+    // measured rate is what the editor could have drawn from - not what it chose to draw.
+    uint32_t positionChanges      { 0 };
+    uint32_t snapPositionChanges  { 0 };
+    double   lastSeenPlayPos      { -1.0 };
+    bool     positionWindowPlaying { false };  // playing on every tick of this window
+    double   positionFps          { 0.0 };     // measured; also in the profile readout
+    rbperf::BufferLimitStreak bufferStreak;
+    // Held and latched exactly like the frame warning, for the same reason.
+    double   bufferHintUntil      { 0.0 };
+    bool     bufferHintActive     { false };   // decided in onFrame, read by paint
+    double   hintPositionFps      { 0.0 };
+    int      hintBlockSize        { 0 };
+    bool     lastPaintBufferHint  { false };
+
     // The rate the user asked for: the Frame cap, or 60 when uncapped. Both the health
     // verdict and the status bar need it, and two copies of the uncapped fallback would
     // drift the moment one was retuned.

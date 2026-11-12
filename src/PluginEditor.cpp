@@ -1960,6 +1960,25 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     // host stops dispatching to us during a drag.
     ++frameTicks;
 
+    // Playback-position changes, for the large-buffer hint. Per tick and ahead of the
+    // throttle for the same reason as frameTicks: this asks how often the picture *could*
+    // move, which the Frame cap must not distort. REAPER path only - the play state that
+    // tells a large buffer from a paused transport is a REAPER poll. lastIsPlaying is the
+    // previous poll's answer, which is fine at window granularity.
+    if (audioProcessor.reaperApi.isLoaded() && lastIsPlaying)
+    {
+        const double pos = audioProcessor.currentPlaybackTime.load (std::memory_order_relaxed);
+        if (pos != lastSeenPlayPos)
+        {
+            ++positionChanges;
+            lastSeenPlayPos = pos;
+        }
+    }
+    else
+    {
+        positionWindowPlaying = false;   // a window with any stopped tick is not judged
+    }
+
     // ── Frame throttle ──────────────────────────────────────────────────────
     const double ticksPerSec = (double) juce::Time::getHighResolutionTicksPerSecond();
     const juce::int64 now = juce::Time::getHighResolutionTicks();
@@ -2027,6 +2046,24 @@ void RBVocalSingAudioProcessorEditor::onFrame()
             warnDelivered  = displayFps;
             warnRequested  = requestedFps;
             warnAchievable = achievableFps;
+        }
+
+        // Large-buffer hint: judged only on a window that was playing throughout, against
+        // the rate the cap can deliver on this display (the tick rate stands in for the
+        // refresh rate). Advice rather than a fault, so it needs several windows in a row.
+        positionFps = (double) (uint32_t) (positionChanges - snapPositionChanges) / since;
+        snapPositionChanges = positionChanges;
+
+        const double target  = rbperf::deliverableFps (capFps(), targetFrameInterval <= 0.0, tickFps);
+        const bool   limited = positionWindowPlaying && rbperf::positionLimited (positionFps, target);
+        positionWindowPlaying = true;   // the next window starts clean
+
+        if (bufferStreak.update (limited))
+        {
+            bufferHintUntil = juce::Time::getMillisecondCounterHiRes() * 0.001
+                                  + kFrameWarnHoldSec;
+            hintPositionFps = positionFps;
+            hintBlockSize   = audioProcessor.lastBlockSize.load (std::memory_order_relaxed);
         }
     }
 
@@ -2161,6 +2198,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
     // Same reasoning for the held frame warning, and the same need: the hold exists so it
     // can be read after the fault clears, which is precisely when nothing else repaints.
     frameWarnActive = juce::Time::getMillisecondCounterHiRes() * 0.001 < frameWarnUntil;
+    bufferHintActive = juce::Time::getMillisecondCounterHiRes() * 0.001 < bufferHintUntil;
 
     // Octave-guard chip persistence. Rival evidence arrives per hop (~94/s) and a note can
     // easily produce a rival on one hop and none on the next, so the chip was changing
@@ -2203,6 +2241,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
                       || (heardPitch      != lastPaintHeardPitch)
                       || (lastStateCount  != lastPaintStateCount)
                       || (frameWarnActive != lastPaintWarnActive)
+                      || (bufferHintActive != lastPaintBufferHint)
                       || (warnVerdict     != lastPaintWarnVerdict)
                       || (fpsIdle         != lastPaintFpsIdle)
                       || (curLyricMode    != lastPaintLyricMode)
@@ -2217,6 +2256,7 @@ void RBVocalSingAudioProcessorEditor::onFrame()
         lastPaintHeardPitch = heardPitch;
         lastPaintStateCount = lastStateCount;
         lastPaintWarnActive  = frameWarnActive;
+        lastPaintBufferHint  = bufferHintActive;
         lastPaintWarnVerdict = warnVerdict;
         lastPaintFpsIdle     = fpsIdle;
         lastPaintLyricMode  = curLyricMode;

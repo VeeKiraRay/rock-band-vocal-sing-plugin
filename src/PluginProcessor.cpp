@@ -89,6 +89,7 @@ void RBVocalSingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     const float* src        = buffer.getReadPointer (0);
     const int    numSamples = buffer.getNumSamples();
+    lastBlockSize.store (numSamples, std::memory_order_relaxed);
 
     // Snapshot the settings atomics into the detector once per block rather than once per
     // hop. A settings change is a user action at UI rate, so at most one block (~10 ms)

@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+#include <cmath>
 
 // Frame health — is the editor actually getting the frames it asks for, and if not, why?
 //
@@ -81,5 +83,65 @@ inline FrameVerdict classifyFrames (const FrameStats& s) noexcept
 
     return FrameVerdict::Healthy;
 }
+
+// ── Large audio buffer ────────────────────────────────────────────────────────────────
+//
+// A fault upstream of everything classifyFrames looks at. While playing, the highway only
+// moves when the playback position changes, and the host reports a new position once per
+// audio block. So the frame rate can never exceed the block rate: a 4096-sample buffer at
+// 48 kHz gives ~12 fps however fast the machine is. classifyFrames stays silent through it,
+// correctly - every frame asked for is drawn, there are just only 12 to ask for (found on
+// Linux 2026-11-12, where the default buffer was that large; nothing about it is
+// Linux-specific).
+//
+// The rate is measured, not computed from the block size: the size a host passes is a
+// maximum, and REAPER's anticipative FX processing can deliver blocks in bursts whatever
+// the device buffer is. The block size is only quoted to the user, as the thing to change.
+
+// Same margin as the delivery test: catch a stall of several-to-one, not ordinary jitter.
+constexpr double kPositionRatio = kDeliveryRatio;
+
+// Consecutive ~1 s windows the shortfall must last. A seek, a project load or a brief stall
+// can drop one window on any rig, and the hint is advice, not an alarm.
+constexpr int kBufferLimitWindows = 3;
+
+// Tolerance when quantising the Frame cap to the refresh rate, for a refresh measured from
+// a jittery clock: 60.3 Hz against a 60 fps cap must count as one refresh per frame, not two.
+constexpr double kRefreshSlack = 0.1;
+
+// The frame rate the Frame cap can actually deliver on this display. VBlank drives the
+// frame loop, so an accepted frame interval is a whole number of refreshes: a 60 fps cap
+// on a 144 Hz panel gives 144 / 3 = 48 (CLAUDE.md Performance lessons, the cap quantises to
+// the refresh rate). refreshFps is the measured tick rate; 0 means not measured yet.
+inline double deliverableFps (double capFps, bool uncapped, double refreshFps) noexcept
+{
+    if (refreshFps <= 0.0) return uncapped ? 0.0 : capFps;
+    if (uncapped || capFps <= 0.0) return refreshFps;
+
+    const double refreshesPerFrame = std::ceil (refreshFps * (1.0 - kRefreshSlack) / capFps);
+    return refreshFps / std::max (1.0, refreshesPerFrame);
+}
+
+// One window's verdict: is the playback position changing too rarely for the picture to
+// reach the frame rate the user could otherwise have? A position that did not move at all
+// says nothing (paused, stalled, or not measured) and never counts as a large buffer.
+inline bool positionLimited (double positionFps, double targetFps) noexcept
+{
+    if (positionFps <= 0.0 || targetFps <= 0.0) return false;
+    return positionFps < kPositionRatio * targetFps;
+}
+
+// Turns per-window verdicts into "show the hint": only after kBufferLimitWindows in a row.
+// Any good window, or any window that cannot be judged, starts the count again.
+struct BufferLimitStreak
+{
+    int windows = 0;
+
+    bool update (bool limited) noexcept
+    {
+        windows = limited ? windows + 1 : 0;
+        return windows >= kBufferLimitWindows;
+    }
+};
 
 } // namespace rbperf

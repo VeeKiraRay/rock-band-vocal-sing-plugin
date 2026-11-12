@@ -406,6 +406,11 @@ If the missing frames bother you, either pick **Uncapped** (draws as fast as the
 
 The fps figure also counts only frames the plugin actually needed to draw, so it sits below the cap whenever nothing on screen changed. Amber warnings stay up for 5 seconds after the problem clears, so a warning that appears mid-drag can still be read once you stop dragging.
 
+**The highway steps along at a low frame rate during playback, with no warning — or the message bar says "Highway limited to N fps by the audio buffer".**
+Your audio buffer is large. While playing, the highway can only move when REAPER reports a new playback position, and REAPER does that once per audio block — so the block size caps the frame rate, however fast your computer is. At 48 kHz, 4096-sample blocks give about 12 frames a second, 1024 about 47, and 512 about 94. Nothing is broken, which is why the amber warnings stay silent; the plugin shows this as a separate blue-grey hint, with your block size in it, after a few seconds of playback at a rate well below what your Frame cap could otherwise deliver.
+
+Lower the block (buffer) size in **Options → Preferences → Audio → Device**. On Linux, large defaults are common: the ALSA and JACK audio systems in REAPER let you set the block size directly. A smaller buffer also means less input delay for your mic, which helps the calibration too.
+
 **OpenGL renderer flickers or behaves oddly.**
 GPU rendering is experimental and host/driver-dependent. Set **Renderer** back to **CPU (software)** (the default) — that always works. If you want to try OpenGL without committing to it, use **OpenGL - session only**, which reverts to CPU on the next load; **OpenGL - persist** is the variant that remembers the GPU choice across sessions.
 

@@ -93,11 +93,13 @@ jobs:
           echo "vst3=$VST3" >> "$GITHUB_OUTPUT"
 
       # Uploaded before the tests run, so a test failure still leaves a binary to try.
+      # archive: false uploads our zip as-is instead of wrapping it in a second zip; the
+      # artifact is then named after the file (so no `name:`), and only one file is allowed.
       - name: Upload VST3
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: RB-Vocal-Sing-${{ matrix.name }}${{ inputs.paint_profile && '-PROFILE' || '' }}
           path: ${{ steps.package.outputs.zip }}
+          archive: false
           retention-days: 30
 
       - name: Run unit tests
